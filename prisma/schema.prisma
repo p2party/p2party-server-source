@@ -1,0 +1,50 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Room {
+  id         String     @id @default(uuid())
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  identifier String     @unique
+
+  peers  Peer[]
+
+  @@map("room")
+}
+
+model Peer {
+  id         String     @id @default(uuid())
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  lastPing   BigInt
+
+  publicKey  String?    @unique
+
+  challenges Challenge[]
+  rooms Room[]
+
+  @@map("peer")
+}
+
+model Challenge {
+  id         String   @id @default(uuid())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  nonce      String   @unique
+  signature  String?  @unique
+
+  peerId     String
+  peer       Peer     @relation(fields: [peerId], references: [id])
+
+  @@map("challenge")
+}
