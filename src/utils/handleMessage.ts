@@ -65,8 +65,7 @@ const handleMessage = async (
           msg.type === "room" &&
           isUUID(msg.fromPeerId) &&
           isAlphanumeric(msg.roomUrl) &&
-          msg.roomUrl.length > 6 &&
-          msg.roomUrl.length < 10
+          msg.roomUrl.length === 64
         ) {
           await handleRoom(msg.fromPeerId, ws, msg.roomUrl);
         }
