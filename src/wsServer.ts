@@ -89,7 +89,9 @@ export class P2PartyWS {
 
         const p = url.searchParams.get("publickey");
 
-        if (!p || p.length !== 1100) {
+        // if (!p || p.length !== 1100) { // RSA 4096
+        if (!p || p.length !== 64) {
+          // curve 25519
           return new Response("Forbidden", { status: 403 });
         }
 

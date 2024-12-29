@@ -27,7 +27,7 @@ model Peer {
   updatedAt  DateTime   @updatedAt
   lastPing   BigInt
 
-  publicKey  String?    @unique
+  publicKey  String    @unique
 
   challenges Challenge[]
   rooms Room[]

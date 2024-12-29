@@ -1,7 +1,8 @@
-import crypto from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import ondemos from "@ondemos/core";
+import crypto from "crypto";
 
-import { convertHexToPem } from "../utils/convertBinaryToPEM.js";
+// import { convertHexToPem } from "../utils/convertBinaryToPEM.js";
 
 import type { P2PartyWSClient } from "../wsServer.js";
 import type {
@@ -110,6 +111,14 @@ const handleChallenge = async (
         .map((byte: string) => parseInt(byte, 16)),
     );
 
+    const pk = Uint8Array.from(
+      fromPeerPublicKey
+        .match(/.{1,2}/g)!
+        .map((byte: string) => parseInt(byte, 16)),
+    );
+
+    const verification = await ondemos.verify(nonce, sig, pk);
+
     // const key = convertHexToPem(fromPeerPublicKey);
     // const publicKey = crypto.createPublicKey({
     //   key,
@@ -128,27 +137,27 @@ const handleChallenge = async (
     // );
 
     // Convert Uint8Array to hex strings to pass to the Node.js child process
-    const nonceHex = Buffer.from(nonce).toString("hex");
-    const sigHex = Buffer.from(sig).toString("hex");
-    const publicKeyPem = convertHexToPem(fromPeerPublicKey); // Assuming this is already in hex format
-    const process = Bun.spawn({
-      cmd: [
-        "node",
-        "scripts/verifySignature.js",
-        nonceHex,
-        sigHex,
-        publicKeyPem,
-      ],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    // Capture the output from the Node.js script
-    const output = await new Response(process.stdout).text();
-    const errorOutput = await new Response(process.stderr).text();
-    if (errorOutput) {
-      console.error("Error from Node.js script:", errorOutput);
-    }
-    const verification = output.trim() === "true";
+    // const nonceHex = Buffer.from(nonce).toString("hex");
+    // const sigHex = Buffer.from(sig).toString("hex");
+    // const publicKeyPem = convertHexToPem(fromPeerPublicKey); // Assuming this is already in hex format
+    // const process = Bun.spawn({
+    //   cmd: [
+    //     "node",
+    //     "scripts/verifySignature.js",
+    //     nonceHex,
+    //     sigHex,
+    //     publicKeyPem,
+    //   ],
+    //   stdout: "pipe",
+    //   stderr: "pipe",
+    // });
+    // // Capture the output from the Node.js script
+    // const output = await new Response(process.stdout).text();
+    // const errorOutput = await new Response(process.stderr).text();
+    // if (errorOutput) {
+    //   console.error("Error from Node.js script:", errorOutput);
+    // }
+    // const verification = output.trim() === "true";
 
     if (verification) {
       await prisma.challenge.update({
@@ -160,10 +169,23 @@ const handleChallenge = async (
 
       await prisma.$disconnect();
 
+      const secret = process.env.COTURN_SECRET || "north";
+      const date = Date.now()
+      const unixTimeStamp = parseInt(String(date / 1000)) + 1 * 60 * 60; // two hours
+      const username = [unixTimeStamp, fromPeerPublicKey].join(":");
+      const hmac = crypto.createHmac("sha1", secret);
+
+      hmac.setEncoding("base64");
+      hmac.write(username);
+      hmac.end();
+      const credential = hmac.read();
+
       ws.send(
         JSON.stringify({
           type: "challenge",
           challengeId: correspondingChallengeId,
+          username,
+          credential,
         } as WebSocketMessageSuccessfulChallenge),
       );
 

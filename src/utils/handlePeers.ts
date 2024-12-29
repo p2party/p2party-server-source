@@ -28,7 +28,8 @@ const handlePeers = async (
         !fromPeer.challenges ||
         fromPeer.challenges.length === 0 ||
         !fromPeer.challenges[0].signature ||
-        fromPeer.challenges[0].signature.length !== 1024
+        // fromPeer.challenges[0].signature.length !== 1024
+        fromPeer.challenges[0].signature.length !== 128
       ) {
         await prisma.$disconnect();
 
@@ -91,7 +92,8 @@ const handlePeers = async (
           challenges &&
           challenges.length > 0 &&
           challenges[0].signature &&
-          challenges[0].signature.length === 1024 &&
+          // challenges[0].signature.length === 1024 &&
+          challenges[0].signature.length === 128 &&
           peerWsClient &&
           peerWsClient.data.isAlive
         ) {

@@ -20,6 +20,8 @@ export interface WebSocketMessageChallengeResponse {
 export interface WebSocketMessageSuccessfulChallenge {
   type: "challenge";
   challengeId: string;
+  username?: string;
+  credential?: string;
 }
 
 export interface WebSocketMessageRoomIdRequest {
@@ -76,6 +78,39 @@ export interface WebSocketMessagePeersResponse {
   type: "peers";
   roomId: string;
   peers: { id: string; publicKey: string }[];
+}
+
+export interface WebSocketMessagePeerConnectionRequest {
+  type: "connection";
+  roomId: string;
+  fromPeerId: string;
+  toPeerId: string;
+  labels: string[];
+}
+
+export interface WebSocketMessagePeerConnectionResponse {
+  type: "connection";
+  roomId: string;
+  fromPeerId: string;
+  labels: string[];
+}
+
+export interface WebSocketMessageMessageSendRequest {
+  type: "message";
+  message: string;
+  roomId: string;
+  fromPeerId: string;
+  toPeerId: string;
+  label: string;
+}
+
+export interface WebSocketMessageMessageSendResponse {
+  type: "message";
+  message: string;
+  roomId: string;
+  fromPeerId: string;
+  toPeerId: string;
+  label: string;
 }
 
 export interface WebSocketMessageError {

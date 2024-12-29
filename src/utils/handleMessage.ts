@@ -3,6 +3,10 @@ import { isUUID, isHexadecimal, isAlphanumeric } from "class-validator";
 import handleChallenge from "./handleChallenge";
 import handleRoom from "./handleRoom";
 import handlePeers from "./handlePeers";
+import handleCandidate from "./handleCandidate";
+import handleDescription from "./handleDescription";
+import handlePeerConnection from "./handlePeerConnection";
+import handleMessageSend from "./handleMessageSend";
 
 import type {
   P2PartyWSClient,
@@ -16,9 +20,9 @@ import type {
   WebSocketMessageCandidateSend,
   WebSocketMessagePeersRequest,
   WebSocketMessagePong,
+  WebSocketMessagePeerConnectionRequest,
+  WebSocketMessageMessageSendRequest,
 } from "../utils/interfaces";
-import handleCandidate from "./handleCandidate";
-import handleDescription from "./handleDescription";
 
 const handleMessage = async (
   ws: P2PartyWSClient,
@@ -32,7 +36,9 @@ const handleMessage = async (
       | WebSocketMessageChallengeResponse
       | WebSocketMessageDescriptionSend
       | WebSocketMessageCandidateSend
-      | WebSocketMessagePeersRequest = JSON.parse(message.toString());
+      | WebSocketMessagePeersRequest
+      | WebSocketMessageMessageSendRequest
+      | WebSocketMessagePeerConnectionRequest = JSON.parse(message.toString());
 
     switch (msg.type) {
       case "pong": {
@@ -48,7 +54,8 @@ const handleMessage = async (
           isHexadecimal(msg.challenge) &&
           msg.challenge.length === 64 &&
           isHexadecimal(msg.signature) &&
-          msg.signature.length === 1024 // 512
+          // msg.signature.length === 1024 // 512
+          msg.signature.length === 128
         ) {
           await handleChallenge(
             msg.fromPeerId,
@@ -104,6 +111,26 @@ const handleMessage = async (
           typeof msg.description === "object"
         ) {
           await handleDescription(ws, msg);
+        }
+
+        break;
+      }
+
+      case "message": {
+        if (isUUID(msg.fromPeerId) && isUUID(msg.toPeerId)) {
+          await handleMessageSend(ws, msg);
+        }
+
+        break;
+      }
+
+      case "connection": {
+        if (
+          isUUID(msg.roomId) &&
+          isUUID(msg.fromPeerId) &&
+          isUUID(msg.toPeerId)
+        ) {
+          await handlePeerConnection(ws, msg);
         }
 
         break;

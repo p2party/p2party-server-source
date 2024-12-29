@@ -21,8 +21,6 @@ const handleDescription = async (
     msg.fromPeerPublicKey,
   );
 
-  console.log(infoChecksOut);
-
   if (infoChecksOut) {
     const wsClient = wsClients.get(msg.toPeerId);
 
