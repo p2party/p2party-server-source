@@ -32,7 +32,7 @@ const handleDescription = async (
           fromPeerId: msg.fromPeerId,
           fromPeerPublicKey: msg.fromPeerPublicKey,
           roomId: msg.roomId,
-          message: `Received remote description for RTCPeerConnection from client ${msg.fromPeerId}`,
+          message: `Received remote description for RTCPeerConnection from client ${msg.fromPeerId} on room ${msg.roomId}`,
         } as WebSocketMessageDescriptionReceive),
       );
 

@@ -16,6 +16,9 @@ const findRoomPeers = async (
   try {
     const room = await prisma.room.findUnique({
       where: { id: roomId },
+      include: {
+        peers: true, // Include the peers of the room
+      },
     });
 
     if (!room) {
@@ -84,7 +87,12 @@ const findRoomPeers = async (
       return false;
     }
 
-    return true;
+    // Check if both peers are in the specified room
+    const isInRoom = room.peers.some(
+      (peer) => peer.id === fromPeerId || peer.id === toPeerId,
+    );
+
+    return isInRoom;
   } catch (error) {
     await prisma.$disconnect();
 

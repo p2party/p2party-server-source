@@ -3,7 +3,7 @@
   "module": "src/index.ts",
   "type": "module",
   "devDependencies": {
-    "@types/bun": "^1.1.14",
+    "@types/bun": "^1.2.1",
     "prettier": "3.3.3",
     "prisma": "^5.22.0"
   },

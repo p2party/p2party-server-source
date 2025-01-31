@@ -17,10 +17,10 @@ const handleRoom = async (
   try {
     const hasher = new Bun.CryptoHasher("sha512");
     hasher.update(roomUrl);
-    hasher.digest("hex");
+    // hasher.digest("hex");
     const identifier = hasher.digest("hex").toLowerCase();
 
-    let peer: Peer;
+    let peer: Peer | null;
     try {
       peer = await prisma.peer.findUnique({
         where: { id: fromPeerId },
@@ -28,6 +28,25 @@ const handleRoom = async (
           challenges: true,
         },
       });
+
+      if (!peer) {
+        await prisma.$disconnect();
+
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            fromAction: "requestRoomId",
+            error: {
+              message:
+                "Room id request was sent by a non-existing or unverified client",
+            },
+          } as WebSocketMessageError),
+        );
+
+        ws.terminate();
+
+        return;
+      }
     } catch (error) {
       await prisma.$disconnect();
 
@@ -56,12 +75,25 @@ const handleRoom = async (
         },
       });
 
-      roomId = roomExists.id;
+      if (roomExists) {
+        roomId = roomExists.id;
 
-      if (roomExists.peers.indexOf(peer) === -1) {
-        await prisma.room.update({
-          where: { identifier },
+        if (peer && roomExists?.peers.indexOf(peer) === -1) {
+          await prisma.room.update({
+            where: { identifier },
+            data: {
+              peers: {
+                connect: {
+                  id: peer.id,
+                },
+              },
+            },
+          });
+        }
+      } else {
+        const room = await prisma.room.create({
           data: {
+            identifier,
             peers: {
               connect: {
                 id: peer.id,
@@ -69,6 +101,8 @@ const handleRoom = async (
             },
           },
         });
+
+        roomId = room.id;
       }
     } catch (error) {
       const room = await prisma.room.create({

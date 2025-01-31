@@ -6,6 +6,7 @@ import handlePeers from "./handlePeers";
 import handleCandidate from "./handleCandidate";
 import handleDescription from "./handleDescription";
 import handlePeerConnection from "./handlePeerConnection";
+import handlePeerAcceptsConnection from "./handlePeerAcceptsConnection";
 import handleMessageSend from "./handleMessageSend";
 
 import type {
@@ -19,6 +20,7 @@ import type {
   WebSocketMessageDescriptionSend,
   WebSocketMessageCandidateSend,
   WebSocketMessagePeersRequest,
+  WebSocketMessageConnectionResponse,
   WebSocketMessagePong,
   WebSocketMessagePeerConnectionRequest,
   WebSocketMessageMessageSendRequest,
@@ -37,6 +39,7 @@ const handleMessage = async (
       | WebSocketMessageDescriptionSend
       | WebSocketMessageCandidateSend
       | WebSocketMessagePeersRequest
+      | WebSocketMessageConnectionResponse
       | WebSocketMessageMessageSendRequest
       | WebSocketMessagePeerConnectionRequest = JSON.parse(message.toString());
 
@@ -75,6 +78,23 @@ const handleMessage = async (
           msg.roomUrl.length === 64
         ) {
           await handleRoom(msg.fromPeerId, ws, msg.roomUrl);
+        }
+        break;
+      }
+
+      case "peerConnection": {
+        if (
+          msg.type === "peerConnection" &&
+          isUUID(msg.fromPeerId) &&
+          isUUID(msg.toPeerId) &&
+          isUUID(msg.roomId)
+        ) {
+          await handlePeerAcceptsConnection(
+            msg.fromPeerId,
+            msg.toPeerId,
+            msg.roomId,
+            ws,
+          );
         }
         break;
       }

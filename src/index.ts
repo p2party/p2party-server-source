@@ -22,7 +22,7 @@ const events: P2PartyWSEvents = {
   },
 };
 
-new P2PartyWS(3001, events);
+new P2PartyWS(Number(process.env.PORT) ?? 3001, events);
 // setInterval(() => bws.publish("Published to all"), 3000);
 
 // // Heartbeat mechanism

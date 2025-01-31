@@ -5,7 +5,8 @@ import { wsClients } from "../wsServer";
 import type { P2PartyWSClient } from "../wsServer";
 import type {
   WebSocketMessageError,
-  WebSocketMessagePeersResponse,
+  // WebSocketMessagePeersResponse,
+  WebSocketMessageConnectionRequest,
 } from "../utils/interfaces";
 
 const prisma = new PrismaClient();
@@ -16,6 +17,7 @@ const handlePeers = async (
   roomId: string,
 ) => {
   try {
+    let fromPeerPublicKey = "";
     try {
       const fromPeer = await prisma.peer.findUnique({
         where: { id: fromPeerId },
@@ -25,7 +27,7 @@ const handlePeers = async (
       });
 
       if (
-        !fromPeer.challenges ||
+        !fromPeer?.challenges ||
         fromPeer.challenges.length === 0 ||
         !fromPeer.challenges[0].signature ||
         // fromPeer.challenges[0].signature.length !== 1024
@@ -46,6 +48,8 @@ const handlePeers = async (
         ws.close();
 
         return;
+      } else {
+        fromPeerPublicKey = fromPeer.publicKey;
       }
     } catch (error) {
       await prisma.$disconnect();
@@ -68,6 +72,8 @@ const handlePeers = async (
       return;
     }
 
+    if (fromPeerPublicKey.length === 0) return;
+
     try {
       const room = await prisma.room.findUnique({
         where: { id: roomId },
@@ -80,39 +86,49 @@ const handlePeers = async (
         },
       });
 
-      const peers: { id: string; publicKey: string }[] = [];
-      const len = room.peers.length;
+      // const peers: { id: string; publicKey: string }[] = [];
+      const len = room?.peers.length ?? 0;
       for (let i = 0; i < len; i++) {
-        const peer = room.peers[i];
-        const challenges = peer.challenges;
-        const peerWsClient = wsClients.get(peer.id);
+        if (room && room.peers[i] && room.peers[i].id !== fromPeerId) {
+          const peer = room.peers[i];
+          const challenges = peer.challenges;
+          const peerWsClient = wsClients.get(peer.id);
 
-        if (
-          peer.id !== fromPeerId &&
-          challenges &&
-          challenges.length > 0 &&
-          challenges[0].signature &&
-          // challenges[0].signature.length === 1024 &&
-          challenges[0].signature.length === 128 &&
-          peerWsClient &&
-          peerWsClient.data.isAlive
-        ) {
-          peers.push({
-            id: peer.id,
-            publicKey: peer.publicKey,
-          });
+          if (
+            // peer.id !== fromPeerId &&
+            challenges &&
+            challenges.length > 0 &&
+            challenges[0].signature &&
+            // challenges[0].signature.length === 1024 &&
+            challenges[0].signature.length === 128 &&
+            peerWsClient &&
+            peerWsClient.data.isAlive
+          ) {
+            peerWsClient.send(
+              JSON.stringify({
+                type: "peerConnection",
+                roomId,
+                peer: { id: fromPeerId, publicKey: fromPeerPublicKey },
+              } as WebSocketMessageConnectionRequest),
+            );
+
+            // peers.push({
+            //   id: peer.id,
+            //   publicKey: peer.publicKey,
+            // });
+          }
         }
       }
 
       await prisma.$disconnect();
 
-      ws.send(
-        JSON.stringify({
-          type: "peers",
-          roomId: room.id,
-          peers,
-        } as WebSocketMessagePeersResponse),
-      );
+      // ws.send(
+      //   JSON.stringify({
+      //     type: "peers",
+      //     roomId,
+      //     peers,
+      //   } as WebSocketMessagePeersResponse),
+      // );
 
       return;
     } catch (error) {

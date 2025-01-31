@@ -25,6 +25,27 @@ const handleChallenge = async (
         where: { id: fromPeerId },
       });
 
+      if (!fromPeer) {
+        await prisma.$disconnect();
+
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            fromAction: "sendChallengeResponse",
+            error: {
+              message:
+                "Challenge response was sent from peer with id " +
+                fromPeerId +
+                " who does not exist",
+            },
+          } as WebSocketMessageError),
+        );
+
+        ws.terminate();
+
+        return;
+      }
+
       fromPeerPublicKey = fromPeer.publicKey;
     } catch (error) {
       await prisma.$disconnect();
@@ -56,12 +77,31 @@ const handleChallenge = async (
         },
       });
 
+      if (!correspondingChallenge) {
+        await prisma.$disconnect();
+
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            fromAction: "sendChallengeResponse",
+            error: {
+              message:
+                "Challenge " +
+                challenge +
+                " does not correspond to peer with id " +
+                fromPeerId,
+            },
+          } as WebSocketMessageError),
+        );
+
+        ws.terminate();
+
+        return;
+      }
+
       correspondingChallengeId = correspondingChallenge.id;
 
-      if (
-        !correspondingChallenge.peer ||
-        correspondingChallenge.peer.id !== fromPeerId
-      ) {
+      if (correspondingChallenge.peer.id !== fromPeerId) {
         await prisma.$disconnect();
 
         ws.send(
@@ -170,7 +210,7 @@ const handleChallenge = async (
       await prisma.$disconnect();
 
       const secret = process.env.COTURN_SECRET || "north";
-      const date = Date.now()
+      const date = Date.now();
       const unixTimeStamp = parseInt(String(date / 1000)) + 1 * 60 * 60; // two hours
       const username = [unixTimeStamp, fromPeerPublicKey].join(":");
       const hmac = crypto.createHmac("sha1", secret);
