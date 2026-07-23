@@ -1,6 +1,9 @@
-import { PrismaClient } from "@prisma/client";
+// import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../prismaClient";
+// import { db } from "../db/db";
 
 import { wsClients } from "../wsServer";
+import { PROTOCOL_VERSION } from "./protocolV3";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -21,17 +24,13 @@ const handlePeers = async (
     try {
       const fromPeer = await prisma.peer.findUnique({
         where: { id: fromPeerId },
-        include: {
-          challenges: true,
-        },
       });
 
       if (
-        !fromPeer?.challenges ||
-        fromPeer.challenges.length === 0 ||
-        !fromPeer.challenges[0].signature ||
-        // fromPeer.challenges[0].signature.length !== 1024
-        fromPeer.challenges[0].signature.length !== 128
+        !fromPeer ||
+        !ws.data.isVerified ||
+        ws.data.peerId !== fromPeerId ||
+        fromPeer.publicKey !== ws.data.publicKey
       ) {
         await prisma.$disconnect();
 
@@ -48,9 +47,7 @@ const handlePeers = async (
         ws.close();
 
         return;
-      } else {
-        fromPeerPublicKey = fromPeer.publicKey;
-      }
+      } else fromPeerPublicKey = fromPeer.publicKey;
     } catch (error) {
       await prisma.$disconnect();
 
@@ -76,39 +73,36 @@ const handlePeers = async (
 
     try {
       const room = await prisma.room.findUnique({
+        // const room = await db.room.findUnique({
         where: { id: roomId },
         include: {
-          peers: {
-            include: {
-              challenges: true,
-            },
-          },
+          peers: true,
         },
       });
 
       // const peers: { id: string; publicKey: string }[] = [];
+      if (!room?.peers.some((peer) => peer.id === fromPeerId))
+        throw new Error("Requesting peer is not a member of this room");
+
       const len = room?.peers.length ?? 0;
       for (let i = 0; i < len; i++) {
         if (room && room.peers[i] && room.peers[i].id !== fromPeerId) {
           const peer = room.peers[i];
-          const challenges = peer.challenges;
           const peerWsClient = wsClients.get(peer.id);
 
           if (
-            // peer.id !== fromPeerId &&
-            challenges &&
-            challenges.length > 0 &&
-            challenges[0].signature &&
-            // challenges[0].signature.length === 1024 &&
-            challenges[0].signature.length === 128 &&
             peerWsClient &&
-            peerWsClient.data.isAlive
+            peerWsClient.data.isAlive &&
+            peerWsClient.data.isVerified &&
+            peerWsClient.data.peerId === peer.id &&
+            peerWsClient.data.publicKey === peer.publicKey
           ) {
             peerWsClient.send(
               JSON.stringify({
                 type: "peerConnection",
                 roomId,
                 peer: { id: fromPeerId, publicKey: fromPeerPublicKey },
+                protocolVersion: PROTOCOL_VERSION,
               } as WebSocketMessageConnectionRequest),
             );
 

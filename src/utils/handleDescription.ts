@@ -1,6 +1,7 @@
 import findRoomPeers from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
+import { PROTOCOL_VERSION } from "./protocolV3";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -18,20 +19,24 @@ const handleDescription = async (
     msg.fromPeerId,
     msg.toPeerId,
     false,
-    msg.fromPeerPublicKey,
   );
 
   if (infoChecksOut) {
     const wsClient = wsClients.get(msg.toPeerId);
 
-    if (wsClient) {
+    if (
+      wsClient &&
+      wsClient.data.isVerified &&
+      wsClient.data.peerId === msg.toPeerId
+    ) {
       wsClient.send(
         JSON.stringify({
           type: "description",
           description: msg.description,
           fromPeerId: msg.fromPeerId,
-          fromPeerPublicKey: msg.fromPeerPublicKey,
+          fromPeerPublicKey: ws.data.publicKey,
           roomId: msg.roomId,
+          protocolVersion: PROTOCOL_VERSION,
           message: `Received remote description for RTCPeerConnection from client ${msg.fromPeerId} on room ${msg.roomId}`,
         } as WebSocketMessageDescriptionReceive),
       );

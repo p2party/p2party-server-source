@@ -3,19 +3,21 @@ import { isUUID } from "class-validator";
 import handleConnection from "./utils/handleConnection";
 import handleMessage from "./utils/handleMessage";
 import handleInterval from "./utils/handleInterval";
+import { unregisterSocketIfCurrent } from "./utils/socketAuth";
 
 import type { Server, ServerWebSocket } from "bun";
+import type { SocketAuthState } from "./utils/socketAuth";
 
 export type P2PartyWSMsg = string | ArrayBufferView;
 
-/** ServerWebSocket with an additional property for client id */
-export type P2PartyWSClient = ServerWebSocket<{
+export interface P2PartyWSData extends SocketAuthState {
   isAlive: boolean;
-  pingInterval: Timer;
-  pongTimeout: Timer;
-  peerId: string;
-  publicKey: string;
-}>;
+  pingInterval?: Timer;
+  pongTimeout?: Timer;
+}
+
+/** ServerWebSocket with server-bound identity and authentication state. */
+export type P2PartyWSClient = ServerWebSocket<P2PartyWSData>;
 
 /** Interface that defines the event handlers for a BunnyWS server */
 export interface P2PartyWSEvents {
@@ -27,7 +29,7 @@ export interface P2PartyWSEvents {
 export const wsClients = new Map<string, P2PartyWSClient>();
 
 export class P2PartyWS {
-  private server: Server;
+  private server: Server<P2PartyWSData>;
 
   /**
    * @param port - The port number to listen on
@@ -43,40 +45,33 @@ export class P2PartyWS {
 
           if (isUUID(peerId)) {
             ws.data.isAlive = true;
-            ws.data.peerId = peerId;
             // Start pinging the client at regular intervals
             ws.data.pingInterval = await handleInterval(ws);
-
-            if (ws.readyState === 1) {
-              ws.subscribe("global");
-              wsClients.set(peerId, ws);
-              events.open(ws);
-            }
           }
         },
 
         message: async (ws: P2PartyWSClient, message: P2PartyWSMsg) => {
           await handleMessage(ws, message, events);
-
-          events.message(ws, message);
         },
 
         close: async (ws: P2PartyWSClient, _code: number, _message: string) => {
           ws.unsubscribe("global");
-          clearTimeout(ws.data.pongTimeout);
-          clearInterval(ws.data.pingInterval);
-          wsClients.delete(ws.data.peerId);
+          if (ws.data.pongTimeout) clearTimeout(ws.data.pongTimeout);
+          if (ws.data.pingInterval) clearInterval(ws.data.pingInterval);
+          // A reconnect can replace this peer's registry entry before the old
+          // socket's close event runs. Never evict that authenticated successor.
+          unregisterSocketIfCurrent(wsClients, ws);
           ws.terminate();
           events.close(ws);
         },
 
         idleTimeout: 60, // 60 seconds
         maxPayloadLength: 1024 * 1024, // 1mb
-        backpressureLimit: 5 * 1024 * 1024, // 5mb max backlog
-        closeOnBackpressureLimit: true, // close if backlog
+        // backpressureLimit: 100 * 1024 * 1024, // 10mb max backlog
+        // closeOnBackpressureLimit: true, // close if backlog
       },
 
-      fetch(req: Request, server: Server) {
+      fetch(req: Request, server: Server<P2PartyWSData>) {
         if (req.headers.get("upgrade") !== "websocket") {
           return new Response("Upgrade required", { status: 426 });
         }
@@ -89,15 +84,21 @@ export class P2PartyWS {
 
         const p = url.searchParams.get("publickey");
 
-        // if (!p || p.length !== 1100) { // RSA 4096
-        if (!p || p.length !== 64) {
-          // curve 25519
+        if (!p || !/^[0-9a-f]{64}$/.test(p)) {
           return new Response("Forbidden", { status: 403 });
         }
 
         if (
           server.upgrade(req, {
-            data: { publicKey: p! },
+            data: {
+              publicKey: p,
+              peerId: "",
+              challengeNonce: "",
+              challengeId: "",
+              isVerified: false,
+              isAuthenticating: false,
+              isAlive: true,
+            },
           })
         )
           return; // do not return a Response

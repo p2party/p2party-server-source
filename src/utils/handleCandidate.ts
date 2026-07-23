@@ -1,6 +1,7 @@
 import findRoomPeers from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
+import { PROTOCOL_VERSION } from "./protocolV3";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -23,14 +24,18 @@ const handleCandidate = async (
   if (infoChecksOut) {
     const wsClient = wsClients.get(msg.toPeerId);
 
-    if (wsClient) {
+    if (
+      wsClient &&
+      wsClient.data.isVerified &&
+      wsClient.data.peerId === msg.toPeerId
+    ) {
       wsClient.send(
         JSON.stringify({
           type: "candidate",
           candidate: msg.candidate,
           fromPeerId: msg.fromPeerId,
-          // fromPeerPublicKey: fromPeer.publicKey,
-          // roomId: room.id,
+          roomId: msg.roomId,
+          protocolVersion: PROTOCOL_VERSION,
           message: `Received candidate for RTCPeerConnection from client ${msg.fromPeerId}`,
         } as WebSocketMessageCandidateReceive),
       );

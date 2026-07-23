@@ -1,4 +1,5 @@
 import { P2PartyWS } from "./wsServer";
+import { assertSecureTurnSecret } from "./utils/socketAuth";
 
 import type {
   P2PartyWSMsg,
@@ -8,13 +9,20 @@ import type {
 
 export const pingMilliseconds = 20000;
 
+const configuredPort = process.env.PORT;
+const port =
+  configuredPort === undefined ? 3001 : Number.parseInt(configuredPort, 10);
+if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
+  throw new Error("PORT must be an integer between 1 and 65535");
+assertSecureTurnSecret(process.env.COTURN_SECRET);
+
 const events: P2PartyWSEvents = {
   open: (ws: P2PartyWSClient) => {
     console.log("Client has connected", ws.data.peerId);
   },
 
-  message: (ws: P2PartyWSClient, msg: P2PartyWSMsg) => {
-    console.log(`Received message: ${msg} from ${ws.data.peerId}`);
+  message: (_ws: P2PartyWSClient, _msg: P2PartyWSMsg) => {
+    // console.log(`Received message: ${msg} from ${ws.data.peerId}`);
   },
 
   close: (ws: P2PartyWSClient) => {
@@ -22,7 +30,7 @@ const events: P2PartyWSEvents = {
   },
 };
 
-new P2PartyWS(Number(process.env.PORT) ?? 3001, events);
+new P2PartyWS(port, events);
 // setInterval(() => bws.publish("Published to all"), 3000);
 
 // // Heartbeat mechanism

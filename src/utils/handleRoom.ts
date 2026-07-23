@@ -1,13 +1,23 @@
-import { PrismaClient } from "@prisma/client";
+// import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../prismaClient";
+// import { db } from "../db/db";
 
 import type { P2PartyWSClient } from "../wsServer.js";
-import type { Peer } from "@prisma/client";
 import type {
   WebSocketMessageError,
   WebSocketMessageRoomIdResponse,
 } from "../utils/interfaces.js";
+import { PROTOCOL_VERSION } from "./protocolV3";
 
 const prisma = new PrismaClient();
+
+interface Peer {
+  id: string;
+  createdAt: Date;
+  updatedAt: Date;
+  lastPing: bigint;
+  publicKey: string;
+}
 
 const handleRoom = async (
   fromPeerId: string,
@@ -20,16 +30,42 @@ const handleRoom = async (
     // hasher.digest("hex");
     const identifier = hasher.digest("hex").toLowerCase();
 
+    // const peer = await db.peer.findUnique({
+    //   where: { id: fromPeerId },
+    //   include: {
+    //     challenges: true,
+    //   },
+    // });
+    //
+    // if (!peer) {
+    //   ws.send(
+    //     JSON.stringify({
+    //       type: "error",
+    //       fromAction: "requestRoomId",
+    //       error: {
+    //         message:
+    //           "Room id request was sent by a non-existing or unverified client",
+    //       },
+    //     } as WebSocketMessageError),
+    //   );
+    //
+    //   ws.terminate();
+    //
+    //   return;
+    // }
+
     let peer: Peer | null;
     try {
       peer = await prisma.peer.findUnique({
         where: { id: fromPeerId },
-        include: {
-          challenges: true,
-        },
       });
 
-      if (!peer) {
+      if (
+        !peer ||
+        !ws.data.isVerified ||
+        ws.data.peerId !== fromPeerId ||
+        peer.publicKey !== ws.data.publicKey
+      ) {
         await prisma.$disconnect();
 
         ws.send(
@@ -69,6 +105,7 @@ const handleRoom = async (
     let roomId = "";
     try {
       const roomExists = await prisma.room.findUnique({
+        // const roomExists = await db.room.findUnique({
         where: { identifier },
         include: {
           peers: true,
@@ -80,6 +117,7 @@ const handleRoom = async (
 
         if (peer && roomExists?.peers.indexOf(peer) === -1) {
           await prisma.room.update({
+            // await db.room.update({
             where: { identifier },
             data: {
               peers: {
@@ -92,6 +130,7 @@ const handleRoom = async (
         }
       } else {
         const room = await prisma.room.create({
+          // const room = (await db.room.create({
           data: {
             identifier,
             peers: {
@@ -106,6 +145,7 @@ const handleRoom = async (
       }
     } catch (error) {
       const room = await prisma.room.create({
+        // const room = (await db.room.create({
         data: {
           identifier,
           peers: {
@@ -126,6 +166,7 @@ const handleRoom = async (
         type: "roomId",
         roomId,
         roomUrl,
+        protocolVersion: PROTOCOL_VERSION,
       } as WebSocketMessageRoomIdResponse),
     );
 

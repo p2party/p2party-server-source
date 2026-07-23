@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../prismaClient";
+import { createFreshSocketChallenge } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -14,118 +14,40 @@ const handleConnection = async (
   ws: P2PartyWSClient,
 ): Promise<string> => {
   try {
-    const existingPeer = await prisma.peer.findUnique({
+    if (!/^[0-9a-f]{64}$/.test(publicKey))
+      throw new Error("Invalid Ed25519 public key");
+
+    // The database binds one stable peer id to the identity public key. Socket
+    // authentication is deliberately NOT restored from the peer's historical
+    // challenge rows: every connection receives a new in-memory nonce.
+    const peer = await prisma.peer.upsert({
       where: { publicKey },
-      include: {
-        challenges: true,
+      update: {
+        lastPing: Date.now(),
+      },
+      create: {
+        lastPing: Date.now(),
+        publicKey,
       },
     });
 
-    if (!existingPeer) {
-      const randomBytes = crypto.randomBytes(32);
-      const challengeNonce = Array.from(randomBytes, (i: number) =>
-        i.toString(16).padStart(2, "0"),
-      ).join("");
+    const request = createFreshSocketChallenge(ws.data, peer.id, publicKey);
+    ws.send(JSON.stringify(request satisfies WebSocketMessageChallengeRequest));
 
-      const peer = await prisma.peer.create({
-        data: {
-          lastPing: Date.now(),
-          publicKey,
-          challenges: {
-            create: {
-              nonce: challengeNonce,
-            },
-          },
-        },
-      });
-
-      await prisma.$disconnect();
-
-      ws.send(
-        JSON.stringify({
-          type: "peerId",
-          peerId: peer.id,
-          challenge: challengeNonce,
-          message: `Connected to WebSocket server. Your client id is ${peer.id}`,
-        } as WebSocketMessageChallengeRequest),
-      );
-
-      return peer.id;
-    }
-
-    await prisma.$disconnect();
-
-    const secret = process.env.COTURN_SECRET || "north";
-    const date = Date.now();
-    const unixTimeStamp = parseInt(String(date / 1000)) + 1 * 60 * 60; // two hours
-    const username = [unixTimeStamp, publicKey].join(":");
-    const hmac = crypto.createHmac("sha1", secret);
-
-    hmac.setEncoding("base64");
-    hmac.write(username);
-    hmac.end();
-    const credential = hmac.read();
-
+    return peer.id;
+  } catch (error) {
     ws.send(
       JSON.stringify({
-        type: "peerId",
-        peerId: existingPeer?.id,
-        challenge: existingPeer?.challenges[0].nonce ?? "",
-        signature: existingPeer?.challenges[0].signature ?? "",
-        challengeId: existingPeer?.challenges[0].id ?? "",
-        username,
-        credential,
-        message: `Connected to WebSocket server. Your client id is ${existingPeer?.id}`,
-      } as WebSocketMessageChallengeRequest),
+        type: "error",
+        fromAction: "requestPeerId",
+        error:
+          error instanceof Error
+            ? { message: error.message }
+            : { message: "Could not initialize WebSocket identity" },
+      } as WebSocketMessageError),
     );
-
-    return existingPeer?.id ?? "";
-  } catch (error) {
-    try {
-      const randomBytes = crypto.randomBytes(32);
-      const challengeNonce = Array.from(randomBytes, (i: number) =>
-        i.toString(16).padStart(2, "0"),
-      ).join("");
-
-      const peer = await prisma.peer.create({
-        data: {
-          lastPing: Date.now(),
-          publicKey,
-          challenges: {
-            create: {
-              nonce: challengeNonce,
-            },
-          },
-        },
-      });
-
-      await prisma.$disconnect();
-
-      ws.send(
-        JSON.stringify({
-          type: "peerId",
-          peerId: peer.id,
-          challenge: challengeNonce,
-          message: `Connected to WebSocket server. Your client id is ${peer.id}`,
-        } as WebSocketMessageChallengeRequest),
-      );
-
-      return peer.id;
-    } catch (error) {
-      await prisma.$disconnect();
-
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          fromAction: "requestPeerId",
-          error,
-        } as WebSocketMessageError),
-      );
-
-      ws.terminate();
-
-      return "";
-    }
+    ws.terminate();
+    return "";
   }
 };
 

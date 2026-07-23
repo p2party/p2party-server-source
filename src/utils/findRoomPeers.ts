@@ -1,4 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+// import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../prismaClient";
+// import { db } from "../db/db";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type { WebSocketMessageError } from "./interfaces";
@@ -14,7 +16,15 @@ const findRoomPeers = async (
   fromPeerPublicKey?: string,
 ): Promise<boolean> => {
   try {
+    if (
+      !ws.data.isVerified ||
+      ws.data.peerId !== fromPeerId ||
+      ws.data.publicKey.length !== 64
+    )
+      return false;
+
     const room = await prisma.room.findUnique({
+      // const room = await db.room.findUnique({
       where: { id: roomId },
       include: {
         peers: true, // Include the peers of the room
@@ -41,10 +51,12 @@ const findRoomPeers = async (
     }
 
     const fromPeer = await prisma.peer.findUnique({
+      // const fromPeer = await db.peer.findUnique({
       where: { id: fromPeerId },
     });
     if (
       !fromPeer ||
+      fromPeer.publicKey !== ws.data.publicKey ||
       (isDescription && fromPeer.publicKey !== fromPeerPublicKey)
     ) {
       await prisma.$disconnect();
@@ -66,6 +78,7 @@ const findRoomPeers = async (
     }
 
     const toPeer = await prisma.peer.findUnique({
+      // const toPeer = await db.peer.findUnique({
       where: { id: toPeerId },
     });
     if (!toPeer) {
@@ -88,10 +101,10 @@ const findRoomPeers = async (
     }
 
     // Check if both peers are in the specified room
-    const isInRoom = room.peers.some(
-      (peer) => peer.id === fromPeerId || peer.id === toPeerId,
-    );
+    const roomPeerIds = new Set(room.peers.map((peer) => peer.id));
+    const isInRoom = roomPeerIds.has(fromPeerId) && roomPeerIds.has(toPeerId);
 
+    await prisma.$disconnect();
     return isInRoom;
   } catch (error) {
     await prisma.$disconnect();

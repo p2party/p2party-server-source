@@ -7,10 +7,7 @@ export interface WebSocketMessageChallengeRequest {
   type: "peerId";
   peerId: string;
   challenge: string;
-  signature?: string;
-  challengeId?: string;
-  username?: string;
-  credential?: string;
+  protocolVersion: number;
   message: string;
 }
 
@@ -19,11 +16,13 @@ export interface WebSocketMessageChallengeResponse {
   fromPeerId: string;
   challenge: string;
   signature: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageSuccessfulChallenge {
   type: "challenge";
   challengeId: string;
+  protocolVersion: number;
   username?: string;
   credential?: string;
 }
@@ -32,12 +31,14 @@ export interface WebSocketMessageRoomIdRequest {
   type: "room";
   fromPeerId: string;
   roomUrl: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageRoomIdResponse {
   type: "roomId";
   roomId: string;
   roomUrl: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageDescriptionSend {
@@ -47,6 +48,7 @@ export interface WebSocketMessageDescriptionSend {
   fromPeerPublicKey: string;
   toPeerId: string;
   roomId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageDescriptionReceive {
@@ -55,6 +57,7 @@ export interface WebSocketMessageDescriptionReceive {
   fromPeerId: string;
   fromPeerPublicKey: string;
   roomId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageCandidateSend {
@@ -63,31 +66,36 @@ export interface WebSocketMessageCandidateSend {
   fromPeerId: string;
   toPeerId: string;
   roomId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageCandidateReceive {
   type: "candidate";
   candidate: unknown;
   fromPeerId: string;
-  // roomId: string;
+  roomId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessagePeersRequest {
   type: "peers";
   fromPeerId: string;
   roomId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessagePeersResponse {
   type: "peers";
   roomId: string;
   peers: { id: string; publicKey: string }[];
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageConnectionRequest {
   type: "peerConnection";
   roomId: string;
   peer: { id: string; publicKey: string };
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageConnectionResponse {
@@ -95,6 +103,7 @@ export interface WebSocketMessageConnectionResponse {
   roomId: string;
   fromPeerId: string;
   toPeerId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessagePeerConnectionRequest {
@@ -103,6 +112,7 @@ export interface WebSocketMessagePeerConnectionRequest {
   fromPeerId: string;
   toPeerId: string;
   labels: string[];
+  protocolVersion: number;
 }
 
 export interface WebSocketMessagePeerConnectionResponse {
@@ -110,6 +120,7 @@ export interface WebSocketMessagePeerConnectionResponse {
   roomId: string;
   fromPeerId: string;
   labels: string[];
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageMessageSendRequest {
@@ -119,6 +130,7 @@ export interface WebSocketMessageMessageSendRequest {
   fromPeerId: string;
   toPeerId: string;
   label: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageMessageSendResponse {
@@ -128,6 +140,7 @@ export interface WebSocketMessageMessageSendResponse {
   fromPeerId: string;
   toPeerId: string;
   label: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageError {

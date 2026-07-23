@@ -1,4 +1,6 @@
-import { PrismaClient } from "@prisma/client";
+// import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../prismaClient";
+// import { db } from "../db/db";
 
 import { wsClients } from "../wsServer";
 
@@ -8,6 +10,7 @@ import type {
   WebSocketMessagePeersResponse,
 } from "../utils/interfaces";
 import findRoomPeers from "./findRoomPeers";
+import { PROTOCOL_VERSION } from "./protocolV3";
 
 const prisma = new PrismaClient();
 
@@ -50,14 +53,16 @@ const handlePeerAcceptsConnection = async (
     try {
       const fromPeer = await prisma.peer.findUnique({
         where: { id: fromPeerId },
-        include: {
-          challenges: true,
-        },
       });
 
       await prisma.$disconnect();
 
-      if (!fromPeer) {
+      if (
+        !fromPeer ||
+        !ws.data.isVerified ||
+        ws.data.peerId !== fromPeerId ||
+        ws.data.publicKey !== fromPeer.publicKey
+      ) {
         ws.send(
           JSON.stringify({
             type: "error",
@@ -76,38 +81,19 @@ const handlePeerAcceptsConnection = async (
         return;
       }
 
-      if (
-        !fromPeer.challenges ||
-        fromPeer.challenges.length === 0 ||
-        !fromPeer.challenges[0].signature ||
-        // fromPeer.challenges[0].signature.length !== 1024
-        fromPeer.challenges[0].signature.length !== 128
-      ) {
-        ws.send(
-          JSON.stringify({
-            type: "error",
-            fromAction: "requestPeers",
-            error: {
-              message: "Peers request was sent from an unverified peer",
-            },
-          } as WebSocketMessageError),
-        );
-
-        ws.close();
-
-        return;
-      }
-
       const peerWsClient = wsClients.get(toPeerId);
-      if (peerWsClient && peerWsClient.data.isAlive) {
-        console.log(toPeerId);
-        console.log(fromPeerId);
-        console.log(fromPeer.publicKey);
+      if (
+        peerWsClient &&
+        peerWsClient.data.isAlive &&
+        peerWsClient.data.isVerified &&
+        peerWsClient.data.peerId === toPeerId
+      ) {
         peerWsClient.send(
           JSON.stringify({
             type: "peers",
             roomId,
             peers: [{ id: fromPeerId, publicKey: fromPeer.publicKey }],
+            protocolVersion: PROTOCOL_VERSION,
           } as WebSocketMessagePeersResponse),
         );
       }

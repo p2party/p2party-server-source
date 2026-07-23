@@ -1,6 +1,7 @@
 import findRoomPeers from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
+import { PROTOCOL_VERSION } from "./protocolV3";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -23,14 +24,20 @@ const handleMessageSend = async (
   if (infoChecksOut) {
     const wsClient = wsClients.get(msg.toPeerId);
 
-    if (wsClient) {
+    if (
+      wsClient &&
+      wsClient.data.isVerified &&
+      wsClient.data.peerId === msg.toPeerId
+    ) {
       wsClient.send(
         JSON.stringify({
           type: "message",
           message: msg.message,
           roomId: msg.roomId,
           fromPeerId: msg.fromPeerId,
+          toPeerId: msg.toPeerId,
           label: msg.label,
+          protocolVersion: PROTOCOL_VERSION,
         } as WebSocketMessageMessageSendResponse),
       );
 

@@ -1,5 +1,10 @@
 # Based on https://raw.githubusercontent.com/github/gitignore/main/Node.gitignore
 
+.*.bun-build
+p2party*
+*.db
+*.sqlite
+
 # Logs
 
 logs
@@ -100,11 +105,17 @@ web_modules/
 
 # dotenv environment variable files
 
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+.env*
+!.env.example
+
+# Local databases and their SQLite sidecars
+
+prisma/*.db
+prisma/*.db-shm
+prisma/*.db-wal
+prisma/*.sqlite
+prisma/*.sqlite-shm
+prisma/*.sqlite-wal
 
 # parcel-bundler cache (https://parceljs.org/)
 
