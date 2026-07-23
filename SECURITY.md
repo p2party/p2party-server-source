@@ -4,7 +4,7 @@
 
 Please do not open a public issue for an undisclosed vulnerability.
 
-Email `security@deliberative.io` with:
+Email `security@p2party.com` with:
 
 - the affected commit or deployed endpoint;
 - reproduction steps or a proof of concept;

@@ -7,5 +7,5 @@ coordinated fix.
 
 Unacceptable behavior includes harassment, discrimination, threats, doxxing,
 and sustained disruption. Report conduct concerns privately to
-`security@deliberative.io`. Maintainers may remove content or participation
+`security@p2party.com`. Maintainers may remove content or participation
 that violates these expectations.

@@ -1,6 +1,6 @@
 # GNU Affero General Public License v3.0 only
 
-Copyright (C) 2026 Deliberative Technologies P.C.
+Copyright (C) 2026 p2party contributors.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License as published by the Free
