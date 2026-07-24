@@ -1,6 +1,7 @@
-import { prisma } from "../prismaClient";
+import { prisma as sharedPrisma } from "../prismaClient";
 
 import type { P2PartyWSClient } from "../wsServer.js";
+import type { ProcessPrismaClient } from "../prismaClient";
 import type {
   WebSocketMessageError,
   WebSocketMessageRoomIdResponse,
@@ -15,7 +16,10 @@ interface Peer {
   publicKey: string;
 }
 
-const handleRoom = async (
+type HandleRoomPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
+
+const handleRoomWithClient = async (
+  prisma: HandleRoomPrisma,
   fromPeerId: string,
   ws: P2PartyWSClient,
   roomUrl: string,
@@ -94,67 +98,28 @@ const handleRoom = async (
       return;
     }
 
-    let roomId = "";
-    try {
-      const roomExists = await prisma.room.findUnique({
-        // const roomExists = await db.room.findUnique({
-        where: { identifier },
-        include: {
-          peers: true,
-        },
-      });
-
-      if (roomExists) {
-        roomId = roomExists.id;
-
-        if (peer && roomExists?.peers.indexOf(peer) === -1) {
-          await prisma.room.update({
-            // await db.room.update({
-            where: { identifier },
-            data: {
-              peers: {
-                connect: {
-                  id: peer.id,
-                },
-              },
-            },
-          });
-        }
-      } else {
-        const room = await prisma.room.create({
-          // const room = (await db.room.create({
-          data: {
-            identifier,
-            peers: {
-              connect: {
-                id: peer.id,
-              },
-            },
-          },
-        });
-
-        roomId = room.id;
-      }
-    } catch (error) {
-      const room = await prisma.room.create({
-        // const room = (await db.room.create({
-        data: {
-          identifier,
-          peers: {
-            connect: {
-              id: peer.id,
-            },
+    // Keep the unique room creation free of nested writes so Prisma emits one
+    // native SQLite upsert instead of a find-then-create race.
+    const room = await prisma.room.upsert({
+      where: { identifier },
+      update: { identifier },
+      create: { identifier },
+    });
+    await prisma.room.update({
+      where: { id: room.id },
+      data: {
+        peers: {
+          connect: {
+            id: peer.id,
           },
         },
-      });
-
-      roomId = room.id;
-    }
+      },
+    });
 
     ws.send(
       JSON.stringify({
         type: "roomId",
-        roomId,
+        roomId: room.id,
         roomUrl,
         protocolVersion: PROTOCOL_VERSION,
       } as WebSocketMessageRoomIdResponse),
@@ -175,5 +140,12 @@ const handleRoom = async (
     ws.terminate();
   }
 };
+
+export const createHandleRoom =
+  (prisma: HandleRoomPrisma) =>
+  (fromPeerId: string, ws: P2PartyWSClient, roomUrl: string) =>
+    handleRoomWithClient(prisma, fromPeerId, ws, roomUrl);
+
+const handleRoom = createHandleRoom(sharedPrisma);
 
 export default handleRoom;
