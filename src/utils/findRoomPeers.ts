@@ -1,11 +1,7 @@
-// import { PrismaClient } from "@prisma/client";
-import { PrismaClient } from "../prismaClient";
-// import { db } from "../db/db";
+import { prisma } from "../prismaClient";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type { WebSocketMessageError } from "./interfaces";
-
-const prisma = new PrismaClient();
 
 const findRoomPeers = async (
   ws: P2PartyWSClient,
@@ -32,8 +28,6 @@ const findRoomPeers = async (
     });
 
     if (!room) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -59,8 +53,6 @@ const findRoomPeers = async (
       fromPeer.publicKey !== ws.data.publicKey ||
       (isDescription && fromPeer.publicKey !== fromPeerPublicKey)
     ) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -82,8 +74,6 @@ const findRoomPeers = async (
       where: { id: toPeerId },
     });
     if (!toPeer) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -104,11 +94,8 @@ const findRoomPeers = async (
     const roomPeerIds = new Set(room.peers.map((peer) => peer.id));
     const isInRoom = roomPeerIds.has(fromPeerId) && roomPeerIds.has(toPeerId);
 
-    await prisma.$disconnect();
     return isInRoom;
   } catch (error) {
-    await prisma.$disconnect();
-
     ws.terminate();
 
     return false;

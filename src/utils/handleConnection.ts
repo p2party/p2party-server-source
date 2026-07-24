@@ -1,4 +1,4 @@
-import { PrismaClient } from "../prismaClient";
+import { prisma } from "../prismaClient";
 import { createFreshSocketChallenge } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -6,8 +6,6 @@ import type {
   WebSocketMessageChallengeRequest,
   WebSocketMessageError,
 } from "./interfaces";
-
-const prisma = new PrismaClient();
 
 const handleConnection = async (
   publicKey: string,

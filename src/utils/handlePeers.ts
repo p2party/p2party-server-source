@@ -1,6 +1,6 @@
-// import { PrismaClient } from "@prisma/client";
-import { PrismaClient } from "../prismaClient";
-// import { db } from "../db/db";
+import { prisma as sharedPrisma } from "../prismaClient";
+
+import type { ProcessPrismaClient } from "../prismaClient";
 
 import { wsClients } from "../wsServer";
 import { PROTOCOL_VERSION } from "./protocolV3";
@@ -12,9 +12,10 @@ import type {
   WebSocketMessageConnectionRequest,
 } from "../utils/interfaces";
 
-const prisma = new PrismaClient();
+type HandlePeersPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
 
-const handlePeers = async (
+const handlePeersWithClient = async (
+  prisma: HandlePeersPrisma,
   fromPeerId: string,
   ws: P2PartyWSClient,
   roomId: string,
@@ -32,8 +33,6 @@ const handlePeers = async (
         ws.data.peerId !== fromPeerId ||
         fromPeer.publicKey !== ws.data.publicKey
       ) {
-        await prisma.$disconnect();
-
         ws.send(
           JSON.stringify({
             type: "error",
@@ -49,8 +48,6 @@ const handlePeers = async (
         return;
       } else fromPeerPublicKey = fromPeer.publicKey;
     } catch (error) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -114,8 +111,6 @@ const handlePeers = async (
         }
       }
 
-      await prisma.$disconnect();
-
       // ws.send(
       //   JSON.stringify({
       //     type: "peers",
@@ -126,8 +121,6 @@ const handlePeers = async (
 
       return;
     } catch (error) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -146,8 +139,6 @@ const handlePeers = async (
       return;
     }
   } catch (error) {
-    await prisma.$disconnect();
-
     ws.send(
       JSON.stringify({
         type: "error",
@@ -161,5 +152,12 @@ const handlePeers = async (
     return;
   }
 };
+
+export const createHandlePeers =
+  (prisma: HandlePeersPrisma) =>
+  (fromPeerId: string, ws: P2PartyWSClient, roomId: string) =>
+    handlePeersWithClient(prisma, fromPeerId, ws, roomId);
+
+const handlePeers = createHandlePeers(sharedPrisma);
 
 export default handlePeers;

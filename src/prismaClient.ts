@@ -12,3 +12,8 @@ const { PrismaClient: RequiredPrismaClient } = require("@prisma/client");
 const _PrismaClient: typeof ImportedPrismaClient = RequiredPrismaClient;
 
 export class PrismaClient extends _PrismaClient {}
+
+export type ProcessPrismaClient = Omit<PrismaClient, "$disconnect">;
+
+/** The single Prisma connection manager used for the lifetime of the server. */
+export const prisma: ProcessPrismaClient = new PrismaClient();

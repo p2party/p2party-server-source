@@ -1,6 +1,4 @@
-// import { PrismaClient } from "@prisma/client";
-import { PrismaClient } from "../prismaClient";
-// import { db } from "../db/db";
+import { prisma } from "../prismaClient";
 
 import findRoomPeers from "./findRoomPeers";
 
@@ -12,8 +10,6 @@ import type {
   WebSocketMessagePeerConnectionRequest,
   WebSocketMessagePeerConnectionResponse,
 } from "./interfaces";
-
-const prisma = new PrismaClient();
 
 const handlePeerConnection = async (
   ws: P2PartyWSClient,

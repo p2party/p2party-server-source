@@ -1,6 +1,4 @@
-// import { PrismaClient } from "@prisma/client";
-import { PrismaClient } from "../prismaClient";
-// import { db } from "../db/db";
+import { prisma } from "../prismaClient";
 
 import type { P2PartyWSClient } from "../wsServer.js";
 import type {
@@ -8,8 +6,6 @@ import type {
   WebSocketMessageRoomIdResponse,
 } from "../utils/interfaces.js";
 import { PROTOCOL_VERSION } from "./protocolV3";
-
-const prisma = new PrismaClient();
 
 interface Peer {
   id: string;
@@ -66,8 +62,6 @@ const handleRoom = async (
         ws.data.peerId !== fromPeerId ||
         peer.publicKey !== ws.data.publicKey
       ) {
-        await prisma.$disconnect();
-
         ws.send(
           JSON.stringify({
             type: "error",
@@ -84,8 +78,6 @@ const handleRoom = async (
         return;
       }
     } catch (error) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -159,8 +151,6 @@ const handleRoom = async (
       roomId = room.id;
     }
 
-    await prisma.$disconnect();
-
     ws.send(
       JSON.stringify({
         type: "roomId",
@@ -173,7 +163,6 @@ const handleRoom = async (
     return;
   } catch (error) {
     console.error(error);
-    await prisma.$disconnect();
 
     ws.send(
       JSON.stringify({

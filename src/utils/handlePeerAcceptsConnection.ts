@@ -1,6 +1,4 @@
-// import { PrismaClient } from "@prisma/client";
-import { PrismaClient } from "../prismaClient";
-// import { db } from "../db/db";
+import { prisma } from "../prismaClient";
 
 import { wsClients } from "../wsServer";
 
@@ -11,8 +9,6 @@ import type {
 } from "../utils/interfaces";
 import findRoomPeers from "./findRoomPeers";
 import { PROTOCOL_VERSION } from "./protocolV3";
-
-const prisma = new PrismaClient();
 
 const handlePeerAcceptsConnection = async (
   fromPeerId: string,
@@ -30,8 +26,6 @@ const handlePeerAcceptsConnection = async (
     );
 
     if (!allGood) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -54,8 +48,6 @@ const handlePeerAcceptsConnection = async (
       const fromPeer = await prisma.peer.findUnique({
         where: { id: fromPeerId },
       });
-
-      await prisma.$disconnect();
 
       if (
         !fromPeer ||
@@ -100,8 +92,6 @@ const handlePeerAcceptsConnection = async (
 
       return;
     } catch (error) {
-      await prisma.$disconnect();
-
       ws.send(
         JSON.stringify({
           type: "error",
@@ -120,8 +110,6 @@ const handlePeerAcceptsConnection = async (
       return;
     }
   } catch (error) {
-    await prisma.$disconnect();
-
     ws.send(
       JSON.stringify({
         type: "error",
