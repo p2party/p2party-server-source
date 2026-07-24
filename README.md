@@ -102,4 +102,4 @@ socket-identity binding.
 
 ## License
 
-GNU Affero General Public License v3.0 only. See [LICENSE.md](LICENSE.md).
+Apache License 2.0. See [LICENSE.md](LICENSE.md).

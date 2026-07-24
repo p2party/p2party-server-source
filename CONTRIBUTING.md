@@ -12,4 +12,4 @@ Contributions and adversarial review are welcome.
    production logs.
 
 Use conventional, focused commits. By contributing, you agree that your work
-is distributed under the repository's AGPL-3.0-only license.
+is distributed under the repository's Apache-2.0 license.
