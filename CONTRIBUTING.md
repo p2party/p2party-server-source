@@ -8,6 +8,10 @@ Follow the fresh-clone instructions in [README.md](README.md). Use only a local,
 disposable SQLite database. Never point tests, Prisma migrations, or development
 commands at production data or a shared database service.
 
+Before the first public push, export a fresh or squashed history whose author
+and committer email addresses all use `@p2party.com`. Do not rewrite this active
+protocol-development branch.
+
 Before opening a pull request, run:
 
 ```bash
