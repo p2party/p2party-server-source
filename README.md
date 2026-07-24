@@ -12,20 +12,22 @@ end-to-end encryption and per-message DataChannels live in
 ## Requirements
 
 - Bun 1.3 or newer
-- A Prisma-supported database configured by `DATABASE_URL`
+- SQLite configured with a Prisma `file:` URL in `DATABASE_URL`
 
 ## Local setup
 
 ```bash
-bun install
+bun install --frozen-lockfile
 cp .env.example .env
-bunx prisma generate
+bun run db:generate
+bun run db:migrate
 bun run start
 ```
 
-The example environment uses `prisma/dev.db`. Database files, sidecars,
-environment files, and compiled server binaries are ignored and must never be
-committed.
+The migration command creates the example `prisma/dev.db` on a fresh clone and
+applies every checked-in migration. Prisma resolves relative SQLite paths from
+`prisma/schema.prisma`. Database files, sidecars, environment files, and
+compiled server binaries are ignored and must never be committed.
 
 Run the release checks with:
 
@@ -38,7 +40,7 @@ bun run format:check
 
 | Variable        | Required | Meaning                                                                                                 |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`  | yes      | Prisma connection URL.                                                                                  |
+| `DATABASE_URL`  | yes      | Prisma SQLite `file:` URL; relative paths resolve from `prisma/schema.prisma`.                          |
 | `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                            |
 | `COTURN_SECRET` | no       | TURN REST shared secret (minimum 32 bytes). If absent, the server emits no TURN username or credential. |
 

@@ -23,6 +23,5 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  },
-  "exclude": ["src/db/db.ts", "src/db/index.ts"]
+  }
 }
