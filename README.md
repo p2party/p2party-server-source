@@ -29,6 +29,11 @@ applies every checked-in migration. Prisma resolves relative SQLite paths from
 `prisma/schema.prisma`. Database files, sidecars, environment files, and
 compiled server binaries are ignored and must never be committed.
 
+For an Internet-facing deployment, terminate TLS in front of this process and
+expose the WebSocket over `wss://`. The server does not configure TLS or launch
+a TURN service. `COTURN_SECRET` only lets it issue short-lived credentials for
+an independently operated TURN server.
+
 Run the release checks with:
 
 ```bash
@@ -45,6 +50,43 @@ bun run format:check
 | `COTURN_SECRET` | no       | TURN REST shared secret (minimum 32 bytes). If absent, the server emits no TURN username or credential. |
 
 There is no built-in TURN secret and no development authentication bypass.
+
+## WebSocket API
+
+The reference client uses `/ws`, so a local connection starts with:
+
+```text
+ws://localhost:3001/ws?publickey=<64 lowercase hex>
+```
+
+The public key is the client's Ed25519 identity public key, not a secret. The
+server currently accepts a WebSocket upgrade on any path; `/ws` is the stable
+deployment convention. A non-upgrade HTTP request receives `426`, and a missing
+or malformed `publickey` receives `403`.
+
+After the server's initial `peerId` challenge, signaling is JSON. The
+`challenge` proof is the only client message accepted before authentication.
+Every message other than `pong` must use exact protocol version `3`, and every
+message must repeat the socket's bound `fromPeerId`.
+
+| Client message   | Purpose                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| `challenge`      | Prove possession of the Ed25519 identity key for this socket. |
+| `room`           | Create or join the room represented by a 64-hex room token.   |
+| `peers`          | Ask the server to introduce this peer to existing room peers. |
+| `peerConnection` | Accept a room peer introduction.                              |
+| `connection`     | Request signaling for the listed DataChannel labels.          |
+| `description`    | Forward a bounded WebRTC session description to a room peer.  |
+| `candidate`      | Forward a bounded ICE candidate to a room peer.               |
+| `pong`           | Answer the server heartbeat.                                  |
+
+The complete wire shapes live in
+[`src/utils/interfaces.ts`](src/utils/interfaces.ts). Enforced bounds live in
+[`src/utils/protocolV3.ts`](src/utils/protocolV3.ts): 524,288 characters per
+signaling message, 262,144 serialized characters per description, 4,096
+serialized characters per ICE candidate, and at most 64 DataChannel labels of
+256 characters each. Malformed, downgraded, cross-room, or cross-identity
+signaling fails closed.
 
 ## Protocol-v3 authentication
 
@@ -101,6 +143,11 @@ blind-meeting-point design is implemented and reviewed.
 See [SECURITY.md](SECURITY.md) for private vulnerability reporting. Protocol
 changes should include adversarial tests and must preserve exact version and
 socket-identity binding.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Participation is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License
 

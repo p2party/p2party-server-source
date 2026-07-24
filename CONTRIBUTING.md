@@ -2,14 +2,46 @@
 
 Contributions and adversarial review are welcome.
 
+## Development setup
+
+Follow the fresh-clone instructions in [README.md](README.md). Use only a local,
+disposable SQLite database. Never point tests, Prisma migrations, or development
+commands at production data or a shared database service.
+
+Before opening a pull request, run:
+
+```bash
+bun install --frozen-lockfile
+bun run db:generate
+bun run db:migrate
+bun run check
+bun run format:check
+```
+
+The migration regression creates and removes its own temporary SQLite database.
+No test or contributor workflow requires PostgreSQL.
+
+## Change guidelines
+
 1. Open an issue before a large protocol or persistence change.
 2. Keep protocol-v3 inputs bounded and bind all actions to the authenticated
    WebSocket identity.
 3. Add focused tests for success, malformed input, replay, and cross-room or
    cross-identity attempts.
-4. Run `bun run check` and `bun run format:check`.
+4. Commit both `prisma/schema.prisma` and a migration for schema changes, then
+   verify that the full migration chain bootstraps a fresh SQLite file.
 5. Do not commit `.env` files, databases, TURN secrets, generated binaries, or
    production logs.
 
-Use conventional, focused commits. By contributing, you agree that your work
-is distributed under the repository's Apache-2.0 license.
+## Pull requests
+
+- Keep changes focused and explain the security boundary they affect.
+- Include the exact verification commands and results.
+- Call out protocol or persistence compatibility changes explicitly.
+- Use conventional commit messages.
+
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md), not
+in an issue or pull request.
+
+By contributing, you agree that your work is distributed under the
+repository's Apache-2.0 license.
