@@ -1,0 +1,34 @@
+# ============================================================================
+# P2Party Signaling Server - systemd service
+# ============================================================================
+# Managed by Ansible - do not edit manually
+# ============================================================================
+
+[Unit]
+Description=P2Party Signaling Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ app.user }}
+Group={{ app.group }}
+WorkingDirectory={{ app.home }}/server
+Environment=PORT={{ signaling_port }}
+EnvironmentFile={{ app.home }}/server/.env
+ExecStart={{ app.home }}/server/p2party-server
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=p2party-signaling-{{ signaling_port }}
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={{ app.home }}/server
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

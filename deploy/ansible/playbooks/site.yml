@@ -1,0 +1,78 @@
+# ============================================================================
+# P2Party Site Playbook (Master)
+# ============================================================================
+# Master playbook for full infrastructure setup and deployment.
+#
+# Usage:
+#   Full run:     ansible-playbook playbooks/site.yml --vault-id production@vault_pass_production.sh
+#   Postgres:     ansible-playbook playbooks/site.yml --tags postgres --vault-id production@vault_pass_production.sh
+#   Coturn:       ansible-playbook playbooks/site.yml --tags coturn --vault-id production@vault_pass_production.sh
+#   Signaling:    ansible-playbook playbooks/site.yml --tags signaling --vault-id production@vault_pass_production.sh
+#   WireGuard:    ansible-playbook playbooks/site.yml --tags wireguard --vault-id production@vault_pass_production.sh
+# ============================================================================
+---
+# ============================================================================
+# Pre-flight Health Check
+# ============================================================================
+- name: Verify Infrastructure Health
+  hosts: all
+  gather_facts: true
+  tags: [always]
+
+  tasks:
+    - name: Verify Ansible version
+      assert:
+        that:
+          - ansible_version.full is version('2.9', '>=')
+        fail_msg: "This playbook requires Ansible 2.9 or higher"
+      run_once: true
+      delegate_to: localhost
+      connection: local
+
+    - name: Display host info
+      debug:
+        msg: "{{ inventory_hostname }} ({{ ansible_host }}) - {{ role | default('unknown') }}"
+
+    - name: Verify SSH connectivity
+      ping:
+
+# ============================================================================
+# PostgreSQL
+# ============================================================================
+- name: Setup PostgreSQL
+  import_playbook: install-postgres.yml
+  tags: [postgres]
+
+# ============================================================================
+# Coturn
+# ============================================================================
+- name: Setup Coturn
+  import_playbook: setup-coturn.yml
+  tags: [coturn]
+
+# ============================================================================
+# Signaling Server
+# ============================================================================
+- name: Setup Signaling Server
+  import_playbook: initial-setup.yml
+  tags: [signaling]
+
+# ============================================================================
+# WireGuard Server
+# ============================================================================
+- name: Setup WireGuard Server
+  import_playbook: setup-wireguard.yml
+  tags: [wireguard]
+
+# ============================================================================
+# Final Summary
+# ============================================================================
+- name: Deployment Summary
+  hosts: all
+  gather_facts: false
+  tags: [always]
+
+  tasks:
+    - name: Display completion message
+      debug:
+        msg: "{{ inventory_hostname }}: Ready"

@@ -1,0 +1,138 @@
+# ============================================================================
+# P2Party PostgreSQL Installation Playbook
+# ============================================================================
+# Installs PostgreSQL 17 and creates the database/user.
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/install-postgres.yml \
+#     --vault-id production@vault_pass_production.sh
+# ============================================================================
+---
+- name: Install and Configure PostgreSQL
+  hosts: databases_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  tasks:
+    - name: Check if PostgreSQL is already installed
+      command: which psql
+      register: psql_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install PostgreSQL if not present
+      when: psql_check.rc != 0
+      block:
+        - name: Install prerequisites
+          apt:
+            name:
+              - gnupg2
+              - curl
+              - ca-certificates
+              - lsb-release
+            state: present
+            update_cache: yes
+
+        - name: Add PostgreSQL GPG key
+          shell: |
+            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          args:
+            creates: /usr/share/keyrings/postgresql.gpg
+
+        - name: Add PostgreSQL repository
+          copy:
+            content: |
+              deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main
+            dest: /etc/apt/sources.list.d/pgdg.list
+            mode: '0644'
+
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+
+        - name: Install PostgreSQL 17
+          apt:
+            name: postgresql-17
+            state: present
+
+    - name: Ensure PostgreSQL is started
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+- name: Configure PostgreSQL
+  hosts: databases_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  tasks:
+    - name: Get PostgreSQL version directory
+      shell: ls -1 /etc/postgresql/ | sort -rn | head -1
+      register: pg_version
+      changed_when: false
+
+    - name: Configure PostgreSQL to listen on all interfaces
+      lineinfile:
+        path: "/etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf"
+        regexp: "^#?listen_addresses\\s*="
+        line: "listen_addresses = '*'"
+      notify: Restart PostgreSQL
+
+    - name: Configure PostgreSQL performance settings
+      blockinfile:
+        path: "/etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf"
+        marker: "# {mark} P2PARTY PERFORMANCE SETTINGS"
+        block: |
+          shared_buffers = 1GB
+          effective_cache_size = 3GB
+          work_mem = 16MB
+          maintenance_work_mem = 256MB
+          max_connections = 100
+      notify: Restart PostgreSQL
+
+    - name: Configure pg_hba.conf for private network access
+      blockinfile:
+        path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+        marker: "# {mark} P2PARTY PRIVATE NETWORK ACCESS"
+        block: |
+          host    all    all    10.231.0.0/24    scram-sha-256
+      notify: Restart PostgreSQL
+
+  handlers:
+    - name: Restart PostgreSQL
+      systemd:
+        name: postgresql
+        state: restarted
+
+- name: Create Database and User
+  hosts: databases_production
+  become: true
+  become_user: postgres
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  tasks:
+    - name: Create database user
+      community.postgresql.postgresql_user:
+        name: "{{ vault_postgres_user }}"
+        password: "{{ vault_postgres_password }}"
+        state: present
+
+    - name: Create database
+      community.postgresql.postgresql_db:
+        name: "{{ vault_postgres_db_name }}"
+        owner: "{{ vault_postgres_user }}"
+        state: present
+
+    - name: Display completion message
+      debug:
+        msg: |
+          PostgreSQL setup complete!
+          - Database: {{ vault_postgres_db_name }} (user: {{ vault_postgres_user }})
+          - Listening on: 10.231.0.2:5432

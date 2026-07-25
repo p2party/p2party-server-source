@@ -6,8 +6,38 @@
 #
 # vault.yml is gitignored: never commit the encrypted file's plaintext, and
 # never add real values to this example.
+#
+# These names are load-bearing. Ansible fails a template render on an undefined
+# variable, so a typo here surfaces as a deploy failure, not a silent default.
+# Regenerate the list with:
+#   grep -rhoE "vault_[a-z0-9_]+" playbooks/ templates/ | sort -u
 # ============================================================================
 
-# Shared secret for coturn's REST credentials. MUST be at least 32 bytes —
-# the server refuses to start with a shorter one (assertSecureTurnSecret).
-vault_coturn_secret: "replace-me-with-64-hex-characters"
+# ---- coturn ----------------------------------------------------------------
+# Shared secret for coturn's time-limited REST credentials. The signaling
+# server reads the same value as COTURN_SECRET and REFUSES TO START if it is
+# shorter than 32 bytes (src/utils/socketAuth.ts assertSecureTurnSecret).
+# Generate with: openssl rand -hex 32
+vault_coturn_auth_secret: "replace-me-with-64-hex-characters"
+
+# The TURN realm. This must equal the DNS name the certificate is issued for,
+# because setup-coturn.yml passes it to certbot as the -d argument and reads
+# the cert back from /etc/letsencrypt/live/<realm>/.
+vault_coturn_realm: "turn.example.com"
+
+# Contact address for the Let's Encrypt account.
+vault_admin_email: "admin@example.com"
+
+# ---- postgres --------------------------------------------------------------
+# Only used by install-postgres.yml. The signaling server itself now runs on
+# SQLite (prisma/schema.prisma declares provider = "sqlite"), so these are
+# needed only if you deploy the separate Postgres host.
+vault_postgres_user: "p2party"
+vault_postgres_password: "replace-me"
+vault_postgres_db_name: "p2party"
+
+# ---- wireguard -------------------------------------------------------------
+# Server private key: wg genkey
+vault_wireguard_private_key: "replace-me"
+# List of peers; each needs at least public_key and allowed_ips.
+vault_wireguard_peers: []

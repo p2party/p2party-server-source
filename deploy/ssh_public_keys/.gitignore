@@ -1,0 +1,4 @@
+# Operator public keys: not secret, but they name who holds root in production.
+# Keep them out of the public repo; see README.md.
+*.pub
+!README.md

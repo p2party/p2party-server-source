@@ -1,0 +1,214 @@
+# ============================================================================
+# P2Party Initial Setup Playbook
+# ============================================================================
+# First-time setup for the signaling server after cloud-init provisioning.
+# Installs Bun, deploys code, configures Caddy, creates services.
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/initial-setup.yml \
+#     --vault-id production@vault_pass_production.sh
+# ============================================================================
+---
+# ============================================================================
+# Pre-flight Health Check
+# ============================================================================
+- name: Pre-flight checks
+  hosts: signaling_production
+  gather_facts: true
+
+  tasks:
+    - name: Verify SSH connectivity
+      ping:
+
+    - name: Display target info
+      debug:
+        msg: "Setting up signaling server on {{ inventory_hostname }} ({{ ansible_host }})"
+
+# ============================================================================
+# Install Bun Runtime
+# ============================================================================
+- name: Install Bun on Signaling Server
+  hosts: signaling_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+
+  tasks:
+    - name: Check if Bun is installed
+      stat:
+        path: "{{ app.home }}/.bun/bin/bun"
+      register: bun_installed
+
+    - name: Install Bun
+      when: not bun_installed.stat.exists
+      block:
+        - name: Install unzip (required for Bun)
+          apt:
+            name: unzip
+            state: present
+            update_cache: yes
+
+        - name: Install Bun via official installer
+          shell: curl -fsSL https://bun.sh/install | bash
+          become_user: "{{ app.user }}"
+
+    - name: Verify Bun installation
+      command: "{{ app.home }}/.bun/bin/bun --version"
+      become_user: "{{ app.user }}"
+      register: bun_version
+      changed_when: false
+
+    - name: Display Bun version
+      debug:
+        msg: "Bun {{ bun_version.stdout }} installed"
+
+# ============================================================================
+# Install Caddy
+# ============================================================================
+- name: Install Caddy Reverse Proxy
+  hosts: signaling_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
+
+  tasks:
+    - name: Install Caddy dependencies
+      apt:
+        name:
+          - debian-keyring
+          - debian-archive-keyring
+          - apt-transport-https
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Add Caddy GPG key
+      shell: curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+    - name: Add Caddy repository
+      shell: curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+      args:
+        creates: /etc/apt/sources.list.d/caddy-stable.list
+
+    - name: Install Caddy
+      apt:
+        name: caddy
+        state: present
+        update_cache: yes
+
+    - name: Deploy Caddyfile
+      template:
+        src: "{{ playbook_dir }}/../templates/Caddyfile.j2"
+        dest: /etc/caddy/Caddyfile
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_processor_vcpus | default(1) | int)) | list) }}"
+      notify: Reload Caddy
+
+    - name: Enable Caddy
+      systemd:
+        name: caddy
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reload Caddy
+      systemd:
+        name: caddy
+        state: reloaded
+
+# ============================================================================
+# Deploy Application Code
+# ============================================================================
+- name: Deploy Signaling Server Code
+  hosts: signaling_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  vars:
+    local_server_path: "{{ playbook_dir }}/../../.."
+
+  tasks:
+    - name: Create application directory
+      file:
+        path: "{{ app.home }}/server"
+        state: directory
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: '0755'
+
+    # Binary is deployed by deploy.yml playbook
+    # This playbook sets up the environment and systemd services
+
+    - name: Deploy .env file
+      template:
+        src: "{{ playbook_dir }}/../templates/signaling.env.j2"
+        dest: "{{ app.home }}/server/.env"
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: '0600'
+
+    # Dependencies, Prisma client, and migrations handled by deploy.yml
+    # Using compiled binary deployment - no npm install needed
+
+    - name: Compute signaling instance ports from available vCPUs
+      set_fact:
+        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_processor_vcpus | default(1) | int)) | list) }}"
+
+    # ========================================================================
+    # Systemd Service
+    # ========================================================================
+    - name: Deploy systemd service files
+      template:
+        src: "{{ playbook_dir }}/../templates/p2party-signaling.service.j2"
+        dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+      vars:
+        signaling_port: "{{ item }}"
+      notify: Reload systemd
+
+    - name: Enable and start signaling services
+      systemd:
+        name: "p2party-signaling-{{ item }}"
+        enabled: true
+        state: restarted
+        daemon_reload: true
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Wait for signaling services to be ready
+      wait_for:
+        port: "{{ item }}"
+        host: 127.0.0.1
+        delay: 3
+        timeout: 60
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Deployment complete
+      debug:
+        msg: |
+          Signaling server deployed (commit: {{ git_commit.stdout }})!
+          - Services: p2party-signaling-[{{ signaling_instance_ports | join(', ') }}]
+          - Ports: {{ signaling_instance_ports | join(', ') }}
+          - URL: https://signaling.p2party.com
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true

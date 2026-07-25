@@ -1,0 +1,25 @@
+[Interface]
+Address = 10.66.0.1/24
+ListenPort = {{ ports.wireguard | default(51820) }}
+PrivateKey = {{ vault_wireguard_private_key }}
+SaveConfig = false
+
+# Allow VPN clients to reach private Hetzner network 10.231.0.0/24
+PostUp = sysctl -w net.ipv4.ip_forward=1
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT
+PostUp = iptables -A FORWARD -o wg0 -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -s 10.66.0.0/24 -d 10.231.0.0/24 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT
+PostDown = iptables -D FORWARD -o wg0 -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -s 10.66.0.0/24 -d 10.231.0.0/24 -j MASQUERADE
+
+{% for peer in vault_wireguard_peers | default([]) %}
+[Peer]
+# {{ peer.name | default('peer') }}
+PublicKey = {{ peer.public_key }}
+AllowedIPs = {{ peer.allowed_ips }}
+{% if peer.preshared_key is defined %}
+PresharedKey = {{ peer.preshared_key }}
+{% endif %}
+
+{% endfor %}

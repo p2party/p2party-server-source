@@ -1,0 +1,50 @@
+# ============================================================================
+# P2Party Signaling Server - Caddy Configuration
+# ============================================================================
+# Managed by Ansible - do not edit manually
+# ============================================================================
+
+{{ domains.signaling }} {
+	# Reverse proxy to Bun signaling server instances
+	reverse_proxy {% for port in signaling_instance_ports | default([app_port]) %}127.0.0.1:{{ port }}{% if not loop.last %} {% endif %}{% endfor %} {
+		lb_policy round_robin
+		lb_try_duration 5s
+
+		# WebSocket support
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+
+		# Flush immediately for WebSocket
+		flush_interval -1
+	}
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		Content-Security-Policy "default-src 'none'; connect-src 'self' wss://{{ domains.signaling }}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# Logging (client IPs anonymised — last octet zeroed)
+	log {
+		output file /var/log/caddy/{{ domains.signaling }}.log {
+			roll_size {{ logging.log_max_size | default('100mb') }}
+			roll_keep 5
+			roll_keep_for {{ logging.log_retention_days | default(14) }}d
+		}
+		format filter {
+			wrap json
+			fields {
+				request>remote_ip ip_mask {
+					ipv4 24
+					ipv6 48
+				}
+			}
+		}
+	}
+}
