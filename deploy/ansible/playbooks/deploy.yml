@@ -29,6 +29,10 @@
     repo_path: "{{ playbook_dir }}/../../.."
     build_command: "bun run build:linux"
     binary_name: p2party_linux_x64
+    # The host has no node_modules, so bunx resolves prisma from the registry on
+    # every deploy. Pinned to the version this repo tests against: an unpinned
+    # fetch would silently adopt a new major and run migrations differently.
+    prisma_version: "6.19.2"
 
   tasks:
     # ------------------------------------------------------------------
@@ -129,9 +133,13 @@
         - name: Apply migrations against Postgres
           become_user: "{{ app.user }}"
           shell:
-            cmd: bunx prisma migrate deploy
+            cmd: bunx prisma@{{ prisma_version }} migrate deploy
             chdir: "{{ app.home }}/server"
           environment:
+            # initial-setup.yml installs Bun to ~/.bun/bin, but the shell module
+            # runs a non-login /bin/sh that never reads the profile which adds it
+            # to PATH — so `bunx` is not found even though Bun is present.
+            PATH: "{{ app.home }}/.bun/bin:{{ ansible_env.PATH }}"
             DATABASE_URL: "postgresql://{{ database.user }}:{{ database.password }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}"
           register: migration_result
           # A failed migration must stop the deploy before the new binary is
