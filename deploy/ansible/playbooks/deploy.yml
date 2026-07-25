@@ -8,15 +8,14 @@
 #   * The binary is built from THIS repo (`bun run build:linux` →
 #     p2party_linux_x64), so the deploy can never ship a different repo's
 #     server than the one you tested.
-#   * No Postgres migration step. This server is SQLite-only — its
-#     prisma/migrations/migration_lock.toml pins the provider, and Prisma
-#     refuses a swap — so its database is a file on the host, migrated there
-#     (see `bootstrap_database`) rather than over a tunnel to a Postgres box.
+#   * Postgres migrations run on every deploy via `prisma migrate deploy`,
+#     which applies only pending migrations and never resets anything. The
+#     signaling host reaches Postgres over the private network (10.231.0.0/24);
+#     5432 is not exposed publicly.
 #
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/deploy.yml
 #   ansible-playbook ... -e "skip_build=true"          # ship an existing binary
-#   ansible-playbook ... -e "bootstrap_database=true"  # first deploy only
 # ============================================================================
 - name: Deploy p2party signaling server
   hosts: signaling_production
@@ -30,9 +29,6 @@
     repo_path: "{{ playbook_dir }}/../../.."
     build_command: "bun run build:linux"
     binary_name: p2party_linux_x64
-    # The SQLite file is created and migrated once; later deploys only replace
-    # the binary. Turning this on for every deploy would be harmless but slow.
-    bootstrap_database: false
 
   tasks:
     # ------------------------------------------------------------------
@@ -91,10 +87,14 @@
         mode: "0755"
 
     # ------------------------------------------------------------------
-    # SQLite database — created once, on the host
+    # Postgres schema — migrations are applied on every deploy
     # ------------------------------------------------------------------
-    - name: Bootstrap the SQLite database
-      when: bootstrap_database | bool
+    # `prisma migrate deploy` only applies migrations that have not run yet and
+    # never generates or resets anything, so running it each time is how the
+    # schema stays in step with the binary being shipped. It is deliberately
+    # not gated behind a first-deploy flag: shipping code that expects a column
+    # the database does not have is exactly the failure this prevents.
+    - name: Apply Postgres migrations
       block:
         - name: Ensure the prisma directory exists
           file:
@@ -121,14 +121,17 @@
             mode: "0644"
             directory_mode: "0755"
 
-        - name: Apply migrations on the host
+        - name: Apply migrations against Postgres
           become_user: "{{ app.user }}"
           shell:
             cmd: bunx prisma migrate deploy
             chdir: "{{ app.home }}/server"
           environment:
-            DATABASE_URL: "file:{{ app.home }}/server/prisma/production.db"
+            DATABASE_URL: "postgresql://{{ vault_postgres_user }}:{{ vault_postgres_password }}@{{ database.host }}:{{ database.port | default(5432) }}/{{ vault_postgres_db_name }}?schema=public&sslmode={{ database.ssl_mode | default('prefer') }}"
           register: migration_result
+          # A failed migration must stop the deploy before the new binary is
+          # restarted against a schema it does not match.
+          failed_when: migration_result.rc != 0
 
         - name: Show migration output
           debug:

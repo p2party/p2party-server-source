@@ -12,7 +12,7 @@ end-to-end encryption and per-message DataChannels live in
 ## Requirements
 
 - Bun 1.3 or newer
-- SQLite configured with a Prisma `file:` URL in `DATABASE_URL`
+- PostgreSQL 14+ reachable via a `postgresql://` URL in `DATABASE_URL`
 
 ## Local setup
 
@@ -24,10 +24,15 @@ bun run db:migrate
 bun run start
 ```
 
-The migration command creates the example `prisma/dev.db` on a fresh clone and
-applies every checked-in migration. Prisma resolves relative SQLite paths from
-`prisma/schema.prisma`. Database files, sidecars, environment files, and
-compiled server binaries are ignored and must never be committed.
+`db:migrate` runs `prisma migrate deploy`, which applies only the migrations
+that have not run yet and never resets anything, so it is safe against a live
+database. Environment files and compiled server binaries are gitignored and
+must never be committed.
+
+Postgres rather than SQLite because signaling is the one component that has to
+tolerate more than one process. The schema carries `Peer.serverId` and a
+`PendingSignal` table so an instance can hand a signal to the instance that
+actually holds the target peer's socket, over `LISTEN`/`NOTIFY`.
 
 For an Internet-facing deployment, terminate TLS in front of this process and
 expose the WebSocket over `wss://`. The server does not configure TLS or launch
@@ -45,7 +50,7 @@ bun run format:check
 
 | Variable        | Required | Meaning                                                                                                 |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`  | yes      | Prisma SQLite `file:` URL; relative paths resolve from `prisma/schema.prisma`.                          |
+| `DATABASE_URL`  | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                       |
 | `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                            |
 | `COTURN_SECRET` | no       | TURN REST shared secret (minimum 32 bytes). If absent, the server emits no TURN username or credential. |
 

@@ -7,7 +7,6 @@
 # Usage:
 #   ./deploy.sh                     # build + deploy + restart
 #   ./deploy.sh --skip-build        # deploy the binary already built
-#   ./deploy.sh --bootstrap-db      # first deploy: also create the SQLite file
 #
 # Requires: bun, ansible, SSH access to the signaling host, and
 # ansible/group_vars/all/vault.yml (see vault.yml.example).
@@ -21,10 +20,9 @@ EXTRA_VARS=()
 for arg in "$@"; do
   case "$arg" in
     --skip-build) EXTRA_VARS+=(-e "skip_build=true") ;;
-    --bootstrap-db) EXTRA_VARS+=(-e "bootstrap_database=true") ;;
     *)
       echo "Unknown option: $arg" >&2
-      echo "Usage: $0 [--skip-build] [--bootstrap-db]" >&2
+      echo "Usage: $0 [--skip-build]" >&2
       exit 2
       ;;
   esac

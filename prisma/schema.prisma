@@ -1,50 +1,67 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Prisma schema for the p2party signaling server.
+//
+// Postgres, not SQLite. Signaling is the one component that must tolerate more
+// than one process: a SQLite file cannot be shared across instances, and
+// `PendingSignal` below exists so two instances can hand signals to each other.
+// See src/pubsub.ts.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model Room {
-  id         String     @id @default(uuid())
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-  identifier String     @unique
-
-  peers  Peer[]
-
-  @@map("room")
-}
-
 model Peer {
-  id         String     @id @default(uuid())
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-  lastPing   BigInt
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastPing  BigInt
+  publicKey String   @unique
 
-  publicKey  String    @unique
+  /// Which signaling instance currently holds this peer's socket. Null when the
+  /// peer is not connected. Used to route a signal to the right process.
+  serverId String? @db.VarChar(36)
 
   challenges Challenge[]
-  rooms Room[]
+  rooms      Room[]      @relation("PeerRooms")
 
-  @@map("peer")
+  @@index([serverId])
+}
+
+model Room {
+  id         String   @id @default(uuid()) @db.Uuid
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  identifier String   @unique @db.VarChar(128)
+
+  peers Peer[] @relation("PeerRooms")
 }
 
 model Challenge {
-  id         String   @id @default(uuid())
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  nonce     String   @unique @db.VarChar(64)
+  signature String?  @unique
+  peerId    String   @db.Uuid
 
-  nonce      String   @unique
-  signature  String?  @unique
+  /// Cascade: a deleted peer's challenges are meaningless, and leaving them
+  /// would pin the unique nonce and signature forever.
+  peer Peer @relation(fields: [peerId], references: [id], onDelete: Cascade)
+}
 
-  peerId     String
-  peer       Peer     @relation(fields: [peerId], references: [id])
+/// A signal produced on one instance for a peer whose socket lives on another.
+/// The producer writes the row and issues NOTIFY "server_<targetServerId>"; the
+/// owner drains and deletes. These rows are transient routing state, not history.
+model PendingSignal {
+  id             String   @id @default(uuid()) @db.Uuid
+  createdAt      DateTime @default(now())
+  targetServerId String   @db.VarChar(36)
+  targetPeerId   String   @db.Uuid
+  payload        String
 
-  @@map("challenge")
+  @@index([targetServerId])
 }
