@@ -34,10 +34,13 @@
     # ------------------------------------------------------------------
     # Build locally, from this repo
     # ------------------------------------------------------------------
+    # Both run on the control machine, not the target. `become: false` alone is
+    # not enough: the inventory sets ansible_become: true, and that connection
+    # variable outranks the task keyword — so each also needs the variable
+    # cleared, or ansible tries to sudo locally and stops for a password.
     - name: Build the Linux binary from this repo
-      local_action:
-        module: shell
-        cmd: cd "{{ repo_path }}" && {{ build_command }}
+      shell: cd "{{ repo_path }}" && {{ build_command }}
+      delegate_to: localhost
       become: false
       vars:
         ansible_become: false
@@ -46,10 +49,12 @@
       when: not (skip_build | default(false) | bool)
 
     - name: Confirm the binary exists before touching the host
-      local_action:
-        module: stat
+      stat:
         path: "{{ repo_path }}/{{ binary_name }}"
+      delegate_to: localhost
       become: false
+      vars:
+        ansible_become: false
       register: built_binary
 
     - name: Fail early when there is nothing to deploy
