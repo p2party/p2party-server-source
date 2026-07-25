@@ -95,6 +95,18 @@
         group: "{{ app.group }}"
         mode: "0755"
 
+    # The binary and its environment are a matched pair: this release requires
+    # COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary restarted
+    # against an older .env exits at startup. initial-setup.yml also writes this
+    # file, but a deploy must not depend on someone having re-run provisioning.
+    - name: Deploy the signaling environment file
+      template:
+        src: "{{ playbook_dir }}/../templates/signaling.env.j2"
+        dest: "{{ app.home }}/server/.env"
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: "0600"
+
     # ------------------------------------------------------------------
     # Postgres schema — migrations are applied on every deploy
     # ------------------------------------------------------------------
@@ -139,7 +151,7 @@
             # initial-setup.yml installs Bun to ~/.bun/bin, but the shell module
             # runs a non-login /bin/sh that never reads the profile which adds it
             # to PATH — so `bunx` is not found even though Bun is present.
-            PATH: "{{ app.home }}/.bun/bin:{{ ansible_env.PATH }}"
+            PATH: "{{ app.home }}/.bun/bin:{{ ansible_facts['env'].PATH }}"
             DATABASE_URL: "postgresql://{{ database.user }}:{{ database.password }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}"
           register: migration_result
           # A failed migration must stop the deploy before the new binary is
@@ -164,14 +176,39 @@
         label: "{{ item }}"
 
     - name: Wait for signaling services to be healthy
-      wait_for:
-        port: "{{ item }}"
-        host: 127.0.0.1
-        delay: 3
-        timeout: 60
-      loop: "{{ signaling_instance_ports }}"
-      loop_control:
-        label: "{{ item }}"
+      block:
+        - name: Wait for each instance to accept connections
+          wait_for:
+            port: "{{ item }}"
+            host: 127.0.0.1
+            delay: 3
+            timeout: 25
+          loop: "{{ signaling_instance_ports }}"
+          loop_control:
+            label: "{{ item }}"
+      rescue:
+        # A dead unit never opens its port, so without this the play spends
+        # 25s per instance timing out and then reports only "Timeout", which
+        # says nothing about why. The service log always does.
+        - name: Collect why the service did not start
+          shell: |
+            systemctl status p2party-signaling-{{ signaling_instance_ports | first }} --no-pager -l | tail -20
+            echo '--- journal ---'
+            journalctl -u p2party-signaling-{{ signaling_instance_ports | first }} -n 40 --no-pager
+          register: signaling_failure
+          changed_when: false
+          failed_when: false
+
+        - name: Report the service failure
+          fail:
+            msg: |
+              The signaling service did not start. Its own log follows.
+
+              Most likely: COTURN_SECRET missing or under 32 bytes, or
+              DATABASE_URL unreachable (initPubSub aborts startup rather than
+              running without cross-instance routing).
+
+              {{ signaling_failure.stdout | default('no output captured') }}
 
     # A deploy that restarts cleanly but speaks the wrong protocol version is
     # the failure mode that matters here: v4 clients fail closed against a v3
