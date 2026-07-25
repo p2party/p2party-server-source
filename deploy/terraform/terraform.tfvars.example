@@ -1,0 +1,63 @@
+# ============================================================================
+# P2Party Terraform Variables
+# ============================================================================
+# Copy this file to terraform.tfvars and fill in your values.
+# NEVER commit terraform.tfvars to git!
+# ============================================================================
+
+# ============================================================================
+# Deployment Control
+# ============================================================================
+deploy_postgres  = true
+deploy_coturn    = true
+deploy_signaling = true
+deploy_wireguard = true
+
+# ============================================================================
+# Hetzner Cloud (Required)
+# ============================================================================
+# Prefer environment variable instead:
+#   export TF_VAR_hcloud_token="your-hetzner-cloud-api-token"
+# hcloud_token = "your-hetzner-cloud-api-token"
+
+# ============================================================================
+# Cloudflare (Required)
+# ============================================================================
+# Get API token: https://dash.cloudflare.com/profile/api-tokens
+# Required permissions: Zone:Edit, DNS:Edit
+# Prefer environment variables instead:
+#   export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
+#   export TF_VAR_cloudflare_zone_id_p2party="your-zone-id-for-p2party.com"
+# cloudflare_api_token       = "your-cloudflare-api-token"
+# cloudflare_zone_id_p2party = "your-zone-id-for-p2party.com"
+
+# ============================================================================
+# Optional Overrides (defaults shown)
+# ============================================================================
+# Uncomment and modify if you need different values
+
+# Network subnet
+# p2party_subnet = "10.231.0.0/24"
+
+# SSH ports (non-standard for security)
+# p2party_postgres_ssh_port  = 22211
+# p2party_coturn_ssh_port    = 22212
+# p2party_signaling_ssh_port = 22213
+# p2party_wireguard_ssh_port = 22214
+
+# Service ports
+# p2party_postgres_port  = 5432
+# p2party_signaling_port = 3001
+# p2party_coturn_port    = 443
+# p2party_wireguard_port  = 51820
+
+# Coturn relay port range
+# p2party_coturn_min_port = 49152
+# p2party_coturn_max_port = 65535
+
+# Domain configuration
+# p2party_domain = "p2party.com"
+
+# User configuration
+# p2party_ansible_user = "p2party"
+# p2party_admin_email  = "admin@p2party.com"

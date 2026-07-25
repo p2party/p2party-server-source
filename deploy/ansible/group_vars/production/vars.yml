@@ -1,0 +1,29 @@
+# ============================================================================
+# P2Party Production Environment Variables
+# ============================================================================
+
+deployment_environment: production
+env_name: prod
+
+app:
+  user: p2party
+  group: p2party
+  home: /home/p2party
+  node_env: production
+
+domains:
+  main: p2party.com
+  signaling: signaling.p2party.com
+  turn: turn.p2party.com
+  stun: stun.p2party.com
+
+# This signaling server is SQLite-only: prisma/migrations/migration_lock.toml
+# pins the provider, so there is no Postgres connection to configure. The
+# database is a file on the signaling host.
+database:
+  path: /home/p2party/server/prisma/production.db
+
+logging:
+  level: info
+  log_retention_days: 30
+  log_max_size: 500M

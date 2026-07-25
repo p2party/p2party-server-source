@@ -1,0 +1,76 @@
+# ============================================================================
+# P2Party Group Variables - All Hosts
+# ============================================================================
+
+# ------------------------------------------------------------------------------
+# System Configuration
+# ------------------------------------------------------------------------------
+timezone: UTC
+locale: en_US.UTF-8
+
+# ------------------------------------------------------------------------------
+# Security Configuration
+# ------------------------------------------------------------------------------
+security:
+  ssh_permit_root_login: "no"
+  ssh_password_authentication: "no"
+  ssh_max_auth_tries: 3
+  ssh_client_alive_interval: 300
+  ssh_client_alive_count_max: 2
+  ufw_default_incoming: deny
+  ufw_default_outgoing: allow
+  fail2ban_bantime: 3600
+  fail2ban_findtime: 600
+  fail2ban_maxretry: 3
+
+# ------------------------------------------------------------------------------
+# User Configuration
+# ------------------------------------------------------------------------------
+users:
+  - name: p2party
+    groups:
+      - sudo
+    shell: /bin/bash
+    state: present
+
+# ------------------------------------------------------------------------------
+# Network Configuration
+# ------------------------------------------------------------------------------
+network:
+  range: 10.231.0.0/24
+  postgres: 10.231.0.2
+  coturn: 10.231.0.3
+  signaling: 10.231.0.4
+  wireguard: 10.231.0.5
+  postgres_ip: 10.231.0.2
+
+# ------------------------------------------------------------------------------
+# Service Ports
+# ------------------------------------------------------------------------------
+ports:
+  postgres: 5432
+  signaling: 3001
+  coturn: 443
+  coturn_stun: 3478
+  wireguard: 51820
+
+# ------------------------------------------------------------------------------
+# Application Configuration
+# ------------------------------------------------------------------------------
+app:
+  user: p2party
+  group: p2party
+  home: /home/p2party
+  node_env: production
+
+# Bun runtime
+bun:
+  version: latest
+  install_dir: "{{ app.home }}/.bun"
+
+# ------------------------------------------------------------------------------
+# Logging Configuration
+# ------------------------------------------------------------------------------
+logging:
+  log_retention_days: 14
+  log_max_size: 100M

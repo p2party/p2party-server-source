@@ -1,0 +1,4 @@
+# Secrets and anything that could carry them.
+group_vars/all/vault.yml
+vault_pass*.sh
+*.retry

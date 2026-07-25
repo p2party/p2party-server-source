@@ -1,0 +1,126 @@
+# ============================================================================
+# P2Party Production Inventory
+# ============================================================================
+# 3 servers accessed via SSH to private network IPs.
+#
+# Usage: ansible-playbook -i inventory/production.yml playbooks/deploy.yml
+# ============================================================================
+
+all:
+  children:
+    # ========================================================================
+    # Production Environment Group
+    # ========================================================================
+    production:
+      children:
+        databases_production:
+        turn_production:
+        signaling_production:
+        wireguard_production:
+
+    # ========================================================================
+    # PostgreSQL Database Server
+    # ========================================================================
+    databases_production:
+      hosts:
+        p2party-postgres:
+          ansible_host: 10.231.0.2
+          ansible_port: 22211
+          ansible_user: example_deploy
+          role: database
+          service: postgres
+          # PostgreSQL 17 tuning (4GB RAM / 3 CPU)
+          pg_max_connections: 100
+          pg_shared_buffers: 1GB
+          pg_effective_cache_size: 3GB
+          pg_maintenance_work_mem: 256MB
+          pg_work_mem: 16MB
+
+    # ========================================================================
+    # Coturn TURN/STUN Server (turn.p2party.com)
+    # ========================================================================
+    turn_production:
+      hosts:
+        p2party-coturn:
+          ansible_host: 10.231.0.3
+          ansible_port: 22212
+          ansible_user: example_deploy
+          role: turn
+          service: coturn
+
+    # ========================================================================
+    # Signaling Server + Caddy (signaling.p2party.com)
+    # ========================================================================
+    signaling_production:
+      hosts:
+        p2party-signaling:
+          ansible_host: 10.231.0.4
+          ansible_port: 22213
+          ansible_user: example_deploy
+          role: signaling
+          service: server
+          app_port: 3001
+
+    # ========================================================================
+    # WireGuard Server (vpn.p2party.com)
+    # ========================================================================
+    wireguard_production:
+      hosts:
+        p2party-wireguard:
+          # Use public IP for WireGuard server since it's the VPN entry point
+          ansible_host: 192.0.2.42
+          ansible_port: 22214
+          ansible_user: example_deploy
+          role: wireguard
+          service: vpn
+          # Private IP for reference (accessible from other servers)
+          private_ip: 10.231.0.5
+
+    # ========================================================================
+    # Grouped by function
+    # ========================================================================
+    databases:
+      children:
+        databases_production:
+
+    applications:
+      children:
+        signaling_production:
+
+    private_network:
+      children:
+        databases_production:
+        turn_production:
+        signaling_production:
+        wireguard_production:
+
+    p2party:
+      children:
+        databases_production:
+        turn_production:
+        signaling_production:
+        wireguard_production:
+
+  # ==========================================================================
+  # Global Variables
+  # ==========================================================================
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_become: true
+    ansible_become_method: sudo
+
+    # Domain configuration
+    domain: p2party.com
+    signaling_domain: signaling.p2party.com
+    turn_domain: turn.p2party.com
+    stun_domain: stun.p2party.com
+
+    # Network configuration
+    private_network: 10.231.0.0/24
+
+    # Application configuration
+    app_user: p2party
+    app_base_dir: /home/p2party
+
+    # SSH configuration
+    ssh_key_path: ~/.ssh/operator_key_1

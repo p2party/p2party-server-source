@@ -1,0 +1,13 @@
+# ============================================================================
+# Encrypted variables — copy to vault.yml and encrypt with ansible-vault
+# ============================================================================
+#   cp vault.yml.example vault.yml
+#   ansible-vault encrypt vault.yml --vault-password-file ./vault_pass.sh
+#
+# vault.yml is gitignored: never commit the encrypted file's plaintext, and
+# never add real values to this example.
+# ============================================================================
+
+# Shared secret for coturn's REST credentials. MUST be at least 32 bytes —
+# the server refuses to start with a shorter one (assertSecureTurnSecret).
+vault_coturn_secret: "replace-me-with-64-hex-characters"

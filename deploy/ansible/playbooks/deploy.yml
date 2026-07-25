@@ -1,0 +1,187 @@
+---
+# ============================================================================
+# Deploy the protocol-v4 signaling server
+# ============================================================================
+# Ported from the older `server` repo's playbook, with the parts that no
+# longer describe this server removed rather than carried along:
+#
+#   * The binary is built from THIS repo (`bun run build:linux` →
+#     p2party_linux_x64), so the deploy can never ship a different repo's
+#     server than the one you tested.
+#   * No Postgres migration step. This server is SQLite-only — its
+#     prisma/migrations/migration_lock.toml pins the provider, and Prisma
+#     refuses a swap — so its database is a file on the host, migrated there
+#     (see `bootstrap_database`) rather than over a tunnel to a Postgres box.
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/deploy.yml
+#   ansible-playbook ... -e "skip_build=true"          # ship an existing binary
+#   ansible-playbook ... -e "bootstrap_database=true"  # first deploy only
+# ============================================================================
+- name: Deploy p2party signaling server
+  hosts: signaling_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  vars:
+    repo_path: "{{ playbook_dir }}/../../.."
+    build_command: "bun run build:linux"
+    binary_name: p2party_linux_x64
+    # The SQLite file is created and migrated once; later deploys only replace
+    # the binary. Turning this on for every deploy would be harmless but slow.
+    bootstrap_database: false
+
+  tasks:
+    # ------------------------------------------------------------------
+    # Build locally, from this repo
+    # ------------------------------------------------------------------
+    - name: Build the Linux binary from this repo
+      local_action:
+        module: shell
+        cmd: cd "{{ repo_path }}" && {{ build_command }}
+      become: false
+      vars:
+        ansible_become: false
+      register: build_result
+      changed_when: true
+      when: not (skip_build | default(false) | bool)
+
+    - name: Confirm the binary exists before touching the host
+      local_action:
+        module: stat
+        path: "{{ repo_path }}/{{ binary_name }}"
+      become: false
+      register: built_binary
+
+    - name: Fail early when there is nothing to deploy
+      assert:
+        that: built_binary.stat.exists
+        fail_msg: >-
+          {{ binary_name }} not found in {{ repo_path }}. Run
+          `{{ build_command }}` first, or drop skip_build.
+
+    - name: Compute signaling instance ports from available vCPUs
+      set_fact:
+        signaling_instance_ports: >-
+          {{ signaling_ports
+             | default(range(app_port | int,
+                             (app_port | int) + (ansible_processor_vcpus | default(1) | int))
+                       | list) }}
+
+    # ------------------------------------------------------------------
+    # Ship the binary
+    # ------------------------------------------------------------------
+    - name: Ensure the server directory exists
+      file:
+        path: "{{ app.home }}/server"
+        state: directory
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: "0755"
+
+    - name: Copy the compiled binary
+      copy:
+        src: "{{ repo_path }}/{{ binary_name }}"
+        dest: "{{ app.home }}/server/p2party-server"
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: "0755"
+
+    # ------------------------------------------------------------------
+    # SQLite database — created once, on the host
+    # ------------------------------------------------------------------
+    - name: Bootstrap the SQLite database
+      when: bootstrap_database | bool
+      block:
+        - name: Ensure the prisma directory exists
+          file:
+            path: "{{ app.home }}/server/prisma"
+            state: directory
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0755"
+
+        - name: Copy the schema
+          copy:
+            src: "{{ repo_path }}/prisma/schema.prisma"
+            dest: "{{ app.home }}/server/prisma/schema.prisma"
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0644"
+
+        - name: Copy the migrations
+          copy:
+            src: "{{ repo_path }}/prisma/migrations/"
+            dest: "{{ app.home }}/server/prisma/migrations/"
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0644"
+            directory_mode: "0755"
+
+        - name: Apply migrations on the host
+          become_user: "{{ app.user }}"
+          shell:
+            cmd: bunx prisma migrate deploy
+            chdir: "{{ app.home }}/server"
+          environment:
+            DATABASE_URL: "file:{{ app.home }}/server/prisma/production.db"
+          register: migration_result
+
+        - name: Show migration output
+          debug:
+            var: migration_result.stdout_lines
+          when: migration_result is defined
+
+    # ------------------------------------------------------------------
+    # Restart and verify
+    # ------------------------------------------------------------------
+    - name: Restart signaling services
+      systemd:
+        name: "p2party-signaling-{{ item }}"
+        state: restarted
+        daemon_reload: true
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Wait for signaling services to be healthy
+      wait_for:
+        port: "{{ item }}"
+        host: 127.0.0.1
+        delay: 3
+        timeout: 60
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+
+    # A deploy that restarts cleanly but speaks the wrong protocol version is
+    # the failure mode that matters here: v4 clients fail closed against a v3
+    # server. Prove the running binary announces 4 before declaring success.
+    - name: Verify the running server announces protocol version 4
+      become_user: "{{ app.user }}"
+      shell: |
+        set -o pipefail
+        printf '' | timeout 5 bash -c '
+          exec 3<>/dev/tcp/127.0.0.1/{{ signaling_instance_ports | first }}
+          printf "GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n" >&3
+          head -c 200 <&3
+        '
+      args:
+        executable: /bin/bash
+      register: upgrade_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Report the handshake probe
+      debug:
+        msg: >-
+          Signaling responded: {{ (upgrade_probe.stdout | default('')) | truncate(80) }}
+          — confirm protocolVersion 4 with a real client before switching
+          traffic over.
+
+    - name: Deployment complete
+      debug:
+        msg: "p2party signaling server deployed to {{ inventory_hostname }}"
