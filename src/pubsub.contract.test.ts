@@ -113,3 +113,16 @@ describe("data ownership", () => {
       expect(pubsub).not.toContain(forbidden);
   });
 });
+
+describe("test isolation", () => {
+  test("routing short-circuits before any query when uninitialised", () => {
+    // handlePeers and friends are dependency-injected for tests, but sendToPeer
+    // uses the module-level prisma singleton. Without this guard a unit test
+    // opens a real database connection through the routing path.
+    const body = /export const sendToPeer[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
+    const guard = body.indexOf("if (!listenClient) return false;");
+    const query = body.indexOf("prisma.");
+    expect(guard).toBeGreaterThan(-1);
+    expect(query).toBeGreaterThan(guard);
+  });
+});

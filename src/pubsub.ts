@@ -139,6 +139,12 @@ export const sendToPeer = async (
   // briefly unreachable, or this process not yet initialised — must not tear
   // down sockets that are working fine. Undelivered signalling is retried by
   // the client; a closed socket is not.
+  // Checked before any query. Without a listener this process cannot NOTIFY the
+  // owner, so the lookup would be wasted work — and in unit tests, where
+  // initPubSub never runs, it would otherwise open a real database connection
+  // and break the isolation those tests are written to have.
+  if (!listenClient) return false;
+
   try {
     const peer = await prisma.peer.findUnique({
       where: { id: toPeerId },
@@ -146,11 +152,6 @@ export const sendToPeer = async (
     });
     // No row, or no owner: the peer is not connected to any instance.
     if (!peer?.serverId) return false;
-
-    if (!listenClient) {
-      console.error("p2party: sendToPeer called before initPubSub");
-      return false;
-    }
 
     await prisma.pendingSignal.create({
       data: {
