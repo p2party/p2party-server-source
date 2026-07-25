@@ -11,9 +11,9 @@ import {
   areBoundedLabels,
   isBoundedCandidate,
   isBoundedDescription,
-  isProtocolV3,
+  isProtocolV4,
   MAX_SIGNALING_MESSAGE_CHARS,
-} from "./protocolV3";
+} from "./protocolV4";
 import { registerVerifiedSocket } from "./socketAuth";
 
 import {
@@ -73,7 +73,7 @@ const handleMessage = async (
       (msg.type !== "challenge" && !ws.data.isVerified)
     )
       throw new Error("WebSocket identity is not freshly authenticated");
-    if (msg.type !== "pong" && !isProtocolV3(msg.protocolVersion))
+    if (msg.type !== "pong" && !isProtocolV4(msg.protocolVersion))
       throw new Error("Incompatible signaling protocol version");
 
     switch (msg.type) {
@@ -87,7 +87,7 @@ const handleMessage = async (
       case "challenge": {
         if (
           hasExactChallengeResponseKeys(msg) &&
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isHexadecimal(msg.challenge) &&
           msg.challenge.length === 64 &&
@@ -117,7 +117,7 @@ const handleMessage = async (
       case "room": {
         if (
           msg.type === "room" &&
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isHexadecimal(msg.roomUrl) &&
           msg.roomUrl.length === 64
@@ -130,7 +130,7 @@ const handleMessage = async (
       case "peerConnection": {
         if (
           msg.type === "peerConnection" &&
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.toPeerId) &&
           isUUID(msg.roomId)
@@ -149,7 +149,7 @@ const handleMessage = async (
       case "peers": {
         if (
           msg.type === "peers" &&
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.roomId)
         ) {
@@ -160,7 +160,7 @@ const handleMessage = async (
 
       case "candidate": {
         if (
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.roomId) &&
           isUUID(msg.toPeerId) &&
@@ -174,7 +174,7 @@ const handleMessage = async (
 
       case "description": {
         if (
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.roomId) &&
           isUUID(msg.toPeerId) &&
@@ -188,7 +188,7 @@ const handleMessage = async (
 
       case "connection": {
         if (
-          isProtocolV3(msg.protocolVersion) &&
+          isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.roomId) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.toPeerId) &&

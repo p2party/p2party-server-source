@@ -8,7 +8,7 @@ import type {
   WebSocketMessagePeersResponse,
 } from "../utils/interfaces";
 import findRoomPeers from "./findRoomPeers";
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 const handlePeerAcceptsConnection = async (
   fromPeerId: string,

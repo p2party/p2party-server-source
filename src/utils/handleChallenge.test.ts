@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import handleChallenge from "./handleChallenge";
 import { createFreshSocketChallenge } from "./socketAuth";
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../wsServer";
 

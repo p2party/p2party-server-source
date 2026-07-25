@@ -3,7 +3,7 @@ import { prisma } from "../prismaClient";
 import findRoomPeers from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {

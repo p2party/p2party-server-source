@@ -15,7 +15,7 @@ afterEach(() => {
   wsClients.clear();
 });
 
-describe("protocol-v3 authentication boundary", () => {
+describe("protocol-v4 authentication boundary", () => {
   test("a versionless or downgraded challenge cannot enter the verified registry", async () => {
     let closed = false;
     const data: P2PartyWSData = {
@@ -97,7 +97,7 @@ describe("protocol-v3 authentication boundary", () => {
           fromPeerId: PEER_ID,
           challenge: data.challengeNonce,
           signature: "ef".repeat(64),
-          protocolVersion: 3,
+          protocolVersion: 4,
           challengeId: data.challengeId,
         }),
         events,

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 export interface SocketAuthState {
   peerId: string;

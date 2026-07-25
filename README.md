@@ -1,6 +1,6 @@
 # p2party-server
 
-The protocol-v3 signaling server for p2party WebRTC room meshes. It
+The protocol-v4 signaling server for p2party WebRTC room meshes. It
 authenticates each WebSocket with a fresh Ed25519 challenge, coordinates room
 membership, and forwards bounded WebRTC descriptions and ICE candidates only
 between authenticated peers in the same room.
@@ -82,13 +82,13 @@ message must repeat the socket's bound `fromPeerId`.
 
 The complete wire shapes live in
 [`src/utils/interfaces.ts`](src/utils/interfaces.ts). Enforced bounds live in
-[`src/utils/protocolV3.ts`](src/utils/protocolV3.ts): 524,288 characters per
+[`src/utils/protocolV4.ts`](src/utils/protocolV4.ts): 524,288 characters per
 signaling message, 262,144 serialized characters per description, 4,096
 serialized characters per ICE candidate, and at most 64 DataChannel labels of
 256 characters each. Malformed, downgraded, cross-room, or cross-identity
 signaling fails closed.
 
-## Protocol-v3 authentication
+## Protocol-v4 authentication
 
 Every WebSocket receives a new, socket-local nonce—even when its public key
 already has a stable peer ID:
@@ -98,7 +98,7 @@ already has a stable peer ID:
   "type": "peerId",
   "peerId": "<uuid>",
   "challenge": "<64 lowercase hex>",
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "message": "..."
 }
 ```
@@ -111,7 +111,7 @@ The client signs that exact nonce with its Ed25519 identity key and replies:
   "fromPeerId": "<same uuid>",
   "challenge": "<same 64 lowercase hex>",
   "signature": "<128 lowercase hex>",
-  "protocolVersion": 3
+  "protocolVersion": 4
 }
 ```
 
@@ -122,7 +122,7 @@ return:
 {
   "type": "challenge",
   "challengeId": "<fresh uuid>",
-  "protocolVersion": 3
+  "protocolVersion": 4
 }
 ```
 

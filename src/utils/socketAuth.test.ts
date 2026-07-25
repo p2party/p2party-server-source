@@ -8,7 +8,7 @@ import {
   registerVerifiedSocket,
   unregisterSocketIfCurrent,
 } from "./socketAuth";
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { SocketAuthClient, SocketAuthState } from "./socketAuth";
 

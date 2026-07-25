@@ -4,18 +4,19 @@ import {
   areBoundedLabels,
   isBoundedCandidate,
   isBoundedDescription,
-  isProtocolV3,
+  isProtocolV4,
   MAX_DATA_CHANNEL_LABELS,
   MAX_ICE_CANDIDATE_CHARS,
   MAX_SDP_CHARS,
-} from "./protocolV3";
+} from "./protocolV4";
 
-describe("protocol-v3 signaling boundary", () => {
-  test("accepts only exact version 3", () => {
-    expect(isProtocolV3(3)).toBe(true);
-    expect(isProtocolV3(2)).toBe(false);
-    expect(isProtocolV3("3")).toBe(false);
-    expect(isProtocolV3(undefined)).toBe(false);
+describe("protocol-v4 signaling boundary", () => {
+  test("accepts only exact version 4", () => {
+    expect(isProtocolV4(4)).toBe(true);
+    expect(isProtocolV4(3)).toBe(false);
+    expect(isProtocolV4(2)).toBe(false);
+    expect(isProtocolV4("4")).toBe(false);
+    expect(isProtocolV4(undefined)).toBe(false);
   });
 
   test("bounds descriptions, candidates, and labels", () => {

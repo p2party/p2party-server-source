@@ -1,11 +1,11 @@
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const MAX_SIGNALING_MESSAGE_CHARS = 512 * 1024;
 export const MAX_SDP_CHARS = 256 * 1024;
 export const MAX_ICE_CANDIDATE_CHARS = 4096;
 export const MAX_DATA_CHANNEL_LABELS = 64;
 export const MAX_DATA_CHANNEL_LABEL_CHARS = 256;
 
-export const isProtocolV3 = (value: unknown): value is 3 =>
+export const isProtocolV4 = (value: unknown): value is 4 =>
   value === PROTOCOL_VERSION;
 
 const serializedLengthAtMost = (value: unknown, limit: number): boolean => {

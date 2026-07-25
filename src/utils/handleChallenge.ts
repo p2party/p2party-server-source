@@ -5,7 +5,7 @@ import {
   createTurnCredentials,
   isSocketChallengeBound,
 } from "./socketAuth";
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {

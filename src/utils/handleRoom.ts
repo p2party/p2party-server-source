@@ -6,7 +6,7 @@ import type {
   WebSocketMessageError,
   WebSocketMessageRoomIdResponse,
 } from "../utils/interfaces.js";
-import { PROTOCOL_VERSION } from "./protocolV3";
+import { PROTOCOL_VERSION } from "./protocolV4";
 
 interface Peer {
   id: string;
