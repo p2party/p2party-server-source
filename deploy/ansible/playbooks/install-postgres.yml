@@ -80,7 +80,11 @@
       lineinfile:
         path: "/etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf"
         regexp: "^#?listen_addresses\\s*="
-        line: "listen_addresses = '*'"
+        # Bind to loopback and the private interface only. Even with the
+        # cloud firewall attached, listening on the public IP means any
+        # firewall lapse exposes the port directly; this way nothing is
+        # listening there at all.
+        line: "listen_addresses = 'localhost,{{ network.postgres }}'"
       notify: Restart PostgreSQL
 
     - name: Configure PostgreSQL performance settings
