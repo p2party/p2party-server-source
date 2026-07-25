@@ -64,7 +64,7 @@
         signaling_instance_ports: >-
           {{ signaling_ports
              | default(range(app_port | int,
-                             (app_port | int) + (ansible_processor_vcpus | default(1) | int))
+                             (app_port | int) + (ansible_facts['processor_vcpus'] | default(1) | int))
                        | list) }}
 
     # ------------------------------------------------------------------

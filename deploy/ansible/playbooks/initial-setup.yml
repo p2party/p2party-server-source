@@ -107,7 +107,7 @@
         group: root
         mode: "0644"
       vars:
-        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_processor_vcpus | default(1) | int)) | list) }}"
+        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_facts['processor_vcpus'] | default(1) | int)) | list) }}"
       notify: Reload Caddy
 
     - name: Enable Caddy
@@ -161,7 +161,7 @@
 
     - name: Compute signaling instance ports from available vCPUs
       set_fact:
-        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_processor_vcpus | default(1) | int)) | list) }}"
+        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_facts['processor_vcpus'] | default(1) | int)) | list) }}"
 
     # ========================================================================
     # Systemd Service
@@ -180,15 +180,40 @@
         signaling_port: "{{ item }}"
       notify: Reload systemd
 
-    - name: Enable and start signaling services
+    # This playbook provisions the host; playbooks/deploy.yml ships the binary.
+    # On a first run the binary does not exist yet, so starting the units and
+    # waiting for their ports can only time out after 60s per instance. Enable
+    # them either way so a later deploy just starts them.
+    - name: Check whether a server binary has been deployed yet
+      stat:
+        path: "{{ app.home }}/server/p2party-server"
+      register: signaling_binary
+
+    - name: Enable signaling services
       systemd:
         name: "p2party-signaling-{{ item }}"
         enabled: true
-        state: restarted
         daemon_reload: true
       loop: "{{ signaling_instance_ports }}"
       loop_control:
         label: "{{ item }}"
+
+    - name: Report that the binary is not deployed yet
+      debug:
+        msg: >-
+          No binary at {{ app.home }}/server/p2party-server, so the signaling
+          units are enabled but not started. Run deploy/deploy.sh to build and
+          ship it; that playbook starts and health-checks them.
+      when: not signaling_binary.stat.exists
+
+    - name: Start signaling services
+      systemd:
+        name: "p2party-signaling-{{ item }}"
+        state: restarted
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+      when: signaling_binary.stat.exists
 
     - name: Wait for signaling services to be ready
       wait_for:
@@ -196,6 +221,7 @@
         host: 127.0.0.1
         delay: 3
         timeout: 60
+      when: signaling_binary.stat.exists
       loop: "{{ signaling_instance_ports }}"
       loop_control:
         label: "{{ item }}"
