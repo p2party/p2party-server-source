@@ -1,11 +1,14 @@
 # ============================================================================
 # P2Party Ansible Configuration
+#
+# Copy to ansible.cfg and set private_key_file. The real file is
+# gitignored so the operator's key name stays out of the public repo.
 # ============================================================================
 
 [defaults]
 inventory = inventory/production.yml
 remote_user = p2party
-private_key_file = ~/.ssh/operator_key_1
+private_key_file = ~/.ssh/CHANGEME_ed25519
 vault_identity_list = production@vault_pass_production.sh
 host_key_checking = True
 retry_files_enabled = False

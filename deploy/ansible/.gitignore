@@ -2,3 +2,8 @@
 group_vars/all/vault.yml
 vault_pass*.sh
 *.retry
+# The real inventory names the VPN entry point, the non-standard SSH ports,
+# and the operator's key file. Commit inventory/production.yml.example instead.
+inventory/production.yml
+# Names the operator's SSH key. Commit ansible.cfg.example instead.
+ansible.cfg

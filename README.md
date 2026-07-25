@@ -66,7 +66,7 @@ or malformed `publickey` receives `403`.
 
 After the server's initial `peerId` challenge, signaling is JSON. The
 `challenge` proof is the only client message accepted before authentication.
-Every message other than `pong` must use exact protocol version `3`, and every
+Every message other than `pong` must use exact protocol version `4`, and every
 message must repeat the socket's bound `fromPeerId`.
 
 | Client message   | Purpose                                                       |

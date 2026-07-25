@@ -123,26 +123,6 @@ export interface WebSocketMessagePeerConnectionResponse {
   protocolVersion: number;
 }
 
-export interface WebSocketMessageMessageSendRequest {
-  type: "message";
-  message: string;
-  roomId: string;
-  fromPeerId: string;
-  toPeerId: string;
-  label: string;
-  protocolVersion: number;
-}
-
-export interface WebSocketMessageMessageSendResponse {
-  type: "message";
-  message: string;
-  roomId: string;
-  fromPeerId: string;
-  toPeerId: string;
-  label: string;
-  protocolVersion: number;
-}
-
 export interface WebSocketMessageError {
   type: "error";
   fromAction:

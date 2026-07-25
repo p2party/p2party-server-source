@@ -3,6 +3,11 @@
 # ============================================================================
 # 3 servers accessed via SSH to private network IPs.
 #
+# Copy to inventory/production.yml and fill in every CHANGEME value.
+# The real inventory is gitignored: it names the VPN entry point, the
+# non-standard SSH ports, and the operator's key, none of which belong
+# in a public repository.
+#
 # Usage: ansible-playbook -i inventory/production.yml playbooks/deploy.yml
 # ============================================================================
 
@@ -25,8 +30,8 @@ all:
       hosts:
         p2party-postgres:
           ansible_host: 10.231.0.2
-          ansible_port: 22211
-          ansible_user: example_deploy
+          ansible_port: CHANGEME_SSH_PORT
+          ansible_user: p2party
           role: database
           service: postgres
           # PostgreSQL 17 tuning (4GB RAM / 3 CPU)
@@ -43,8 +48,8 @@ all:
       hosts:
         p2party-coturn:
           ansible_host: 10.231.0.3
-          ansible_port: 22212
-          ansible_user: example_deploy
+          ansible_port: CHANGEME_SSH_PORT
+          ansible_user: p2party
           role: turn
           service: coturn
 
@@ -55,8 +60,8 @@ all:
       hosts:
         p2party-signaling:
           ansible_host: 10.231.0.4
-          ansible_port: 22213
-          ansible_user: example_deploy
+          ansible_port: CHANGEME_SSH_PORT
+          ansible_user: p2party
           role: signaling
           service: server
           app_port: 3001
@@ -68,9 +73,9 @@ all:
       hosts:
         p2party-wireguard:
           # Use public IP for WireGuard server since it's the VPN entry point
-          ansible_host: 192.0.2.42
-          ansible_port: 22214
-          ansible_user: example_deploy
+          ansible_host: CHANGEME.vpn.public.ip
+          ansible_port: CHANGEME_SSH_PORT
+          ansible_user: p2party
           role: wireguard
           service: vpn
           # Private IP for reference (accessible from other servers)
@@ -123,4 +128,4 @@ all:
     app_base_dir: /home/p2party
 
     # SSH configuration
-    ssh_key_path: ~/.ssh/operator_key_1
+    ssh_key_path: ~/.ssh/CHANGEME_ed25519

@@ -6,6 +6,7 @@
 /p2party_macos
 /p2party_exe
 /p2party_*.map
+/index.js.map
 *.db
 *.db-shm
 *.db-wal
