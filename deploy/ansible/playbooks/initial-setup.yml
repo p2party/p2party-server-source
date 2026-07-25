@@ -105,7 +105,7 @@
         dest: /etc/caddy/Caddyfile
         owner: root
         group: root
-        mode: '0644'
+        mode: "0644"
       vars:
         signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_processor_vcpus | default(1) | int)) | list) }}"
       notify: Reload Caddy
@@ -143,7 +143,7 @@
         state: directory
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
-        mode: '0755'
+        mode: "0755"
 
     # Binary is deployed by deploy.yml playbook
     # This playbook sets up the environment and systemd services
@@ -154,7 +154,7 @@
         dest: "{{ app.home }}/server/.env"
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
-        mode: '0600'
+        mode: "0600"
 
     # Dependencies, Prisma client, and migrations handled by deploy.yml
     # Using compiled binary deployment - no npm install needed
@@ -172,7 +172,7 @@
         dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
         owner: root
         group: root
-        mode: '0644'
+        mode: "0644"
       loop: "{{ signaling_instance_ports }}"
       loop_control:
         label: "{{ item }}"

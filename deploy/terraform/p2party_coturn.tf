@@ -48,6 +48,13 @@ resource "hcloud_server" "p2party_coturn" {
     ssh_keys     = "- ${join("\n      - ", [for k in local.ssh_public_keys : trimspace(k)])}"
   })
 
+
+  # user_data is ForceNew in the hcloud provider, and cloud-init only ever runs
+  # on first boot — so an edit to the template cannot reach this server anyway,
+  # it can only destroy and recreate it. Matches hcloud_server.p2party_signaling.
+  lifecycle {
+    ignore_changes = [user_data]
+  }
   depends_on = [
     hcloud_network_subnet.p2party,
   ]

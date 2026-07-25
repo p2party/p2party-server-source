@@ -46,7 +46,7 @@
             content: |
               deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main
             dest: /etc/apt/sources.list.d/pgdg.list
-            mode: '0644'
+            mode: "0644"
 
         - name: Update apt cache
           apt:

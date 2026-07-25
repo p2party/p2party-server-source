@@ -80,8 +80,34 @@ message must repeat the socket's bound `fromPeerId`.
 | `candidate`      | Forward a bounded ICE candidate to a room peer.               |
 | `pong`           | Answer the server heartbeat.                                  |
 
-The complete wire shapes live in
-[`src/utils/interfaces.ts`](src/utils/interfaces.ts). Enforced bounds live in
+### Server messages
+
+The server emits these. Every one except `ping` carries `protocolVersion: 4`.
+
+| Server message   | Sent when                                                        |
+| ---------------- | ---------------------------------------------------------------- |
+| `challenge`      | A socket connects, or a challenge is re-issued.                  |
+| `peerId`         | The challenge signature verified; this is your bound peer ID.    |
+| `roomId`         | A `room` request created or joined a room.                       |
+| `peers`          | The room's current peer list, in response to `peerConnection`.   |
+| `peerConnection` | Another peer asked to be introduced to you.                      |
+| `connection`     | A peer requested DataChannel signaling with you.                 |
+| `description`    | A relayed WebRTC session description.                            |
+| `candidate`      | A relayed ICE candidate.                                         |
+| `ping`           | Heartbeat. **Carries no `protocolVersion` and no `fromPeerId`.** |
+| `error`          | Any rejection; the socket may or may not be closed.              |
+
+> The interfaces in [`src/utils/interfaces.ts`](src/utils/interfaces.ts) are the
+> starting point, not a complete schema. Handlers construct responses with an
+> `as` cast, which bypasses TypeScript's excess-property check, so a frame can
+> carry fields the interface does not declare — for example the human-readable
+> `message` string on relayed `description` and `candidate` frames
+> (`handleDescription.ts:40`, `handleCandidate.ts:39`). Read the handler
+> alongside the interface before writing a client. Note also that the peer list
+> is emitted by the `peerConnection` handler; the `peers` handler's own send is
+> currently commented out (`handlePeers.ts:114-120`).
+
+Enforced bounds live in
 [`src/utils/protocolV4.ts`](src/utils/protocolV4.ts): 524,288 characters per
 signaling message, 262,144 serialized characters per description, 4,096
 serialized characters per ICE candidate, and at most 64 DataChannel labels of

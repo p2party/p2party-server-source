@@ -24,20 +24,48 @@ package_update: true
 package_upgrade: true
 
 write_files:
+  # A fail-closed placeholder. The Debian/Ubuntu package ships a
+  # /etc/turnserver.conf with every directive commented out, and coturn with no
+  # auth mechanism accepts ANONYMOUS allocations — so the moment the service
+  # starts on a host whose ufw has already opened 3478 and the relay range to
+  # 0.0.0.0/0, it is an open relay. Ansible overwrites this file with the real
+  # config; until then nothing can allocate through it.
+  - path: /etc/turnserver.conf
+    permissions: '0640'
+    owner: root:turnserver
+    content: |
+      # PLACEHOLDER — replaced by ansible playbooks/setup-coturn.yml.
+      # Deliberately unusable: authentication is required and no credential
+      # exists, and every possible peer address is denied.
+      listening-port=3478
+      realm=invalid.invalid
+      use-auth-secret
+      static-auth-secret=placeholder-not-a-real-secret-refuse-all-allocations
+      no-cli
+      no-multicast-peers
+      no-loopback-peers
+      denied-peer-ip=0.0.0.0-255.255.255.255
+      denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      no-tlsv1
+      no-tlsv1_1
+      total-quota=0
+      user-quota=0
+
   - path: /root/setup-coturn.sh
     permissions: '0755'
     content: |
       #!/bin/bash
       set -euo pipefail
-      
-      # Enable coturn service
+
+      # Enable the daemon in /etc/default/coturn, but do NOT enable the unit.
+      # cloud-init ends in a reboot, so `systemctl enable` here would start
+      # coturn on the stock config before Ansible ever runs. setup-coturn.yml
+      # enables and starts the service after writing the real configuration.
       sed -i 's/#TURNSERVER_ENABLED=1/TURNSERVER_ENABLED=1/' /etc/default/coturn
-      
-      # Stop coturn until configured by Ansible
-      systemctl stop coturn
-      systemctl enable coturn
-      
-      echo "Coturn installed - run Ansible playbook to configure"
+
+      systemctl disable --now coturn || true
+
+      echo "Coturn installed and held down - run playbooks/setup-coturn.yml to configure"
 
 runcmd:
   - printf "[sshd]\nenabled = true\nbanaction = iptables-multiport" > /etc/fail2ban/jail.local
