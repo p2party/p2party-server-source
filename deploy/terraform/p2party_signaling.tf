@@ -67,7 +67,7 @@ resource "hcloud_firewall" "p2party_signaling" {
     direction  = "in"
     protocol   = "tcp"
     port       = var.p2party_signaling_ssh_port
-    source_ips = ["10.231.0.0/24"]
+    source_ips = [var.p2party_subnet]
   }
 
   # HTTP (for Let's Encrypt ACME challenges)
@@ -86,25 +86,17 @@ resource "hcloud_firewall" "p2party_signaling" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  # Allow all outbound
-  rule {
-    direction       = "out"
-    protocol        = "tcp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction       = "out"
-    protocol        = "udp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction       = "out"
-    protocol        = "icmp"
-    destination_ips = ["0.0.0.0/0", "::/0"]
+  # Egress. Restricted to the baseline: this host serves inbound traffic and
+  # talks to Postgres over the private network. Hetzner firewalls are stateful,
+  # so replies to inbound WebSocket and HTTPS connections are unaffected.
+  dynamic "rule" {
+    for_each = local.p2party_baseline_egress
+    content {
+      direction       = "out"
+      protocol        = rule.value.protocol
+      port            = rule.value.port
+      destination_ips = rule.value.destination_ips
+    }
   }
 }
 

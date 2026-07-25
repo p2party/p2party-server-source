@@ -60,6 +60,11 @@ no-multicast-peers
 no-loopback-peers
 no-tlsv1
 no-tlsv1_1
+# Refuse RFC 6062 TCP relay allocations. Browsers use TURN-over-TCP/TLS for the
+# client-to-server leg only and never request a TCP allocation, so this costs
+# nothing for WebRTC — and it lets the cloud firewall hold outbound TCP to the
+# baseline instead of opening it to the whole internet.
+no-tcp-relay
 
 # Deny private/special IP ranges for relay
 denied-peer-ip=0.0.0.0-0.255.255.255

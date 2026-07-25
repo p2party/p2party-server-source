@@ -17,11 +17,29 @@ domains:
   turn: turn.p2party.com
   stun: stun.p2party.com
 
-# This signaling server is SQLite-only: prisma/migrations/migration_lock.toml
-# pins the provider, so there is no Postgres connection to configure. The
-# database is a file on the signaling host.
 database:
-  path: /home/p2party/server/prisma/production.db
+  host: "{{ network.postgres }}"
+  port: "{{ ports.postgres }}"
+  name: "{{ vault_postgres_db_name }}"
+  user: "{{ vault_postgres_user }}"
+  password: "{{ vault_postgres_password }}"
+  # 'prefer' rather than 'disable': it uses TLS when the server offers it and
+  # falls back silently when it does not, so it can never be worse than
+  # 'disable'. Not 'require', because install-postgres.yml does not provision a
+  # server certificate and 'require' would fail closed on every connection.
+  #
+  # The link is private-network only (pg_hba allows 10.231.0.0/24, scram-sha-256),
+  # so the password is never recoverable from the wire. Row data, however, is
+  # cleartext on that link: Hetzner private networks are project-isolated but
+  # not encrypted. Provisioning a certificate and moving to 'require' is the
+  # remaining hardening step for this hop.
+  ssl_mode: prefer
+  # Server-side ceiling, set by install-postgres.yml.
+  max_connections: 100
+  # Per-Prisma-instance pool. signaling runs one instance per vCPU, so keep
+  # (instances x connection_limit) comfortably under max_connections above or a
+  # restart storm exhausts the server's slots.
+  connection_limit: 10
 
 logging:
   level: info

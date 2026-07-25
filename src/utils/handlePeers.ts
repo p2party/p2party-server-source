@@ -3,6 +3,7 @@ import { prisma as sharedPrisma } from "../prismaClient";
 import type { ProcessPrismaClient } from "../prismaClient";
 
 import { wsClients } from "../wsServer";
+import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -85,28 +86,27 @@ const handlePeersWithClient = async (
       for (let i = 0; i < len; i++) {
         if (room && room.peers[i] && room.peers[i].id !== fromPeerId) {
           const peer = room.peers[i];
+          const introduction = JSON.stringify({
+            type: "peerConnection",
+            roomId,
+            peer: { id: fromPeerId, publicKey: fromPeerPublicKey },
+            protocolVersion: PROTOCOL_VERSION,
+          } as WebSocketMessageConnectionRequest);
           const peerWsClient = wsClients.get(peer.id);
 
-          if (
-            peerWsClient &&
-            peerWsClient.data.isAlive &&
-            peerWsClient.data.isVerified &&
-            peerWsClient.data.peerId === peer.id &&
-            peerWsClient.data.publicKey === peer.publicKey
-          ) {
-            peerWsClient.send(
-              JSON.stringify({
-                type: "peerConnection",
-                roomId,
-                peer: { id: fromPeerId, publicKey: fromPeerPublicKey },
-                protocolVersion: PROTOCOL_VERSION,
-              } as WebSocketMessageConnectionRequest),
-            );
-
-            // peers.push({
-            //   id: peer.id,
-            //   publicKey: peer.publicKey,
-            // });
+          if (peerWsClient) {
+            if (
+              peerWsClient.data.isAlive &&
+              peerWsClient.data.isVerified &&
+              peerWsClient.data.peerId === peer.id &&
+              peerWsClient.data.publicKey === peer.publicKey
+            )
+              peerWsClient.send(introduction);
+          } else {
+            // This is the introduction that makes an existing room member dial
+            // the joiner. With one worker per vCPU behind a round-robin
+            // upstream, most room members are on another worker.
+            await sendToPeer(peer.id, introduction);
           }
         }
       }

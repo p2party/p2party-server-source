@@ -15,6 +15,7 @@ import {
   MAX_SIGNALING_MESSAGE_CHARS,
 } from "./protocolV4";
 import { registerVerifiedSocket } from "./socketAuth";
+import { claimPeer } from "../pubsub";
 
 import {
   wsClients,
@@ -105,11 +106,15 @@ const handleMessage = async (
               throw new Error(
                 "Verified WebSocket could not enter the client registry",
               );
+            // Record which instance now owns this socket, so the other workers
+            // can route signals here instead of dropping them. Awaited: a peer
+            // that is routable before it is claimed is a lost signal.
+            await claimPeer(ws.data.peerId);
             ws.subscribe("global");
             events.open(ws);
           }
         } else {
-          throw new Error("Malformed protocol-v3 challenge response");
+          throw new Error("Malformed protocol-v4 challenge response");
         }
         break;
       }

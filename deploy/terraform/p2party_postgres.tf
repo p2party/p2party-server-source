@@ -68,41 +68,35 @@ resource "hcloud_firewall" "p2party_postgres" {
 
   name = "p2party-postgres-firewall"
 
-  # SSH from private network
+  # SSH from the private network only: reachable through WireGuard, never from
+  # the internet.
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = var.p2party_postgres_ssh_port
-    source_ips = ["10.231.0.0/24"]
+    source_ips = [var.p2party_subnet]
   }
 
-  # PostgreSQL from private network only
+  # PostgreSQL from the private network only.
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "5432"
-    source_ips = ["10.231.0.0/24"]
+    source_ips = [var.p2party_subnet]
   }
 
-  # Allow all outbound (for apt-get during setup)
-  rule {
-    direction       = "out"
-    protocol        = "tcp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction       = "out"
-    protocol        = "udp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction       = "out"
-    protocol        = "icmp"
-    destination_ips = ["0.0.0.0/0", "::/0"]
+  # Egress. This host holds every peer identity, room membership and challenge
+  # signature in the system, so it is the one machine whose outbound traffic
+  # matters most: with unrestricted egress, a compromise can stream the whole
+  # database anywhere. It needs to patch itself and nothing else.
+  dynamic "rule" {
+    for_each = local.p2party_baseline_egress
+    content {
+      direction       = "out"
+      protocol        = rule.value.protocol
+      port            = rule.value.port
+      destination_ips = rule.value.destination_ips
+    }
   }
 }
 

@@ -61,3 +61,17 @@ deploy_wireguard = true
 # User configuration
 # p2party_ansible_user = "p2party"
 # p2party_admin_email  = "admin@p2party.com"
+
+# ============================================================================
+# Administrative SSH
+# ============================================================================
+# REQUIRED — terraform refuses to plan without it, and refuses 0.0.0.0/0.
+#
+# Only the WireGuard host exposes SSH to the internet; it is the VPN entry
+# point, so it cannot be restricted to the VPN itself. The other three hosts
+# already accept SSH from 10.231.0.0/24 only.
+#
+# Find your current address with:  curl -4 https://ifconfig.me
+# A dynamic home IP is fine — widen to the ISP prefix, or update on change.
+# Locked out? The Hetzner Cloud Console's web VNC bypasses the cloud firewall.
+# p2party_ssh_admin_ips = ["203.0.113.4/32", "2001:db8:1234::/48"]

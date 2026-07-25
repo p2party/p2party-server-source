@@ -1,0 +1,11 @@
+# Secrets
+.env
+*.env.local
+
+# Terraform state (managed in terraform/.gitignore)
+
+# Ansible logs
+ansible/logs/
+
+# SSH keys (public keys are tracked, private keys never)
+ssh_public_keys/*.pem

@@ -186,3 +186,32 @@ variable "p2party_admin_email" {
   type        = string
   default     = "admin@p2party.com"
 }
+
+# ============================================================================
+# Administrative access
+# ============================================================================
+
+# Deliberately has NO default. The WireGuard host is the only box with SSH
+# reachable from the public internet — it is the VPN entry point, so it cannot
+# be restricted to the VPN itself without a chicken-and-egg. Leaving it open to
+# 0.0.0.0/0 is the one remaining hole in this stack, so the CIDRs are made an
+# explicit, per-operator decision: `terraform plan` fails until they are set,
+# rather than quietly falling back to "the whole internet".
+#
+# Break-glass if you lock yourself out: the Hetzner Cloud Console provides a
+# web VNC session that bypasses the cloud firewall entirely, so a wrong value
+# here is recoverable and never bricks the host.
+variable "p2party_ssh_admin_ips" {
+  description = "CIDRs allowed to reach SSH on the public-facing WireGuard host, e.g. [\"203.0.113.4/32\"]"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.p2party_ssh_admin_ips) > 0
+    error_message = "Set p2party_ssh_admin_ips in terraform.tfvars to your admin IP(s)."
+  }
+
+  validation {
+    condition     = length([for cidr in var.p2party_ssh_admin_ips : cidr if cidr == "0.0.0.0/0" || cidr == "::/0"]) == 0
+    error_message = "Refusing 0.0.0.0/0 or ::/0 for admin SSH. Use a specific CIDR; recover via the Hetzner Cloud Console if locked out."
+  }
+}

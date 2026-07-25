@@ -57,15 +57,20 @@ resource "hcloud_server" "p2party_wireguard" {
 resource "hcloud_firewall" "p2party_wireguard" {
   name = "p2party-wireguard-firewall"
 
-  # SSH from anywhere (this is the VPN entry point)
+  # SSH, restricted to the operators. This host cannot restrict SSH to the VPN
+  # (it *is* the VPN), so it is scoped to explicit admin CIDRs instead. See
+  # var.p2party_ssh_admin_ips for the break-glass path.
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = var.p2party_wireguard_ssh_port
-    source_ips = ["0.0.0.0/0", "::/0"]
+    source_ips = var.p2party_ssh_admin_ips
   }
 
-  # WireGuard UDP
+  # WireGuard UDP. Must stay open to the world: clients dial in from arbitrary
+  # networks, and the handshake is authenticated by the protocol's own static
+  # keys — an unauthenticated packet is dropped without a reply, so an open
+  # port here does not expose a login surface the way SSH does.
   rule {
     direction  = "in"
     protocol   = "udp"
@@ -73,25 +78,17 @@ resource "hcloud_firewall" "p2party_wireguard" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  # Allow all outbound
-  rule {
-    direction       = "out"
-    protocol        = "tcp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction       = "out"
-    protocol        = "udp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  rule {
-    direction       = "out"
-    protocol        = "icmp"
-    destination_ips = ["0.0.0.0/0", "::/0"]
+  # Egress. This is a split-tunnel gateway: clients route only 10.66.0.0/24 and
+  # the private 10.231.0.0/24 through it, so it never needs to NAT arbitrary
+  # internet traffic. The baseline is all it requires.
+  dynamic "rule" {
+    for_each = local.p2party_baseline_egress
+    content {
+      direction       = "out"
+      protocol        = rule.value.protocol
+      port            = rule.value.port
+      destination_ips = rule.value.destination_ips
+    }
   }
 }
 

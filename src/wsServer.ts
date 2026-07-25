@@ -4,6 +4,7 @@ import handleConnection from "./utils/handleConnection";
 import handleMessage from "./utils/handleMessage";
 import handleInterval from "./utils/handleInterval";
 import { unregisterSocketIfCurrent } from "./utils/socketAuth";
+import { releasePeer } from "./pubsub";
 
 import type { Server, ServerWebSocket } from "bun";
 import type { SocketAuthState } from "./utils/socketAuth";
@@ -60,7 +61,10 @@ export class P2PartyWS {
           if (ws.data.pingInterval) clearInterval(ws.data.pingInterval);
           // A reconnect can replace this peer's registry entry before the old
           // socket's close event runs. Never evict that authenticated successor.
-          unregisterSocketIfCurrent(wsClients, ws);
+          // releasePeer is guarded on SERVER_ID for the same reason: it must not
+          // clear a claim another instance has already taken.
+          if (unregisterSocketIfCurrent(wsClients, ws))
+            await releasePeer(ws.data.peerId);
           ws.terminate();
           events.close(ws);
         },

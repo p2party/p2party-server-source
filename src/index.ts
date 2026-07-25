@@ -1,5 +1,6 @@
 import { P2PartyWS } from "./wsServer";
 import { assertSecureTurnSecret } from "./utils/socketAuth";
+import { initPubSub, shutdownPubSub } from "./pubsub";
 
 import type {
   P2PartyWSMsg,
@@ -30,7 +31,27 @@ const events: P2PartyWSEvents = {
   },
 };
 
+// Cross-instance routing must be live before the first socket is accepted:
+// a peer that connects before this process can be reached by the others is a
+// peer whose signals they silently drop. initPubSub throws rather than starting
+// degraded, because the degraded mode is invisible at runtime.
+await initPubSub();
+
 new P2PartyWS(port, events);
+
+// Release this instance's peer claims and routing rows on the way out, so a
+// reconnecting peer is not routed to a process that no longer exists.
+const shutdown = (signal: NodeJS.Signals) => {
+  void shutdownPubSub()
+    .catch((error: unknown) => {
+      console.error("p2party: shutdown failed", error);
+    })
+    .finally(() => {
+      process.exit(signal === "SIGTERM" ? 0 : 130);
+    });
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 // setInterval(() => bws.publish("Published to all"), 3000);
 
 // // Heartbeat mechanism

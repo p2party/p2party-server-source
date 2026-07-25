@@ -1,6 +1,7 @@
 import { prisma } from "../prismaClient";
 
 import { wsClients } from "../wsServer";
+import { sendToPeer } from "../pubsub";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -73,21 +74,26 @@ const handlePeerAcceptsConnection = async (
         return;
       }
 
+      const introduction = JSON.stringify({
+        type: "peers",
+        roomId,
+        peers: [{ id: fromPeerId, publicKey: fromPeer.publicKey }],
+        protocolVersion: PROTOCOL_VERSION,
+      } as WebSocketMessagePeersResponse);
+
       const peerWsClient = wsClients.get(toPeerId);
-      if (
-        peerWsClient &&
-        peerWsClient.data.isAlive &&
-        peerWsClient.data.isVerified &&
-        peerWsClient.data.peerId === toPeerId
-      ) {
-        peerWsClient.send(
-          JSON.stringify({
-            type: "peers",
-            roomId,
-            peers: [{ id: fromPeerId, publicKey: fromPeer.publicKey }],
-            protocolVersion: PROTOCOL_VERSION,
-          } as WebSocketMessagePeersResponse),
-        );
+      if (peerWsClient) {
+        if (
+          peerWsClient.data.isAlive &&
+          peerWsClient.data.isVerified &&
+          peerWsClient.data.peerId === toPeerId
+        )
+          peerWsClient.send(introduction);
+      } else {
+        // The introduction is what starts the WebRTC exchange. Dropping it
+        // because the peer's socket lives on another worker is why a room
+        // silently fails to form.
+        await sendToPeer(toPeerId, introduction);
       }
 
       return;

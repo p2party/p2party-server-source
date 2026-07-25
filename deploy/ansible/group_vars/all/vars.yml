@@ -54,20 +54,9 @@ ports:
   coturn_stun: 3478
   wireguard: 51820
 
-# ------------------------------------------------------------------------------
-# Database (Postgres)
-# ------------------------------------------------------------------------------
-# Derived from the network/ports blocks above so the address is stated once.
-# Credentials and the database name live in the vault, never here.
-database:
-  host: "{{ network.postgres }}"
-  port: "{{ ports.postgres }}"
-  # The link is private-network only and Postgres is not internet-reachable;
-  # 'prefer' uses TLS when the server offers it without failing when it does not.
-  ssl_mode: prefer
-  # Per-instance Prisma pool. Keep instances x connection_limit below the
-  # server's max_connections (100), or a restart storm exhausts it.
-  connection_limit: 10
+# The `database:` block lives in group_vars/production/vars.yml, which loads
+# after this file and would override anything defined here. Environment-specific
+# connection details belong there, not in the shared defaults.
 
 # ------------------------------------------------------------------------------
 # Application Configuration

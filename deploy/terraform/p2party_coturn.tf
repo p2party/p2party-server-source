@@ -72,7 +72,7 @@ resource "hcloud_firewall" "p2party_coturn" {
     direction  = "in"
     protocol   = "tcp"
     port       = var.p2party_coturn_ssh_port
-    source_ips = ["10.231.0.0/24"]
+    source_ips = [var.p2party_subnet]
   }
 
   # TURN/STUN TLS (TCP)
@@ -123,14 +123,17 @@ resource "hcloud_firewall" "p2party_coturn" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  # Allow all outbound
-  rule {
-    direction       = "out"
-    protocol        = "tcp"
-    port            = "any"
-    destination_ips = ["0.0.0.0/0", "::/0"]
-  }
-
+  # Egress. Unlike every other host, coturn cannot have narrow egress: relaying
+  # to arbitrary peer addresses is its entire function. UDP therefore stays open
+  # to the world, and the restriction that matters is applied one layer up, in
+  # turnserver.conf, whose denied-peer-ip list blocks relaying into RFC1918,
+  # CGNAT, loopback, link-local (169.254.0.0/16 cloud metadata) and the
+  # IPv4-mapped IPv6 range.
+  #
+  # TCP is held to the baseline instead, which is safe because the config sets
+  # no-tcp-relay: browsers use TURN-over-TCP for the client-to-server leg only
+  # and never request RFC 6062 TCP allocations, so the relay-to-peer leg is
+  # always UDP.
   rule {
     direction       = "out"
     protocol        = "udp"
@@ -138,10 +141,14 @@ resource "hcloud_firewall" "p2party_coturn" {
     destination_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  rule {
-    direction       = "out"
-    protocol        = "icmp"
-    destination_ips = ["0.0.0.0/0", "::/0"]
+  dynamic "rule" {
+    for_each = local.p2party_baseline_egress
+    content {
+      direction       = "out"
+      protocol        = rule.value.protocol
+      port            = rule.value.port
+      destination_ips = rule.value.destination_ips
+    }
   }
 }
 
