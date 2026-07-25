@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# ============================================================================
+# terraform, with deploy/.env loaded
+# ============================================================================
+# Terraform reads credentials from TF_VAR_* environment variables and does not
+# read .env files. deploy/.env holds them (see setup-env.sh), but nothing loads
+# it, so running terraform directly fails with "No value for required variable"
+# even though the values exist. Ansible does not need this: vault_pass_production.sh
+# reads ../.env itself.
+#
+# Usage, from anywhere:
+#   ./deploy/tf plan -out=tfplan
+#   ./deploy/tf apply tfplan
+#   ./deploy/tf validate
+# ============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+TERRAFORM_DIR="$SCRIPT_DIR/terraform"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Missing $ENV_FILE" >&2
+  echo "Run ./deploy/setup-env.sh to create it." >&2
+  exit 1
+fi
+
+# set -a exports every assignment made while it is active, which is what turns
+# the file's plain KEY=value lines into environment variables terraform sees.
+set -a
+# shellcheck source=/dev/null
+. "$ENV_FILE"
+set +a
+
+for required in TF_VAR_hcloud_token TF_VAR_cloudflare_api_token TF_VAR_cloudflare_zone_id_p2party; do
+  if [ -z "${!required:-}" ]; then
+    echo "$required is empty in $ENV_FILE" >&2
+    echo "Set it with: ./deploy/set-env-var.sh $required" >&2
+    exit 1
+  fi
+done
+
+cd "$TERRAFORM_DIR"
+exec terraform "$@"
