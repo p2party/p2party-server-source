@@ -245,9 +245,14 @@
             msg: |
               The signaling service did not start. Its own log follows.
 
-              Most likely: COTURN_SECRET missing or under 32 bytes, or Postgres
+              This playbook restarts whatever binary is already on the host;
+              it never ships one. If the log shows a module or startup error
+              that you have already fixed in the source, the binary here
+              predates that fix — run deploy/deploy.sh to build and ship it.
+
+              Otherwise: COTURN_SECRET missing or under 32 bytes, or Postgres
               unreachable (the server refuses to start without cross-instance
-              routing, and now says so within 10s instead of hanging).
+              routing, and says so within 10s rather than hanging).
 
               {{ signaling_failure.stdout | default('no output captured') }}
 
