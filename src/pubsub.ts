@@ -27,6 +27,8 @@ export const SERVER_ID = randomUUID();
 const CHANNEL = `server_${SERVER_ID}`;
 /** Catches anything a lost NOTIFY would otherwise strand. */
 const SAFETY_POLL_MS = 5_000;
+/** Fail fast instead of hanging: see the note at the pg.Client construction. */
+const CONNECT_TIMEOUT_MS = 10_000;
 /** Rows older than this belong to a process that died without cleaning up. */
 const STALE_SIGNAL_MS = 5 * 60 * 1000;
 
@@ -72,9 +74,36 @@ export const initPubSub = async (): Promise<void> => {
   // A dedicated connection: node-postgres delivers notifications only on the
   // exact connection that issued LISTEN, and Prisma's pool would hand this
   // query to an arbitrary one.
-  listenClient = new pg.Client({ connectionString });
-  await listenClient.connect();
-  await listenClient.query(`LISTEN "${CHANNEL}"`);
+  //
+  // Both timeouts are load-bearing. node-postgres defaults connectionTimeoutMillis
+  // to 0, meaning wait forever, and a cloud firewall DROPs rather than REJECTs —
+  // so an unreachable Postgres makes connect() hang indefinitely. index.ts awaits
+  // this before binding the listener, so the whole process would hang with no
+  // error at all, presenting as a health-check timeout that says nothing about
+  // the cause. Failing in seconds with a readable message is the difference
+  // between a five-minute fix and an afternoon.
+  listenClient = new pg.Client({
+    connectionString,
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    query_timeout: CONNECT_TIMEOUT_MS,
+  });
+
+  try {
+    await listenClient.connect();
+    await listenClient.query(`LISTEN "${CHANNEL}"`);
+  } catch (cause) {
+    listenClient = undefined;
+    // Name the host: the message lands in journalctl, where the reader has no
+    // access to the environment that produced it.
+    const target = /@([^/?]+)/.exec(connectionString)?.[1] ?? "the database";
+    throw new Error(
+      `p2party: could not reach Postgres at ${target} for cross-instance ` +
+        `signalling (${cause instanceof Error ? cause.message : String(cause)}). ` +
+        "The server refuses to start without it, because a worker that cannot " +
+        "route silently drops signals for peers held by other workers.",
+      { cause },
+    );
+  }
 
   listenClient.on("notification", (message) => {
     if (message.channel === CHANNEL) void drainPendingSignals();

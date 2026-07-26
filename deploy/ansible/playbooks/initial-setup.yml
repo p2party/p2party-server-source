@@ -216,15 +216,40 @@
       when: signaling_binary.stat.exists
 
     - name: Wait for signaling services to be ready
-      wait_for:
-        port: "{{ item }}"
-        host: 127.0.0.1
-        delay: 3
-        timeout: 60
       when: signaling_binary.stat.exists
-      loop: "{{ signaling_instance_ports }}"
-      loop_control:
-        label: "{{ item }}"
+      block:
+        - name: Wait for each instance to accept connections
+          wait_for:
+            port: "{{ item }}"
+            host: 127.0.0.1
+            delay: 3
+            timeout: 25
+          loop: "{{ signaling_instance_ports }}"
+          loop_control:
+            label: "{{ item }}"
+      rescue:
+        # A process that exits, or hangs before binding, never opens its port.
+        # Without this the play reports only "Timeout", which is the one thing
+        # the operator already knows. The service log states the actual cause.
+        - name: Collect why the service did not start
+          shell: |
+            systemctl status p2party-signaling-{{ signaling_instance_ports | first }} --no-pager -l | tail -20
+            echo '--- journal ---'
+            journalctl -u p2party-signaling-{{ signaling_instance_ports | first }} -n 40 --no-pager
+          register: signaling_failure
+          changed_when: false
+          failed_when: false
+
+        - name: Report the service failure
+          fail:
+            msg: |
+              The signaling service did not start. Its own log follows.
+
+              Most likely: COTURN_SECRET missing or under 32 bytes, or Postgres
+              unreachable (the server refuses to start without cross-instance
+              routing, and now says so within 10s instead of hanging).
+
+              {{ signaling_failure.stdout | default('no output captured') }}
 
     - name: Deployment complete
       debug:

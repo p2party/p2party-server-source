@@ -126,3 +126,22 @@ describe("test isolation", () => {
     expect(query).toBeGreaterThan(guard);
   });
 });
+
+describe("startup cannot hang", () => {
+  test("the listen client sets connection and query timeouts", () => {
+    // index.ts awaits initPubSub before binding the port, and node-postgres
+    // defaults connectionTimeoutMillis to 0 (wait forever). A firewall that
+    // DROPs makes an unreachable database hang the whole process with no log
+    // line — indistinguishable from a health check that just never passes.
+    expect(pubsub).toContain("connectionTimeoutMillis: CONNECT_TIMEOUT_MS");
+    expect(pubsub).toContain("query_timeout: CONNECT_TIMEOUT_MS");
+    const timeout = /const CONNECT_TIMEOUT_MS = ([0-9_]+);/.exec(pubsub)?.[1];
+    expect(Number((timeout ?? "0").replace(/_/g, ""))).toBeGreaterThan(0);
+  });
+
+  test("a failed connect names the host and clears the client", () => {
+    const init = /export const initPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
+    expect(init).toContain("listenClient = undefined;");
+    expect(init).toMatch(/could not reach Postgres at \$\{target\}/);
+  });
+});
