@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
-import handleMessage from "./handleMessage";
-import { wsClients } from "../wsServer";
+import handleMessage from "../../src/utils/handleMessage";
+import { wsClients } from "../../src/wsServer";
 
 import type {
   P2PartyWSClient,
   P2PartyWSData,
   P2PartyWSEvents,
-} from "../wsServer";
+} from "../../src/wsServer";
 
 const PEER_ID = "00000000-0000-4000-8000-000000000001";
 

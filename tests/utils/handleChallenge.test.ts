@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import handleChallenge from "./handleChallenge";
-import { createFreshSocketChallenge } from "./socketAuth";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import handleChallenge from "../../src/utils/handleChallenge";
+import { createFreshSocketChallenge } from "../../src/utils/socketAuth";
+import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
 
-import type { P2PartyWSClient, P2PartyWSData } from "../wsServer";
+import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const PEER_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_PEER_ID = "00000000-0000-4000-8000-000000000003";

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { createHandleRoom } from "./handleRoom";
+import { createHandleRoom } from "../../src/utils/handleRoom";
 
-import type { P2PartyWSClient, P2PartyWSData } from "../wsServer";
+import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const ROOM_ID = "00000000-0000-4000-8000-000000000001";
 const ROOM_TOKEN = "cc".repeat(32);

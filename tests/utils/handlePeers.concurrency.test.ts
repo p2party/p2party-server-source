@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { wsClients } from "../wsServer";
-import { createHandlePeers } from "./handlePeers";
+import { wsClients } from "../../src/wsServer";
+import { createHandlePeers } from "../../src/utils/handlePeers";
 
-import type { P2PartyWSClient, P2PartyWSData } from "../wsServer";
+import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const ROOM_ID = "00000000-0000-4000-8000-000000000001";
 const PEER_A_ID = "00000000-0000-4000-8000-000000000002";

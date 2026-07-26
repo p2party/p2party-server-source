@@ -56,6 +56,42 @@ bun run format:check
 
 There is no built-in TURN secret and no development authentication bypass.
 
+## Health and version
+
+Every path except `/health` requires a WebSocket upgrade and answers `426
+Upgrade required`, so a deploy could not be verified without a valid Ed25519
+key. `/health` is the exception:
+
+```sh
+curl -s https://signaling.p2party.com/health | jq
+```
+
+```json
+{
+  "status": "ok",
+  "protocolVersion": 4,
+  "version": "0.1.0",
+  "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
+}
+```
+
+`protocolVersion` is the wire version this build speaks; a client on a
+different one fails closed rather than negotiating. `version` comes from
+`package.json` at compile time, so the binary reports what it actually is
+rather than what a config file claims.
+
+`serverId` is fresh per process. Caddy round-robins across one instance per
+vCPU, so repeated calls should cycle through distinct ids -- that is how you
+confirm every worker was replaced by a rollout and not just the one that
+happened to answer:
+
+```sh
+for i in $(seq 10); do curl -s https://signaling.p2party.com/health | jq -r .serverId; done | sort -u
+```
+
+The response carries no peer counts, room counts, or identities. It says which
+build is running and nothing about who is using it.
+
 ## WebSocket API
 
 The reference client uses `/ws`, so a local connection starts with:

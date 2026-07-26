@@ -7,10 +7,13 @@ import {
   isSocketChallengeBound,
   registerVerifiedSocket,
   unregisterSocketIfCurrent,
-} from "./socketAuth";
-import { PROTOCOL_VERSION } from "./protocolV4";
+} from "../../src/utils/socketAuth";
+import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
 
-import type { SocketAuthClient, SocketAuthState } from "./socketAuth";
+import type {
+  SocketAuthClient,
+  SocketAuthState,
+} from "../../src/utils/socketAuth";
 
 const PEER_ID = "00000000-0000-4000-8000-000000000001";
 const CHALLENGE_ID = "00000000-0000-4000-8000-000000000002";

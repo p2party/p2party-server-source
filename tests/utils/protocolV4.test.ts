@@ -8,7 +8,7 @@ import {
   MAX_DATA_CHANNEL_LABELS,
   MAX_ICE_CANDIDATE_CHARS,
   MAX_SDP_CHARS,
-} from "./protocolV4";
+} from "../../src/utils/protocolV4";
 
 describe("protocol-v4 signaling boundary", () => {
   test("accepts only exact version 4", () => {

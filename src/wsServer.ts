@@ -4,7 +4,9 @@ import handleConnection from "./utils/handleConnection";
 import handleMessage from "./utils/handleMessage";
 import handleInterval from "./utils/handleInterval";
 import { unregisterSocketIfCurrent } from "./utils/socketAuth";
-import { releasePeer } from "./pubsub";
+import { releasePeer, SERVER_ID } from "./pubsub";
+import { PROTOCOL_VERSION } from "./utils/protocolV4";
+import { SERVER_VERSION } from "./version";
 
 import type { Server, ServerWebSocket } from "bun";
 import type { SocketAuthState } from "./utils/socketAuth";
@@ -76,11 +78,32 @@ export class P2PartyWS {
       },
 
       fetch(req: Request, server: Server<P2PartyWSData>) {
+        const url = new URL(req.url, `http://${req.headers.get("host")}`);
+
         if (req.headers.get("upgrade") !== "websocket") {
+          // Everything else here needs an authenticated socket, which means a
+          // deploy could not be verified without a valid Ed25519 key. Report
+          // the two things an operator has to check after a rollout, and
+          // nothing that describes who is using the service: no peer counts,
+          // no room counts, no identities.
+          //
+          // serverId distinguishes instances behind the load balancer, so
+          // repeated calls confirm every worker was actually replaced rather
+          // than one answering every time.
+          if (url.pathname === "/health") {
+            return Response.json(
+              {
+                status: "ok",
+                protocolVersion: PROTOCOL_VERSION,
+                version: SERVER_VERSION,
+                serverId: SERVER_ID,
+              },
+              { headers: { "cache-control": "no-store" } },
+            );
+          }
+
           return new Response("Upgrade required", { status: 426 });
         }
-
-        const url = new URL(req.url, `http://${req.headers.get("host")}`);
 
         if (!url.searchParams.has("publickey")) {
           return new Response("Forbidden", { status: 403 });

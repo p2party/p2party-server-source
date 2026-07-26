@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
  * cross-compiled binary on a Linux host.
  */
 
-const srcRoot = dirname(fileURLToPath(import.meta.url));
+// These read the real sources to assert structure, so they must point at
+// src/ now that the suite lives in tests/.
+const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 const clientSource = readFileSync(join(srcRoot, "prismaClient.ts"), "utf8");
 /** Comments explain why the old approach was wrong, and name it. Assert on code. */
 const client = clientSource

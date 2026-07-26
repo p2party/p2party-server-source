@@ -17,7 +17,9 @@ import { fileURLToPath } from "node:url";
  * guarantee is that no delivery site regresses to local-only.
  */
 
-const srcRoot = dirname(fileURLToPath(import.meta.url));
+// These read the real sources to assert structure, so they must point at
+// src/ now that the suite lives in tests/.
+const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 const utilsDir = join(srcRoot, "utils");
 
 const handlerFiles = readdirSync(utilsDir)

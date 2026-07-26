@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { postgresConnection } from "./ssl";
+import { postgresConnection } from "../../src/db/ssl";
 
 const url = (query: string) => `postgresql://u:p@10.231.0.2:5432/db?${query}`;
 
