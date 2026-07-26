@@ -12,16 +12,15 @@ generator client {
   // specifier, which the bundler cannot see — the compiled binary then dies with
   // "Cannot find module '@prisma/client' from '/$bunfs/root/...'", because
   // there is no node_modules inside the binary's virtual filesystem.
-  provider        = "prisma-client"
-  output          = "../src/generated/prisma/client"
-  // Driver adapters route queries through `pg` instead of the native query
-  // engine, so nothing platform-specific is embedded in the compiled binary.
-  previewFeatures = ["driverAdapters"]
+  provider = "prisma-client"
+  output   = "../src/generated/prisma/client"
 }
 
 datasource db {
+  // Prisma 7 moved the connection URL out of the schema; it is supplied by
+  // prisma.config.ts for CLI work (migrate, generate) and by the pg driver
+  // adapter at runtime. See src/prismaClient.ts.
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model Peer {

@@ -35,7 +35,7 @@
     # The host has no node_modules, so bunx resolves prisma from the registry on
     # every deploy. Pinned to the version this repo tests against: an unpinned
     # fetch would silently adopt a new major and run migrations differently.
-    prisma_version: "6.19.2"
+    prisma_version: "7.9.0"
 
   tasks:
     # ------------------------------------------------------------------
@@ -144,6 +144,18 @@
             group: "{{ app.group }}"
             mode: "0644"
             directory_mode: "0755"
+
+        # Prisma 7 removed `url` from the datasource block, so the CLI reads the
+        # connection string from prisma.config.ts. Without this file on the host,
+        # `migrate deploy` has no datasource at all — the schema alone is no
+        # longer enough.
+        - name: Copy the Prisma config
+          copy:
+            src: "{{ repo_path }}/prisma.config.ts"
+            dest: "{{ app.home }}/server/prisma.config.ts"
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0644"
 
         - name: Apply migrations against Postgres
           become_user: "{{ app.user }}"

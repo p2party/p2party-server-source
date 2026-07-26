@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,11 +43,29 @@ describe("compiled-binary bundling", () => {
   });
 
   test("queries use the pg driver adapter, not the native engine", () => {
-    // The native engine is a platform-specific .node file, so a macOS build
-    // host would embed a darwin engine into a linux-x64 binary.
     expect(client).toContain("PrismaPg");
     expect(client).toContain("adapter");
-    expect(schema).toContain("driverAdapters");
+  });
+
+  test("generation emits no platform-specific engine", () => {
+    // The stronger assertion, and the one that actually failed in production:
+    // the native engine is a .node built for the *build host*, so a macOS
+    // machine embedded libquery_engine-darwin-arm64 into a linux-x64 binary and
+    // the server died with "could not locate the Query Engine for runtime
+    // debian-openssl-3.0.x". Checking the generator flag was a proxy; this
+    // checks the outcome, and holds regardless of how Prisma spells the option.
+    const generated = join(dirname(srcRoot), "src", "generated");
+    if (!existsSync(generated)) return; // db:generate runs before check
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.node$|engine/i.test(entry.name)) offenders.push(entry.name);
+      }
+    };
+    walk(generated);
+    expect(offenders).toEqual([]);
   });
 
   test("build and check regenerate the client first", () => {
