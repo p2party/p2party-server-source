@@ -6,7 +6,17 @@
 // See src/pubsub.ts.
 
 generator client {
-  provider = "prisma-client-js"
+  // The `prisma-client` generator (not `prisma-client-js`) emits ESM into the
+  // source tree, so `bun build --compile` can statically resolve and embed it.
+  // The legacy generator is reached through a runtime require() of a bare
+  // specifier, which the bundler cannot see — the compiled binary then dies with
+  // "Cannot find module '@prisma/client' from '/$bunfs/root/...'", because
+  // there is no node_modules inside the binary's virtual filesystem.
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma/client"
+  // Driver adapters route queries through `pg` instead of the native query
+  // engine, so nothing platform-specific is embedded in the compiled binary.
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {

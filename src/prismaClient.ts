@@ -1,19 +1,38 @@
-import type { PrismaClient as ImportedPrismaClient } from "@prisma/client";
-import { createRequire } from "module";
-import { fileURLToPath } from "url";
-import { dirname } from "path";
-global.__filename = fileURLToPath(import.meta.url);
-global.__dirname = dirname(__filename);
+import { PrismaPg } from "@prisma/adapter-pg";
 
-const require = createRequire(import.meta.url ?? __filename);
+import { PrismaClient } from "./generated/prisma/client/client";
 
-const { PrismaClient: RequiredPrismaClient } = require("@prisma/client");
+/**
+ * Two deliberate choices here, both required for `bun build --compile` to
+ * produce a working single-file binary.
+ *
+ * 1. The client is imported statically from the generated source tree. This
+ *    previously used createRequire()("@prisma/client"); the bundler cannot see
+ *    through a runtime require of a bare specifier, so the client was never
+ *    embedded and every compiled binary crash-looped with
+ *      Cannot find module '@prisma/client' from '/$bunfs/root/p2party_linux_x64'
+ *    because the binary's virtual filesystem holds no node_modules.
+ *
+ * 2. Queries go through the `pg` driver adapter rather than Prisma's native
+ *    query engine. The engine ships as a platform-specific .node binary, so a
+ *    macOS build host would embed libquery_engine-darwin-arm64 into a
+ *    linux-x64 binary. The adapter is pure JavaScript and cross-compiles
+ *    cleanly — and `pg` is already a dependency, since src/pubsub.ts needs a
+ *    dedicated connection for LISTEN/NOTIFY.
+ */
 
-const _PrismaClient: typeof ImportedPrismaClient = RequiredPrismaClient;
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString)
+  throw new Error(
+    "p2party: DATABASE_URL is required. prisma/schema.prisma declares " +
+      'provider = "postgresql", so this must be a postgresql:// URL.',
+  );
 
-export class PrismaClient extends _PrismaClient {}
+const adapter = new PrismaPg({ connectionString });
+
+export { PrismaClient };
 
 export type ProcessPrismaClient = Omit<PrismaClient, "$disconnect">;
 
 /** The single Prisma connection manager used for the lifetime of the server. */
-export const prisma: ProcessPrismaClient = new PrismaClient();
+export const prisma: ProcessPrismaClient = new PrismaClient({ adapter });

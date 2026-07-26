@@ -29,16 +29,17 @@
     "db:migrate": "prisma migrate deploy --schema prisma/schema.prisma",
     "test": "bun test",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "check": "bun run typecheck && bun test",
+    "check": "bun run db:generate && bun run typecheck && bun test",
     "format": "bun prettier . --write",
     "format:check": "bun prettier . --check",
-    "build:linux": "bun build --compile --minify --sourcemap --bytecode --target=bun-linux-x64-modern --format esm ./src/index.ts --outfile p2party_linux_x64",
-    "build:linux:arm64": "bun build --compile --minify --sourcemap --bytecode --target=bun-linux-arm64 --format esm ./src/index.ts --outfile p2party_linux_arm64",
-    "build:macos": "bun build --compile --minify --sourcemap --target=bun-darwin-arm64 --format esm ./src/index.ts --outfile p2party_macos",
-    "build:windows": "bun build --compile --minify --sourcemap --bytecode --target=bun-windows-x64-modern --format esm ./src/index.ts --outfile p2party_exe"
+    "build:linux": "bun run db:generate && bun build --compile --minify --sourcemap --bytecode --target=bun-linux-x64-modern --format esm ./src/index.ts --outfile p2party_linux_x64",
+    "build:linux:arm64": "bun run db:generate && bun build --compile --minify --sourcemap --bytecode --target=bun-linux-arm64 --format esm ./src/index.ts --outfile p2party_linux_arm64",
+    "build:macos": "bun run db:generate && bun build --compile --minify --sourcemap --target=bun-darwin-arm64 --format esm ./src/index.ts --outfile p2party_macos",
+    "build:windows": "bun run db:generate && bun build --compile --minify --sourcemap --bytecode --target=bun-windows-x64-modern --format esm ./src/index.ts --outfile p2party_exe"
   },
   "dependencies": {
     "@ondemos/core": "0.2.7",
+    "@prisma/adapter-pg": "6.19.2",
     "@prisma/client": "6.19.2",
     "class-validator": "0.15.1",
     "pg": "^8.22.0"
