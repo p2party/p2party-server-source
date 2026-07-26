@@ -14,8 +14,10 @@ Type=simple
 User={{ app.user }}
 Group={{ app.group }}
 WorkingDirectory={{ app.home }}/server
-Environment=PORT={{ signaling_port }}
 EnvironmentFile={{ app.home }}/server/.env
+# After EnvironmentFile on purpose: systemd applies these in order and the last
+# assignment wins, so this cannot be clobbered by a PORT in the shared file.
+Environment=PORT={{ signaling_port }}
 ExecStart={{ app.home }}/server/p2party-server
 Restart=always
 RestartSec=5

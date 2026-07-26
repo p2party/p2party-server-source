@@ -110,6 +110,26 @@
         group: "{{ app.group }}"
         mode: "0600"
 
+    # Same reasoning for the unit files. PORT is set here, per instance, and a
+    # deploy that ships a new binary against stale units cannot fix an ordering
+    # or environment bug in them — which is how every instance ended up binding
+    # 3001 and dying with EADDRINUSE.
+    - name: Deploy the systemd unit files
+      template:
+        src: "{{ playbook_dir }}/../templates/p2party-signaling.service.j2"
+        dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+      vars:
+        signaling_port: "{{ item }}"
+      # No notify: the restart task below already passes daemon_reload, so a
+      # handler here would be a second way to do the same thing and a runtime
+      # error if it were ever renamed.
+
     # ------------------------------------------------------------------
     # Postgres schema — migrations are applied on every deploy
     # ------------------------------------------------------------------
