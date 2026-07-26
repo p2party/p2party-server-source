@@ -1,6 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 
-import { postgresSslOptions } from "./db/ssl";
+import { postgresConnection } from "./db/ssl";
 
 import { PrismaClient } from "./generated/prisma/client/client";
 
@@ -33,9 +33,11 @@ if (!connectionString)
 // The same TLS decision as the LISTEN client. PrismaPg wraps node-postgres, so
 // a bare connectionString here would reject Postgres's self-signed certificate
 // on the first query — the failure the LISTEN client hit, one layer along.
+const pgConnection = postgresConnection(connectionString);
+
 const adapter = new PrismaPg({
-  connectionString,
-  ssl: postgresSslOptions(connectionString),
+  connectionString: pgConnection.connectionString,
+  ssl: pgConnection.ssl,
 });
 
 export { PrismaClient };

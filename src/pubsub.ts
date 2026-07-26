@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import pg from "pg";
 
-import { postgresSslOptions } from "./db/ssl";
+import { postgresConnection } from "./db/ssl";
 import { prisma } from "./prismaClient";
 import { wsClients } from "./wsServer";
 
@@ -83,8 +83,13 @@ export const initPubSub = async (): Promise<void> => {
   // error at all, presenting as a health-check timeout that says nothing about
   // the cause. Failing in seconds with a readable message is the difference
   // between a five-minute fix and an afternoon.
+  // Strip the ssl parameters before constructing: pg-connection-string parses
+  // them inside the Client constructor and its result overrides an explicit
+  // `ssl` option, which is why passing one alone did not take effect.
+  const pgConnection = postgresConnection(connectionString);
+
   listenClient = new pg.Client({
-    connectionString,
+    connectionString: pgConnection.connectionString,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: CONNECT_TIMEOUT_MS,
     // node-postgres does not implement libpq's sslmode semantics. libpq reads
@@ -99,7 +104,7 @@ export const initPubSub = async (): Promise<void> => {
     // otherwise falls back to: it stops passive capture on the private network,
     // while offering no protection against an active in-path attacker. Issuing
     // a real certificate and moving to full verification is the remaining step.
-    ssl: postgresSslOptions(connectionString),
+    ssl: pgConnection.ssl,
   });
 
   try {
