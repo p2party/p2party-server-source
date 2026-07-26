@@ -6,8 +6,8 @@
 # longer describe this server removed rather than carried along:
 #
 #   * The binary is built from THIS repo (`bun run build:linux` →
-#     p2party_linux_x64), so the deploy can never ship a different repo's
-#     server than the one you tested.
+#     deploy/ansible/builds/p2party_linux_x64), so the deploy can never ship a
+#     different repo's server than the one you tested.
 #   * Postgres migrations run on every deploy via `prisma migrate deploy`,
 #     which applies only pending migrations and never resets anything. The
 #     signaling host reaches Postgres over the private network (10.231.0.0/24);
@@ -28,7 +28,10 @@
   vars:
     repo_path: "{{ playbook_dir }}/../../.."
     build_command: "bun run build:linux"
-    binary_name: p2party_linux_x64
+    # Built by `bun run build:linux` into deploy/ansible/builds/, so the
+    # artefact lives beside the playbook that ships it rather than loose in
+    # the repository root.
+    binary_name: deploy/ansible/builds/p2party_linux_x64
     # The host has no node_modules, so bunx resolves prisma from the registry on
     # every deploy. Pinned to the version this repo tests against: an unpinned
     # fetch would silently adopt a new major and run migrations differently.

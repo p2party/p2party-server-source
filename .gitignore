@@ -1,11 +1,10 @@
 # Based on https://raw.githubusercontent.com/github/gitignore/main/Node.gitignore
 
 .*.bun-build
-/p2party_linux_x64
-/p2party_linux_arm64
-/p2party_macos
-/p2party_exe
-/p2party_*.map
+# Compiled server binaries. Built into deploy/ansible/builds/ so the artefact
+# sits next to the playbook that ships it; the directory itself is tracked.
+deploy/ansible/builds/*
+!deploy/ansible/builds/.gitkeep
 /index.js.map
 *.db
 *.db-shm
