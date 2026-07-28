@@ -27,6 +27,12 @@ export interface WebSocketMessageSuccessfulChallenge {
   credential?: string;
 }
 
+export interface WebSocketTurnCredentials {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
 export interface WebSocketMessageRoomIdRequest {
   type: "room";
   fromPeerId: string;
@@ -39,6 +45,8 @@ export interface WebSocketMessageRoomIdResponse {
   roomId: string;
   roomUrl: string;
   protocolVersion: number;
+  /** Omitted when no relay is configured; clients then stay STUN-only. */
+  turnCredentials?: WebSocketTurnCredentials;
 }
 
 export interface WebSocketMessageDescriptionSend {

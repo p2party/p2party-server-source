@@ -1,3 +1,4 @@
+import { createTurnCredentials } from "./socketAuth";
 import { prisma as sharedPrisma } from "../prismaClient";
 
 import type { P2PartyWSClient } from "../wsServer.js";
@@ -116,12 +117,22 @@ const handleRoomWithClient = async (
       },
     });
 
+    // The relay endpoint travels with the room response because that is where
+    // the client builds its RTCConfiguration. Credentials are short-lived and
+    // bound to this socket's public key, so they are re-issued per room join
+    // rather than cached.
+    const turnCredentials = createTurnCredentials(
+      ws.data.publicKey,
+      process.env.COTURN_SECRET,
+    );
+
     ws.send(
       JSON.stringify({
         type: "roomId",
         roomId: room.id,
         roomUrl,
         protocolVersion: PROTOCOL_VERSION,
+        ...(turnCredentials ? { turnCredentials } : {}),
       } as WebSocketMessageRoomIdResponse),
     );
 

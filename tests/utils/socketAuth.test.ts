@@ -4,6 +4,7 @@ import {
   consumeSocketChallenge,
   createFreshSocketChallenge,
   createTurnCredentials,
+  parseTurnUrls,
   isSocketChallengeBound,
   registerVerifiedSocket,
   unregisterSocketIfCurrent,
@@ -103,12 +104,42 @@ describe("TURN REST credentials", () => {
   });
 
   test("derives credentials only from the supplied secret", () => {
+    // The HMAC is unchanged by carrying the URLs: username stays the sole
+    // signed input, so existing coturn deployments keep verifying.
     expect(
-      createTurnCredentials("ab".repeat(32), "s".repeat(32), 1_000),
+      createTurnCredentials("ab".repeat(32), "s".repeat(32), 1_000, [
+        "turns:turn.example.com:443?transport=tcp",
+      ]),
     ).toEqual({
+      urls: ["turns:turn.example.com:443?transport=tcp"],
       username: `3601:${"ab".repeat(32)}`,
       credential: "XY6V5LzRrbIFUOH5w0qdZ90iYuQ=",
     });
+  });
+
+  test("issues nothing when no relay endpoint is configured", () => {
+    // A credential without a URL is what shipped before and no client could
+    // act on it; withholding it keeps the degraded state honest.
+    expect(
+      createTurnCredentials("ab".repeat(32), "s".repeat(32), 1_000, []),
+    ).toBeUndefined();
+  });
+
+  test("keeps only well-formed turn and turns URIs", () => {
+    expect(
+      parseTurnUrls(
+        " turns:turn.example.com:443?transport=tcp , turn:turn.example.com:3478 ",
+      ),
+    ).toEqual([
+      "turns:turn.example.com:443?transport=tcp",
+      "turn:turn.example.com:3478",
+    ]);
+    // Anything that is not a relay URI never reaches a browser's ICE config.
+    expect(
+      parseTurnUrls("https://evil.example.com,stun:stun.example.com"),
+    ).toEqual([]);
+    expect(parseTurnUrls(undefined)).toEqual([]);
+    expect(parseTurnUrls("")).toEqual([]);
   });
 
   test("rejects a weak configured secret instead of silently issuing credentials", () => {

@@ -16,9 +16,27 @@ export interface SocketAuthClient {
 }
 
 export interface TurnCredentials {
+  urls: string[];
   username: string;
   credential: string;
 }
+
+/**
+ * The relay endpoints clients should try, from COTURN_URLS.
+ *
+ * A credential without a URL is unusable, which is what shipped before: the
+ * server minted an HMAC every login and no client could act on it. Deployment
+ * owns the schemes and ports, so a self-hoster can offer only `turns:` without
+ * a code change. Anything that is not a turn/turns URI is dropped rather than
+ * forwarded to a browser.
+ */
+export const parseTurnUrls = (raw: string | undefined): string[] => {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((url) => url.trim())
+    .filter((url) => /^turns?:[^\s]+$/u.test(url));
+};
 
 export const assertSecureTurnSecret = (secret: string | undefined): void => {
   if (secret !== undefined && Buffer.byteLength(secret, "utf8") < 32)
@@ -88,9 +106,13 @@ export const createTurnCredentials = (
   publicKey: string,
   secret: string | undefined,
   now = Date.now(),
+  urls: string[] = parseTurnUrls(process.env.COTURN_URLS),
 ): TurnCredentials | undefined => {
   if (!secret) return undefined;
   assertSecureTurnSecret(secret);
+  // No endpoint means nothing to hand out; issuing a bare HMAC would only
+  // repeat the previous no-op.
+  if (urls.length === 0) return undefined;
 
   const unixTimeStamp = Math.floor(now / 1000) + 60 * 60;
   const username = `${String(unixTimeStamp)}:${publicKey}`;
@@ -99,7 +121,7 @@ export const createTurnCredentials = (
     .update(username)
     .digest("base64");
 
-  return { username, credential };
+  return { urls, username, credential };
 };
 
 export const registerVerifiedSocket = <T extends SocketAuthClient>(
