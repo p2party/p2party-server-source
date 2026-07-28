@@ -1,9 +1,17 @@
-import { prisma } from "../prismaClient";
+import { prisma as sharedPrisma } from "../prismaClient";
 
+import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
 import type { WebSocketMessageError } from "./interfaces";
+import { wsClients } from "../wsServer";
+import { isCurrentVerifiedSocket } from "./socketAuth";
 
-const findRoomPeers = async (
+type FindRoomPeersPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
+type SocketRegistry = Map<string, P2PartyWSClient>;
+
+const findRoomPeersWithClient = async (
+  prisma: FindRoomPeersPrisma,
+  clients: SocketRegistry,
   ws: P2PartyWSClient,
   roomId: string,
   fromPeerId: string,
@@ -11,22 +19,22 @@ const findRoomPeers = async (
   isDescription: boolean,
   fromPeerPublicKey?: string,
 ): Promise<boolean> => {
+  const isCurrentSource = () =>
+    ws.data.peerId === fromPeerId &&
+    ws.data.publicKey.length === 64 &&
+    isCurrentVerifiedSocket(clients, ws);
+
   try {
-    if (
-      !ws.data.isVerified ||
-      ws.data.peerId !== fromPeerId ||
-      ws.data.publicKey.length !== 64
-    )
-      return false;
+    if (!isCurrentSource()) return false;
 
     const room = await prisma.room.findUnique({
-      // const room = await db.room.findUnique({
       where: { id: roomId },
       include: {
-        peers: true, // Include the peers of the room
+        peers: true,
       },
     });
 
+    if (!isCurrentSource()) return false;
     if (!room) {
       ws.send(
         JSON.stringify({
@@ -39,15 +47,14 @@ const findRoomPeers = async (
       );
 
       ws.terminate();
-      // await peerRepository.delete(client.id);
 
       return false;
     }
 
     const fromPeer = await prisma.peer.findUnique({
-      // const fromPeer = await db.peer.findUnique({
       where: { id: fromPeerId },
     });
+    if (!isCurrentSource()) return false;
     if (
       !fromPeer ||
       fromPeer.publicKey !== ws.data.publicKey ||
@@ -64,15 +71,14 @@ const findRoomPeers = async (
       );
 
       ws.terminate();
-      // await peerRepository.remove(client);
 
       return false;
     }
 
     const toPeer = await prisma.peer.findUnique({
-      // const toPeer = await db.peer.findUnique({
       where: { id: toPeerId },
     });
+    if (!isCurrentSource()) return false;
     if (!toPeer) {
       ws.send(
         JSON.stringify({
@@ -85,7 +91,6 @@ const findRoomPeers = async (
       );
 
       ws.terminate();
-      // await peerRepository.remove(client);
 
       return false;
     }
@@ -94,12 +99,35 @@ const findRoomPeers = async (
     const roomPeerIds = new Set(room.peers.map((peer) => peer.id));
     const isInRoom = roomPeerIds.has(fromPeerId) && roomPeerIds.has(toPeerId);
 
-    return isInRoom;
+    return isInRoom && isCurrentSource();
   } catch (error) {
-    ws.terminate();
+    if (isCurrentSource()) ws.terminate();
 
     return false;
   }
 };
+
+export const createFindRoomPeers =
+  (prisma: FindRoomPeersPrisma, clients?: SocketRegistry) =>
+  (
+    ws: P2PartyWSClient,
+    roomId: string,
+    fromPeerId: string,
+    toPeerId: string,
+    isDescription: boolean,
+    fromPeerPublicKey?: string,
+  ) =>
+    findRoomPeersWithClient(
+      prisma,
+      clients ?? wsClients,
+      ws,
+      roomId,
+      fromPeerId,
+      toPeerId,
+      isDescription,
+      fromPeerPublicKey,
+    );
+
+const findRoomPeers = createFindRoomPeers(sharedPrisma);
 
 export default findRoomPeers;

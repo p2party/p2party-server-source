@@ -23,28 +23,6 @@ package_update: true
 package_upgrade: true
 
 write_files:
-  - path: /etc/systemd/system/p2party-signaling.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=P2Party Signaling Server
-      After=network.target
-      
-      [Service]
-      Type=simple
-      User=${ansible_user}
-      WorkingDirectory=/home/${ansible_user}/server
-      ExecStart=/home/${ansible_user}/.bun/bin/bun run src/index.ts
-      Restart=always
-      RestartSec=5
-      Environment=NODE_ENV=production
-      Environment=BUN_INSTALL=/home/${ansible_user}/.bun
-      Environment=PATH=/home/${ansible_user}/.bun/bin:/usr/local/bin:/usr/bin:/bin
-      EnvironmentFile=/home/${ansible_user}/server/.env
-      
-      [Install]
-      WantedBy=multi-user.target
-
   - path: /root/setup-signaling.sh
     permissions: '0755'
     content: |
@@ -56,12 +34,10 @@ write_files:
       # Create app directory
       mkdir -p /home/$APP_USER/server
       chown -R $APP_USER:$APP_USER /home/$APP_USER/server
-      
-      # Enable systemd service (will start once code is deployed)
-      systemctl daemon-reload
-      systemctl enable p2party-signaling
-      
-      echo "Signaling server setup complete (code will be deployed via Ansible)"
+
+      # Ansible owns the versioned binary and the port-specific service units.
+      # Cloud-init must not create a second, source-based signaling process.
+      echo "Signaling host ready (service will be deployed via Ansible)"
 
 runcmd:
   - printf "[sshd]\nenabled = true\nbanaction = iptables-multiport" > /etc/fail2ban/jail.local

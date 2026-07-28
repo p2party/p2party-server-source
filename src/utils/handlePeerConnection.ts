@@ -1,22 +1,38 @@
-import { prisma } from "../prismaClient";
+import { prisma as sharedPrisma } from "../prismaClient";
 
 import findRoomPeers from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
+import { isCurrentVerifiedSocket } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
+import type { ProcessPrismaClient } from "../prismaClient";
 import type {
   WebSocketMessagePeerConnectionRequest,
   WebSocketMessagePeerConnectionResponse,
 } from "./interfaces";
 
-const handlePeerConnection = async (
+type HandlePeerConnectionPrisma = Pick<ProcessPrismaClient, "peer">;
+type FindRoomPeers = typeof findRoomPeers;
+type SendToPeer = typeof sendToPeer;
+
+interface HandlePeerConnectionDependencies {
+  clients?: Map<string, P2PartyWSClient>;
+  findRoomPeers?: FindRoomPeers;
+  sendToPeer?: SendToPeer;
+}
+
+const handlePeerConnectionWithClient = async (
+  prisma: HandlePeerConnectionPrisma,
+  clients: Map<string, P2PartyWSClient>,
+  findPeers: FindRoomPeers,
+  send: SendToPeer,
   ws: P2PartyWSClient,
   msg: WebSocketMessagePeerConnectionRequest,
 ) => {
-  const infoChecksOut = await findRoomPeers(
+  const infoChecksOut = await findPeers(
     ws,
     msg.roomId,
     msg.fromPeerId,
@@ -25,37 +41,54 @@ const handlePeerConnection = async (
   );
 
   if (infoChecksOut) {
-    const wsClient = wsClients.get(msg.toPeerId);
-    const localUsable =
-      wsClient !== undefined &&
-      wsClient.data.isVerified &&
-      wsClient.data.peerId === msg.toPeerId;
+    const fromPeer = await prisma.peer.findUnique({
+      where: { id: msg.fromPeerId },
+    });
+    if (
+      !fromPeer ||
+      ws.data.peerId !== msg.fromPeerId ||
+      ws.data.publicKey !== fromPeer.publicKey ||
+      !isCurrentVerifiedSocket(clients, ws)
+    )
+      return;
 
-    if (localUsable || wsClient === undefined) {
-      const fromPeer = await prisma.peer.findUnique({
-        // const fromPeer = await db.peer.findUnique({
-        where: { id: msg.fromPeerId },
-      });
+    const request = JSON.stringify({
+      type: "connection",
+      roomId: msg.roomId,
+      fromPeerId: msg.fromPeerId,
+      fromPeerPublicKey: fromPeer.publicKey,
+      labels: msg.labels,
+      protocolVersion: PROTOCOL_VERSION,
+    } as WebSocketMessagePeerConnectionResponse);
 
-      if (fromPeer) {
-        const request = JSON.stringify({
-          type: "connection",
-          roomId: msg.roomId,
-          fromPeerId: msg.fromPeerId,
-          fromPeerPublicKey: fromPeer.publicKey,
-          labels: msg.labels,
-          protocolVersion: PROTOCOL_VERSION,
-        } as WebSocketMessagePeerConnectionResponse);
-
-        // Local socket, or route to the worker that owns it. Without the
-        // second path the DataChannel request never reaches most peers.
-        if (localUsable) wsClient.send(request);
-        else await sendToPeer(msg.toPeerId, request);
-      }
-
+    // Resolve after every await. A target that was current before the peer
+    // query may have been synchronously replaced while the query was pending.
+    const target = clients.get(msg.toPeerId);
+    if (target) {
+      if (isCurrentVerifiedSocket(clients, target)) target.send(request);
       return;
     }
+
+    // No local entry means the target may live on another worker.
+    await send(msg.toPeerId, request);
   }
 };
+
+export const createHandlePeerConnection = (
+  prisma: HandlePeerConnectionPrisma,
+  dependencies: HandlePeerConnectionDependencies = {},
+) => {
+  return (ws: P2PartyWSClient, msg: WebSocketMessagePeerConnectionRequest) =>
+    handlePeerConnectionWithClient(
+      prisma,
+      dependencies.clients ?? wsClients,
+      dependencies.findRoomPeers ?? findRoomPeers,
+      dependencies.sendToPeer ?? sendToPeer,
+      ws,
+      msg,
+    );
+};
+
+const handlePeerConnection = createHandlePeerConnection(sharedPrisma);
 
 export default handlePeerConnection;

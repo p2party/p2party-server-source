@@ -29,12 +29,14 @@ export interface WebSocketTurnCredentials {
   urls: string[];
   username: string;
   credential: string;
+  expiresAtUnixSeconds: number;
 }
 
 export interface WebSocketMessageRoomIdRequest {
   type: "room";
   fromPeerId: string;
   roomUrl: string;
+  roomRequestId: string;
   protocolVersion: number;
 }
 
@@ -42,9 +44,25 @@ export interface WebSocketMessageRoomIdResponse {
   type: "roomId";
   roomId: string;
   roomUrl: string;
+  roomRequestId: string;
   protocolVersion: number;
   /** Omitted when no relay is configured; clients then stay STUN-only. */
   turnCredentials?: WebSocketTurnCredentials;
+}
+
+export interface WebSocketMessageLeaveRoomRequest {
+  type: "leaveRoom";
+  fromPeerId: string;
+  roomUrl: string;
+  roomLeaveId: string;
+  protocolVersion: number;
+}
+
+export interface WebSocketMessageRoomLeftResponse {
+  type: "roomLeft";
+  roomUrl: string;
+  roomLeaveId: string;
+  protocolVersion: number;
 }
 
 export interface WebSocketMessageDescriptionSend {
@@ -138,6 +156,7 @@ export interface WebSocketMessageError {
     | "sendDescription"
     | "receiveDescription"
     | "requestRoomId"
+    | "leaveRoom"
     | "requestPeerId"
     | "requestPeers"
     | "sendChallengeResponse";

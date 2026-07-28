@@ -29,10 +29,13 @@ that have not run yet and never resets anything, so it is safe against a live
 database. Environment files and compiled server binaries are gitignored and
 must never be committed.
 
-Postgres rather than SQLite because signaling is the one component that has to
-tolerate more than one process. The schema carries `Peer.serverId` and a
-`PendingSignal` table so an instance can hand a signal to the instance that
-actually holds the target peer's socket, over `LISTEN`/`NOTIFY`.
+Postgres rather than SQLite keeps routing state out of any one process. The
+schema carries `Peer.serverId` and a durable `PendingSignal` table so an
+instance can hand a signal to the instance that currently claims the target
+peer's socket. `LISTEN`/`NOTIFY` is the low-latency wake-up, not the durable
+authority: the row remains authoritative if a notification is missed. This
+cross-instance delivery path does not by itself provide the distributed
+same-identity fencing required for supported multi-worker operation.
 
 For an Internet-facing deployment, terminate TLS in front of this process and
 expose the WebSocket over `wss://`. The server does not configure TLS or launch
@@ -48,12 +51,12 @@ bun run format:check
 
 ## Configuration
 
-| Variable        | Required | Meaning                                                                                                                                                      |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`  | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                                                                            |
-| `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                                                                                 |
-| `COTURN_SECRET` | for TURN | TURN REST shared secret (minimum 32 bytes). Credentials are issued only when this and `COTURN_URLS` are both configured.                                     |
-| `COTURN_URLS`   | for TURN | Comma-separated `turn:` or `turns:` relay URLs. Credentials are issued only when this and `COTURN_SECRET` are both configured and at least one URL is valid. |
+| Variable        | Required | Meaning                                                                                                                                                                                                                                                                        |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`  | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                                                                                                                                                                                              |
+| `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                                                                                                                                                                                                   |
+| `COTURN_SECRET` | for TURN | TURN REST shared secret (minimum 32 bytes). Credentials are issued only when this and `COTURN_URLS` are both configured.                                                                                                                                                       |
+| `COTURN_URLS`   | for TURN | Comma-separated `turn:` or `turns:` relay URLs. Values are trimmed, deduplicated, limited to the first 16 unique URLs, and limited to 2,048 characters each. Credentials are issued only when this and `COTURN_SECRET` are both configured and at least one URL remains valid. |
 
 There is no built-in TURN secret and no development authentication bypass.
 
@@ -71,7 +74,7 @@ curl -s https://signaling.p2party.com/health | jq
 {
   "status": "ok",
   "protocolVersion": 4,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
 ```
@@ -81,14 +84,17 @@ different one fails closed rather than negotiating. `version` comes from
 `package.json` at compile time, so the binary reports what it actually is
 rather than what a config file claims.
 
-`serverId` is fresh per process. Caddy round-robins across one instance per
-vCPU, so repeated calls should cycle through distinct ids -- that is how you
-confirm every worker was replaced by a rollout and not just the one that
-happened to answer:
+`serverId` is fresh per process. Supported production pins Caddy to one
+signaling process on port `3001`, so repeated calls should report that one
+process id until it restarts. The deploy probes the process directly and then
+checks the same exact version, protocol, and process id through public Caddy
+before succeeding.
 
-```sh
-for i in $(seq 10); do curl -s https://signaling.p2party.com/health | jq -r .serverId; done | sort -u
-```
+The cross-instance `LISTEN`/`NOTIFY` path remains available to self-hosters by
+explicitly configuring more than one `signaling_ports` entry. That mode is
+experimental until distributed same-identity fencing is implemented; the deploy
+still probes every configured process directly and rejects duplicate process
+ids before checking the public route.
 
 The response carries no peer counts, room counts, or identities. It says which
 build is running and nothing about who is using it.
@@ -115,6 +121,7 @@ message must repeat the socket's bound `fromPeerId`.
 | ---------------- | ------------------------------------------------------------- |
 | `challenge`      | Prove possession of the Ed25519 identity key for this socket. |
 | `room`           | Create or join the room represented by a 64-hex room token.   |
+| `leaveRoom`      | Idempotently remove this authenticated peer from one room.    |
 | `peers`          | Ask the server to introduce this peer to existing room peers. |
 | `peerConnection` | Accept a room peer introduction.                              |
 | `connection`     | Request signaling for the listed DataChannel labels.          |
@@ -131,6 +138,7 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 | `peerId`         | A socket connects and receives its bound peer ID and challenge.  |
 | `challenge`      | The challenge signature verified; authentication is complete.    |
 | `roomId`         | A `room` request created or joined a room.                       |
+| `roomLeft`       | The requested membership is absent after an idempotent leave.    |
 | `peers`          | The room's current peer list, in response to `peerConnection`.   |
 | `peerConnection` | Another peer asked to be introduced to you.                      |
 | `connection`     | A peer requested DataChannel signaling with you.                 |
@@ -151,10 +159,47 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 
 Enforced bounds live in
 [`src/utils/protocolV4.ts`](src/utils/protocolV4.ts): 524,288 characters per
-signaling message, 262,144 serialized characters per description, 4,096
-serialized characters per ICE candidate, and at most 64 DataChannel labels of
-256 characters each. Malformed, downgraded, cross-room, or cross-identity
-signaling fails closed.
+signaling message, 262,144 characters in the SDP string, 4,096 characters in
+the ICE candidate string, 256 characters each in `sdpMid` and
+`usernameFragment`, and at most 64 DataChannel labels of 193 characters each.
+Malformed, downgraded, cross-room, or cross-identity signaling fails closed.
+
+### Room correlation and TURN credentials
+
+Every `room` request carries a mandatory UUIDv4 `roomRequestId`. The
+corresponding `roomId` response repeats the exact `roomUrl` and
+`roomRequestId`, so clients can reject unsolicited or stale responses. A
+missing or malformed request ID is rejected; there is no alternate legacy
+shape or server-generated fallback. This nonce provides response correlation,
+not room privacy: the server still sees the room token and membership
+described in the privacy boundary below.
+
+When TURN is configured, the `roomId` response includes:
+
+```json
+{
+  "turnCredentials": {
+    "urls": ["turns:turn.example.com:443?transport=tcp"],
+    "username": "<expiresAtUnixSeconds>:<socket Ed25519 public key>",
+    "credential": "<TURN REST HMAC>",
+    "expiresAtUnixSeconds": 1785258000
+  }
+}
+```
+
+The expiry is bound to both the numeric username prefix and the authenticated
+socket public key suffix. URL normalization follows the `COTURN_URLS` limits
+above.
+
+A protocol-v4 room leave is an exact-shape request with `type` equal to
+`"leaveRoom"`, the socket-bound `fromPeerId`, the same 64-hex `roomUrl` used
+to join, a fresh UUIDv4
+`roomLeaveId`, and `protocolVersion: 4`. The server removes the authenticated
+peer's membership before returning the same `roomUrl` and `roomLeaveId` in an
+exact `roomLeft` acknowledgement. This works even before the client has
+received a server-assigned `roomId`. Leaving a room that is already absent or
+does not exist returns the same acknowledgement, so the operation is
+retry-safe and does not expose room existence.
 
 ## Protocol-v4 authentication
 
@@ -183,8 +228,9 @@ The client signs that exact nonce with its Ed25519 identity key and replies:
 }
 ```
 
-Only after successful verification does the server register the socket and
-return:
+After successful proof verification, the server registers the candidate
+socket, commits its cross-instance routing claim, and rechecks that the exact
+socket still owns the process-local registry entry. Only then does it return:
 
 ```json
 {
@@ -198,8 +244,30 @@ This challenge-success object always has exactly those three fields. TURN
 configuration does not alter authentication. When both `COTURN_SECRET` and
 `COTURN_URLS` are configured, short-lived credentials arrive later in the
 `roomId` response as a nested `turnCredentials` object containing `urls`,
-`username`, and `credential`. Historical challenge signatures are not accepted
-as reconnect credentials.
+`username`, `credential`, and `expiresAtUnixSeconds`. Historical challenge
+signatures are not accepted as reconnect credentials.
+
+When the same identity authenticates twice on one server process, the new
+socket synchronously deauthorizes and closes its predecessor. Every later
+frame must come from the exact socket currently held in that process's
+registry. This is deliberately a process-local guarantee: `Peer.serverId` is
+routing metadata, not a distributed session lease. Two sockets for the same
+identity on different workers are not yet mutually fenced, so shared
+cross-instance session fencing remains an explicit nonclaim. The bounded
+message FIFO is per socket, and same-process room mutations are additionally
+serialized by stable peer identity across socket replacement. That membership
+ordering is not distributed across workers: there is no database generation
+or advisory-lock fence yet, so cross-instance same-identity room mutation
+ordering is also an explicit nonclaim. Supported production therefore runs one
+worker. Multiple `signaling_ports` are an experimental operator opt-in until
+both distributed fences exist.
+
+Each socket retains at most 64 queued signaling frames and at most 2 MiB of
+their serialized bytes; exceeding either bound closes it with overload code
+`1013`. This explicit FIFO is required because Bun accepts asynchronous
+WebSocket message handlers but does not promise per-socket await ordering.
+Only an exact `pong` from the cryptographically proved current socket owner
+bypasses that FIFO; malformed, unproved, or replaced-socket pongs do not.
 
 ## Privacy boundary
 

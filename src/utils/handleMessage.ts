@@ -2,6 +2,7 @@ import { isUUID, isHexadecimal } from "class-validator";
 
 import handleChallenge from "./handleChallenge";
 import handleRoom from "./handleRoom";
+import handleLeaveRoom from "./handleLeaveRoom";
 import handlePeers from "./handlePeers";
 import handleCandidate from "./handleCandidate";
 import handleDescription from "./handleDescription";
@@ -14,8 +15,9 @@ import {
   isProtocolV4,
   MAX_SIGNALING_MESSAGE_CHARS,
 } from "./protocolV4";
-import { registerVerifiedSocket } from "./socketAuth";
-import { claimPeer } from "../pubsub";
+import { activateVerifiedSocket, isCurrentVerifiedSocket } from "./socketAuth";
+import { isExactPongMessage } from "./handlePong";
+import { claimPeer, releasePeer } from "../pubsub";
 
 import {
   wsClients,
@@ -32,19 +34,63 @@ import type {
   WebSocketMessageConnectionResponse,
   WebSocketMessagePong,
   WebSocketMessagePeerConnectionRequest,
+  WebSocketMessageLeaveRoomRequest,
 } from "../utils/interfaces";
 
-const hasExactChallengeResponseKeys = (value: object): boolean => {
-  const allowed = [
-    "type",
-    "fromPeerId",
-    "challenge",
-    "signature",
-    "protocolVersion",
-  ];
+const hasExactKeys = (value: object, allowed: readonly string[]): boolean => {
   const keys = Object.keys(value);
   return (
     keys.length === allowed.length && keys.every((key) => allowed.includes(key))
+  );
+};
+
+export const isExactRoomRequest = (
+  value: unknown,
+): value is WebSocketMessageRoomIdRequest => {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    hasExactKeys(candidate, [
+      "type",
+      "fromPeerId",
+      "roomUrl",
+      "roomRequestId",
+      "protocolVersion",
+    ]) &&
+    candidate.type === "room" &&
+    isProtocolV4(candidate.protocolVersion) &&
+    typeof candidate.fromPeerId === "string" &&
+    isUUID(candidate.fromPeerId) &&
+    typeof candidate.roomUrl === "string" &&
+    /^[0-9a-f]{64}$/.test(candidate.roomUrl) &&
+    typeof candidate.roomRequestId === "string" &&
+    isUUID(candidate.roomRequestId, 4)
+  );
+};
+
+export const isExactLeaveRoomRequest = (
+  value: unknown,
+): value is WebSocketMessageLeaveRoomRequest => {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    hasExactKeys(candidate, [
+      "type",
+      "protocolVersion",
+      "fromPeerId",
+      "roomUrl",
+      "roomLeaveId",
+    ]) &&
+    candidate.type === "leaveRoom" &&
+    isProtocolV4(candidate.protocolVersion) &&
+    typeof candidate.fromPeerId === "string" &&
+    isUUID(candidate.fromPeerId) &&
+    typeof candidate.roomUrl === "string" &&
+    /^[0-9a-f]{64}$/.test(candidate.roomUrl) &&
+    typeof candidate.roomLeaveId === "string" &&
+    isUUID(candidate.roomLeaveId, 4)
   );
 };
 
@@ -56,7 +102,7 @@ const handleMessage = async (
   try {
     const serialized = message.toString();
     if (serialized.length > MAX_SIGNALING_MESSAGE_CHARS)
-      throw new Error("Signaling message exceeds the protocol-v3 limit");
+      throw new Error("Signaling message exceeds the protocol-v4 limit");
 
     const msg:
       | WebSocketMessagePong
@@ -66,12 +112,13 @@ const handleMessage = async (
       | WebSocketMessageCandidateSend
       | WebSocketMessagePeersRequest
       | WebSocketMessageConnectionResponse
-      | WebSocketMessagePeerConnectionRequest = JSON.parse(serialized);
+      | WebSocketMessagePeerConnectionRequest
+      | WebSocketMessageLeaveRoomRequest = JSON.parse(serialized);
 
     if (
       !("fromPeerId" in msg) ||
       msg.fromPeerId !== ws.data.peerId ||
-      (msg.type !== "challenge" && !ws.data.isVerified)
+      (msg.type !== "challenge" && !isCurrentVerifiedSocket(wsClients, ws))
     )
       throw new Error("WebSocket identity is not freshly authenticated");
     if (msg.type !== "pong" && !isProtocolV4(msg.protocolVersion))
@@ -79,15 +126,24 @@ const handleMessage = async (
 
     switch (msg.type) {
       case "pong": {
+        if (!isExactPongMessage(msg))
+          throw new Error("Malformed protocol-v4 pong");
         ws.data.isAlive = true;
         clearTimeout(ws.data.pongTimeout); // Clear the pong timeout
+        ws.data.pongTimeout = undefined;
 
         break;
       }
 
       case "challenge": {
         if (
-          hasExactChallengeResponseKeys(msg) &&
+          hasExactKeys(msg, [
+            "type",
+            "fromPeerId",
+            "challenge",
+            "signature",
+            "protocolVersion",
+          ]) &&
           isProtocolV4(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isHexadecimal(msg.challenge) &&
@@ -102,14 +158,22 @@ const handleMessage = async (
             msg.signature,
           );
           if (authenticated) {
-            if (ws.readyState !== 1 || !registerVerifiedSocket(wsClients, ws))
-              throw new Error(
-                "Verified WebSocket could not enter the client registry",
-              );
             // Record which instance now owns this socket, so the other workers
             // can route signals here instead of dropping them. Awaited: a peer
             // that is routable before it is claimed is a lost signal.
-            await claimPeer(ws.data.peerId);
+            if (
+              !(await activateVerifiedSocket(
+                wsClients,
+                ws,
+                claimPeer,
+                releasePeer,
+              ))
+            )
+              break;
+            // activateVerifiedSocket re-checks exact registry ownership after
+            // claimPeer's await. No await belongs between that fence and these
+            // activation side effects.
+            ws.send(JSON.stringify(authenticated));
             ws.subscribe("global");
             events.open(ws);
           }
@@ -119,16 +183,22 @@ const handleMessage = async (
         break;
       }
 
+      case "leaveRoom": {
+        if (isExactLeaveRoomRequest(msg)) {
+          await handleLeaveRoom(
+            msg.fromPeerId,
+            ws,
+            msg.roomUrl,
+            msg.roomLeaveId,
+          );
+        } else throw new Error("Malformed protocol-v4 room leave");
+        break;
+      }
+
       case "room": {
-        if (
-          msg.type === "room" &&
-          isProtocolV4(msg.protocolVersion) &&
-          isUUID(msg.fromPeerId) &&
-          isHexadecimal(msg.roomUrl) &&
-          msg.roomUrl.length === 64
-        ) {
-          await handleRoom(msg.fromPeerId, ws, msg.roomUrl);
-        } else throw new Error("Malformed protocol-v3 room request");
+        if (isExactRoomRequest(msg)) {
+          await handleRoom(msg.fromPeerId, ws, msg.roomUrl, msg.roomRequestId);
+        } else throw new Error("Malformed protocol-v4 room request");
         break;
       }
 
@@ -147,7 +217,7 @@ const handleMessage = async (
             ws,
           );
         } else
-          throw new Error("Malformed protocol-v3 peer-connection response");
+          throw new Error("Malformed protocol-v4 peer-connection response");
         break;
       }
 
@@ -159,7 +229,7 @@ const handleMessage = async (
           isUUID(msg.roomId)
         ) {
           await handlePeers(msg.fromPeerId, ws, msg.roomId);
-        } else throw new Error("Malformed protocol-v3 peers request");
+        } else throw new Error("Malformed protocol-v4 peers request");
         break;
       }
 
@@ -172,7 +242,7 @@ const handleMessage = async (
           isBoundedCandidate(msg.candidate)
         ) {
           await handleCandidate(ws, msg);
-        } else throw new Error("Malformed protocol-v3 ICE candidate");
+        } else throw new Error("Malformed protocol-v4 ICE candidate");
 
         break;
       }
@@ -186,7 +256,7 @@ const handleMessage = async (
           isBoundedDescription(msg.description)
         ) {
           await handleDescription(ws, msg);
-        } else throw new Error("Malformed protocol-v3 description");
+        } else throw new Error("Malformed protocol-v4 description");
 
         break;
       }
@@ -200,7 +270,7 @@ const handleMessage = async (
           areBoundedLabels(msg.labels)
         ) {
           await handlePeerConnection(ws, msg);
-        } else throw new Error("Malformed protocol-v3 connection request");
+        } else throw new Error("Malformed protocol-v4 connection request");
 
         break;
       }

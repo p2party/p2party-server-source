@@ -29,9 +29,8 @@ vault_coturn_realm: "turn.example.com"
 vault_admin_email: "admin@example.com"
 
 # ---- postgres --------------------------------------------------------------
-# Only used by install-postgres.yml. The signaling server itself now runs on
-# SQLite (prisma/schema.prisma declares provider = "sqlite"), so these are
-# needed only if you deploy the separate Postgres host.
+# Used by install-postgres.yml and by the signaling server's PostgreSQL
+# DATABASE_URL. Keep these values aligned with the deployed database host.
 vault_postgres_user: "p2party"
 vault_postgres_password: "replace-me"
 vault_postgres_db_name: "p2party"

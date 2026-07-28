@@ -5,16 +5,19 @@ import pg from "pg";
 import { postgresConnection } from "./db/ssl";
 import { prisma } from "./prismaClient";
 import { wsClients } from "./wsServer";
+import { isCurrentVerifiedSocket } from "./utils/socketAuth";
+
+import type { P2PartyWSClient } from "./wsServer";
 
 /**
  * Cross-instance signal routing.
  *
- * The deploy runs one signaling process per vCPU behind a round-robin Caddy
- * upstream, and each process holds its own in-memory `wsClients` map. Two peers
- * in the same room therefore land on the same process only by chance — with N
- * workers, a given pair shares a process with probability 1/N. Without the
- * routing below, every other pair's offer, answer and ICE candidates are looked
- * up in the wrong map, miss, and are dropped in silence.
+ * Supported production currently runs one signaling process because
+ * same-identity fencing is process-local. Operators can explicitly opt into
+ * multiple Caddy upstreams, and each process then holds its own in-memory
+ * `wsClients` map. With N workers, a pair shares a process with probability
+ * 1/N. Without the routing below, every other pair's offer, answer and ICE
+ * candidates are looked up in the wrong map, miss, and are dropped in silence.
  *
  * So each process claims a `SERVER_ID`, records it on every peer row it holds a
  * socket for, and delivers to peers it does not hold by writing a PendingSignal
@@ -36,7 +39,35 @@ const STALE_SIGNAL_MS = 5 * 60 * 1000;
 let listenClient: pg.Client | undefined;
 let safetyPoll: ReturnType<typeof setInterval> | undefined;
 
-/** Deliver everything addressed to this process, then forget it. */
+interface PendingSignalFrame {
+  id: string;
+  targetPeerId: string;
+  payload: string;
+}
+
+export const deliverPendingSignalsLocally = (
+  signals: readonly PendingSignalFrame[],
+  clients: Map<string, P2PartyWSClient> = wsClients,
+): string[] => {
+  const settled: string[] = [];
+  for (const signal of signals) {
+    const target = clients.get(signal.targetPeerId);
+    if (!target) {
+      // This process no longer has the addressed socket; the row cannot become
+      // deliverable here and must not replay forever.
+      settled.push(signal.id);
+      continue;
+    }
+    // A cryptographically verified socket is inserted before its routing
+    // claim completes. Retain the row until activation rather than disclose
+    // SDP/ICE early or delete the only queued copy.
+    if (!isCurrentVerifiedSocket(clients, target)) continue;
+    if (target.send(signal.payload) !== 0) settled.push(signal.id);
+  }
+  return settled;
+};
+
+/** Deliver active targets, discard stale targets, retain claim-pending rows. */
 const drainPendingSignals = async (): Promise<void> => {
   try {
     const signals = await prisma.pendingSignal.findMany({
@@ -45,13 +76,7 @@ const drainPendingSignals = async (): Promise<void> => {
     });
     if (signals.length === 0) return;
 
-    // Delete whether or not the socket was still there: a signal for a peer who
-    // has since disconnected is stale, and leaving it would replay forever.
-    const delivered: string[] = [];
-    for (const signal of signals) {
-      wsClients.get(signal.targetPeerId)?.send(signal.payload);
-      delivered.push(signal.id);
-    }
+    const delivered = deliverPendingSignalsLocally(signals);
     await prisma.pendingSignal.deleteMany({
       where: { id: { in: delivered } },
     });
@@ -178,8 +203,11 @@ export const sendToPeer = async (
 ): Promise<boolean> => {
   const local = wsClients.get(toPeerId);
   if (local) {
-    local.send(payload);
-    return true;
+    if (isCurrentVerifiedSocket(wsClients, local)) {
+      local.send(payload);
+      return true;
+    }
+    return false;
   }
 
   // Deliberately never throws. Callers are signalling handlers whose own catch
@@ -220,15 +248,23 @@ export const sendToPeer = async (
   }
 };
 
-/** Record that this process now holds the socket for `peerId`. */
-export const claimPeer = async (peerId: string): Promise<void> => {
+/**
+ * Record that this process now holds the socket for `peerId`.
+ *
+ * The caller must fail the socket closed when this returns false. Treating a
+ * failed write as success would activate a socket that sibling instances
+ * cannot route to.
+ */
+export const claimPeer = async (peerId: string): Promise<boolean> => {
   try {
     await prisma.peer.update({
       where: { id: peerId },
       data: { serverId: SERVER_ID },
     });
+    return true;
   } catch (error) {
     console.error("p2party: failed to claim peer", peerId, error);
+    return false;
   }
 };
 

@@ -5,6 +5,7 @@ import type { ProcessPrismaClient } from "../prismaClient";
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
+import { isCurrentVerifiedSocket } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -14,13 +15,24 @@ import type {
 } from "../utils/interfaces";
 
 type HandlePeersPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
+type SendToPeer = typeof sendToPeer;
+
+interface HandlePeersDependencies {
+  clients?: Map<string, P2PartyWSClient>;
+  sendToPeer?: SendToPeer;
+}
 
 const handlePeersWithClient = async (
   prisma: HandlePeersPrisma,
+  clients: Map<string, P2PartyWSClient>,
+  send: SendToPeer,
   fromPeerId: string,
   ws: P2PartyWSClient,
   roomId: string,
 ) => {
+  const isCurrentRequester = () =>
+    ws.data.peerId === fromPeerId && isCurrentVerifiedSocket(clients, ws);
+
   try {
     let fromPeerPublicKey = "";
     try {
@@ -28,12 +40,8 @@ const handlePeersWithClient = async (
         where: { id: fromPeerId },
       });
 
-      if (
-        !fromPeer ||
-        !ws.data.isVerified ||
-        ws.data.peerId !== fromPeerId ||
-        fromPeer.publicKey !== ws.data.publicKey
-      ) {
+      if (!isCurrentRequester()) return;
+      if (!fromPeer || fromPeer.publicKey !== ws.data.publicKey) {
         ws.send(
           JSON.stringify({
             type: "error",
@@ -49,6 +57,7 @@ const handlePeersWithClient = async (
         return;
       } else fromPeerPublicKey = fromPeer.publicKey;
     } catch (error) {
+      if (!isCurrentRequester()) return;
       ws.send(
         JSON.stringify({
           type: "error",
@@ -81,9 +90,11 @@ const handlePeersWithClient = async (
       // const peers: { id: string; publicKey: string }[] = [];
       if (!room?.peers.some((peer) => peer.id === fromPeerId))
         throw new Error("Requesting peer is not a member of this room");
+      if (!isCurrentRequester()) return;
 
       const len = room?.peers.length ?? 0;
       for (let i = 0; i < len; i++) {
+        if (!isCurrentRequester()) return;
         if (room && room.peers[i] && room.peers[i].id !== fromPeerId) {
           const peer = room.peers[i];
           const introduction = JSON.stringify({
@@ -92,21 +103,21 @@ const handlePeersWithClient = async (
             peer: { id: fromPeerId, publicKey: fromPeerPublicKey },
             protocolVersion: PROTOCOL_VERSION,
           } as WebSocketMessageConnectionRequest);
-          const peerWsClient = wsClients.get(peer.id);
+          const peerWsClient = clients.get(peer.id);
 
           if (peerWsClient) {
             if (
+              isCurrentRequester() &&
               peerWsClient.data.isAlive &&
-              peerWsClient.data.isVerified &&
-              peerWsClient.data.peerId === peer.id &&
+              isCurrentVerifiedSocket(clients, peerWsClient) &&
               peerWsClient.data.publicKey === peer.publicKey
             )
               peerWsClient.send(introduction);
           } else {
             // This is the introduction that makes an existing room member dial
-            // the joiner. With one worker per vCPU behind a round-robin
-            // upstream, most room members are on another worker.
-            await sendToPeer(peer.id, introduction);
+            // the joiner when an operator explicitly enables multiple workers.
+            if (!isCurrentRequester()) return;
+            await send(peer.id, introduction);
           }
         }
       }
@@ -121,6 +132,7 @@ const handlePeersWithClient = async (
 
       return;
     } catch (error) {
+      if (!isCurrentRequester()) return;
       ws.send(
         JSON.stringify({
           type: "error",
@@ -139,6 +151,7 @@ const handlePeersWithClient = async (
       return;
     }
   } catch (error) {
+    if (!isCurrentRequester()) return;
     ws.send(
       JSON.stringify({
         type: "error",
@@ -154,9 +167,16 @@ const handlePeersWithClient = async (
 };
 
 export const createHandlePeers =
-  (prisma: HandlePeersPrisma) =>
+  (prisma: HandlePeersPrisma, dependencies: HandlePeersDependencies = {}) =>
   (fromPeerId: string, ws: P2PartyWSClient, roomId: string) =>
-    handlePeersWithClient(prisma, fromPeerId, ws, roomId);
+    handlePeersWithClient(
+      prisma,
+      dependencies.clients ?? wsClients,
+      dependencies.sendToPeer ?? sendToPeer,
+      fromPeerId,
+      ws,
+      roomId,
+    );
 
 const handlePeers = createHandlePeers(sharedPrisma);
 

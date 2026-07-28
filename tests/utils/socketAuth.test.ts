@@ -1,18 +1,22 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  activateVerifiedSocket,
   consumeSocketChallenge,
   createFreshSocketChallenge,
   createTurnCredentials,
+  isCurrentProofOwnerSocket,
+  isCurrentVerifiedSocket,
   parseTurnUrls,
   isSocketChallengeBound,
   registerVerifiedSocket,
+  TURN_CREDENTIAL_CONTRACT,
   unregisterSocketIfCurrent,
 } from "../../src/utils/socketAuth";
 import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
 
 import type {
-  SocketAuthClient,
+  ReplaceableSocketAuthClient,
   SocketAuthState,
 } from "../../src/utils/socketAuth";
 
@@ -26,6 +30,17 @@ const state = (): SocketAuthState => ({
   challengeId: "",
   isVerified: false,
   isAuthenticating: false,
+});
+
+const replaceableSocket = (): ReplaceableSocketAuthClient & {
+  closeCalls: number;
+} => ({
+  data: state(),
+  readyState: 1,
+  closeCalls: 0,
+  close() {
+    this.closeCalls += 1;
+  },
 });
 
 describe("fresh per-WebSocket authentication state", () => {
@@ -75,10 +90,10 @@ describe("fresh per-WebSocket authentication state", () => {
 });
 
 describe("verified socket registry", () => {
-  test("registers only verified sockets and stale close cannot evict a replacement", () => {
-    const clients = new Map<string, SocketAuthClient>();
-    const oldSocket = { data: state() };
-    const replacement = { data: state() };
+  test("synchronously deauthorizes and closes a replaced same-instance socket", () => {
+    const clients = new Map<string, ReplaceableSocketAuthClient>();
+    const oldSocket = replaceableSocket();
+    const replacement = replaceableSocket();
     oldSocket.data.peerId = PEER_ID;
     oldSocket.data.publicKey = "ab".repeat(32);
     replacement.data.peerId = PEER_ID;
@@ -88,10 +103,132 @@ describe("verified socket registry", () => {
     oldSocket.data.isVerified = true;
     replacement.data.isVerified = true;
     expect(registerVerifiedSocket(clients, oldSocket)).toBe(true);
+    expect(isCurrentVerifiedSocket(clients, oldSocket)).toBe(true);
     expect(registerVerifiedSocket(clients, replacement)).toBe(true);
+    expect(oldSocket.data.isVerified).toBe(false);
+    expect(oldSocket.closeCalls).toBe(1);
+    expect(isCurrentVerifiedSocket(clients, oldSocket)).toBe(false);
+    expect(isCurrentVerifiedSocket(clients, replacement)).toBe(true);
     expect(unregisterSocketIfCurrent(clients, oldSocket)).toBe(false);
     expect(clients.get(PEER_ID)).toBe(replacement);
     expect(unregisterSocketIfCurrent(clients, replacement)).toBe(true);
+    expect(clients.has(PEER_ID)).toBe(false);
+  });
+
+  test("a failed routing claim closes and removes the unrouteable socket", async () => {
+    const clients = new Map<string, ReplaceableSocketAuthClient>();
+    const socket = replaceableSocket();
+    socket.data.peerId = PEER_ID;
+    socket.data.publicKey = "ab".repeat(32);
+    socket.data.isVerified = true;
+    const releases: string[] = [];
+
+    expect(
+      await activateVerifiedSocket(
+        clients,
+        socket,
+        async () => false,
+        async (peerId) => {
+          releases.push(peerId);
+        },
+      ),
+    ).toBe(false);
+    expect(socket.data.isVerified).toBe(false);
+    expect(socket.data.isAuthenticating).toBe(false);
+    expect(socket.closeCalls).toBe(1);
+    expect(clients.has(PEER_ID)).toBe(false);
+    expect(releases).toEqual([PEER_ID]);
+  });
+
+  test("claim completion cannot activate a socket replaced during the await", async () => {
+    const clients = new Map<string, ReplaceableSocketAuthClient>();
+    const displaced = replaceableSocket();
+    const replacement = replaceableSocket();
+    for (const socket of [displaced, replacement]) {
+      socket.data.peerId = PEER_ID;
+      socket.data.publicKey = "ab".repeat(32);
+      socket.data.isVerified = true;
+    }
+    let resolveClaim!: (claimed: boolean) => void;
+    const claim = new Promise<boolean>((resolve) => {
+      resolveClaim = resolve;
+    });
+    const releases: string[] = [];
+
+    const activation = activateVerifiedSocket(
+      clients,
+      displaced,
+      async () => claim,
+      async (peerId) => {
+        releases.push(peerId);
+      },
+    );
+    expect(clients.get(PEER_ID)).toBe(displaced);
+    expect(displaced.data.isAuthenticating).toBe(true);
+    expect(isCurrentProofOwnerSocket(clients, displaced)).toBe(true);
+    expect(isCurrentVerifiedSocket(clients, displaced)).toBe(false);
+
+    expect(registerVerifiedSocket(clients, replacement)).toBe(true);
+    expect(displaced.data.isVerified).toBe(false);
+    resolveClaim(true);
+
+    expect(await activation).toBe(false);
+    expect(displaced.closeCalls).toBe(2);
+    expect(isCurrentVerifiedSocket(clients, replacement)).toBe(true);
+    // The successor owns the same process claim; displaced cleanup must not
+    // release it.
+    expect(releases).toEqual([]);
+  });
+
+  test("only a successful exact-owner claim completes activation", async () => {
+    const clients = new Map<string, ReplaceableSocketAuthClient>();
+    const socket = replaceableSocket();
+    socket.data.peerId = PEER_ID;
+    socket.data.publicKey = "ab".repeat(32);
+    socket.data.isVerified = true;
+
+    expect(
+      await activateVerifiedSocket(
+        clients,
+        socket,
+        async () => true,
+        async () => {
+          throw new Error("successful activation must not release its claim");
+        },
+      ),
+    ).toBe(true);
+    expect(socket.data.isAuthenticating).toBe(false);
+    expect(isCurrentVerifiedSocket(clients, socket)).toBe(true);
+    expect(socket.closeCalls).toBe(0);
+  });
+
+  test("a late successful claim is released when close cleanup already removed the socket", async () => {
+    const clients = new Map<string, ReplaceableSocketAuthClient>();
+    const socket = replaceableSocket();
+    socket.data.peerId = PEER_ID;
+    socket.data.publicKey = "ab".repeat(32);
+    socket.data.isVerified = true;
+    let resolveClaim!: (claimed: boolean) => void;
+    const claim = new Promise<boolean>((resolve) => {
+      resolveClaim = resolve;
+    });
+    const releases: string[] = [];
+
+    const activation = activateVerifiedSocket(
+      clients,
+      socket,
+      async () => claim,
+      async (peerId) => {
+        releases.push(peerId);
+      },
+    );
+    // Models the WebSocket close callback winning the race with claimPeer.
+    clients.delete(PEER_ID);
+    socket.readyState = 3;
+    resolveClaim(true);
+
+    expect(await activation).toBe(false);
+    expect(releases).toEqual([PEER_ID]);
     expect(clients.has(PEER_ID)).toBe(false);
   });
 });
@@ -114,6 +251,7 @@ describe("TURN REST credentials", () => {
       urls: ["turns:turn.example.com:443?transport=tcp"],
       username: `3601:${"ab".repeat(32)}`,
       credential: "XY6V5LzRrbIFUOH5w0qdZ90iYuQ=",
+      expiresAtUnixSeconds: 3601,
     });
   });
 
@@ -140,6 +278,91 @@ describe("TURN REST credentials", () => {
     ).toEqual([]);
     expect(parseTurnUrls(undefined)).toEqual([]);
     expect(parseTurnUrls("")).toEqual([]);
+  });
+
+  test("deduplicates and caps relay URLs at the SDK wire boundary", () => {
+    const maximumLengthUrl = `turn:${"a".repeat(
+      TURN_CREDENTIAL_CONTRACT.maxUrlChars - "turn:".length,
+    )}`;
+    const urls = Array.from(
+      { length: TURN_CREDENTIAL_CONTRACT.maxUrls + 2 },
+      (_, index) => `turn:turn-${String(index)}.example.com:3478`,
+    );
+
+    expect(parseTurnUrls(`${maximumLengthUrl},${maximumLengthUrl}a`)).toEqual([
+      maximumLengthUrl,
+    ]);
+    expect(
+      parseTurnUrls(
+        [
+          urls[0],
+          urls[0],
+          `turn:${"a".repeat(TURN_CREDENTIAL_CONTRACT.maxUrlChars)}`,
+          ...urls,
+        ].join(","),
+      ),
+    ).toEqual(urls.slice(0, TURN_CREDENTIAL_CONTRACT.maxUrls));
+  });
+
+  test("normalizes explicit URLs before issuing an SDK-compatible bundle", () => {
+    const publicKey = "ab".repeat(32);
+    const urls = Array.from(
+      { length: TURN_CREDENTIAL_CONTRACT.maxUrls + 2 },
+      (_, index) => `turn:turn-${String(index)}.example.com:3478`,
+    );
+    const credentials = createTurnCredentials(
+      publicKey,
+      "s".repeat(32),
+      1_000,
+      [
+        ` ${urls[0]} `,
+        urls[0],
+        `turn:${"a".repeat(TURN_CREDENTIAL_CONTRACT.maxUrlChars)}`,
+        "https://not-a-turn-server.example.com",
+        ...urls,
+      ],
+    );
+
+    expect(credentials).toBeDefined();
+    expect(credentials!.urls).toEqual(
+      urls.slice(0, TURN_CREDENTIAL_CONTRACT.maxUrls),
+    );
+    expect(credentials!.urls.length).toBeGreaterThan(0);
+    expect(credentials!.urls.length).toBeLessThanOrEqual(
+      TURN_CREDENTIAL_CONTRACT.maxUrls,
+    );
+    expect(new Set(credentials!.urls).size).toBe(credentials!.urls.length);
+    expect(
+      credentials!.urls.every(
+        (url) =>
+          url.length <= TURN_CREDENTIAL_CONTRACT.maxUrlChars &&
+          /^turns?:[^\s]+$/u.test(url),
+      ),
+    ).toBe(true);
+    expect(credentials!.username).toBe(
+      `${String(credentials!.expiresAtUnixSeconds)}:${publicKey}`,
+    );
+    expect(credentials!.username.length).toBeLessThanOrEqual(
+      TURN_CREDENTIAL_CONTRACT.maxCredentialChars,
+    );
+    expect(credentials!.credential.length).toBeGreaterThan(0);
+    expect(credentials!.credential.length).toBeLessThanOrEqual(
+      TURN_CREDENTIAL_CONTRACT.maxCredentialChars,
+    );
+    expect(credentials!.expiresAtUnixSeconds).toBe(3601);
+  });
+
+  test("rejects identities and times that cannot satisfy the SDK contract", () => {
+    expect(() =>
+      createTurnCredentials("AB".repeat(32), "s".repeat(32), 1_000, [
+        "turn:turn.example.com:3478",
+      ]),
+    ).toThrow("not canonical");
+    expect(() =>
+      createTurnCredentials("ab".repeat(32), "s".repeat(32), Number.NaN, [
+        "turn:turn.example.com:3478",
+      ]),
+    ).toThrow("timestamp");
   });
 
   test("rejects a weak configured secret instead of silently issuing credentials", () => {

@@ -107,7 +107,7 @@
         group: root
         mode: "0644"
       vars:
-        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_facts['processor_vcpus'] | default(1) | int)) | list) }}"
+        signaling_instance_ports: "{{ signaling_ports | default([app_port]) }}"
       notify: Reload Caddy
 
     - name: Enable Caddy
@@ -155,13 +155,14 @@
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
         mode: "0600"
+      diff: false
 
     # Dependencies, Prisma client, and migrations handled by deploy.yml
     # Using compiled binary deployment - no npm install needed
 
-    - name: Compute signaling instance ports from available vCPUs
+    - name: Resolve the desired signaling instance ports
       set_fact:
-        signaling_instance_ports: "{{ signaling_ports | default(range(app_port | int, (app_port | int) + (ansible_facts['processor_vcpus'] | default(1) | int)) | list) }}"
+        signaling_instance_ports: "{{ signaling_ports | default([app_port]) }}"
 
     # ========================================================================
     # Systemd Service

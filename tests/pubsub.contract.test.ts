@@ -4,13 +4,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * The deploy runs one signaling process per vCPU behind a round-robin Caddy
- * upstream (deploy.yml derives the port list from ansible_processor_vcpus).
- * Each process keeps its own in-memory wsClients map, so a peer pair shares a
- * process only with probability 1/N. Any delivery site that resolves a target
- * socket and does NOT fall back to cross-instance routing silently drops the
- * signal for most pairs — and silently is the operative word: nothing logs, the
- * room simply never forms.
+ * Supported production runs one signaling process while distributed
+ * same-identity fencing remains a nonclaim. Multi-worker routing is retained as
+ * an explicit experimental operator opt-in. In that topology each process
+ * keeps its own in-memory wsClients map, so a peer pair shares a process only
+ * with probability 1/N. Any delivery site that resolves a target socket and
+ * does NOT fall back to cross-instance routing silently drops the signal for
+ * most pairs — and silently is the operative word: nothing logs, the room
+ * simply never forms.
  *
  * These tests are structural on purpose. Exercising the real path needs a live
  * Postgres with LISTEN/NOTIFY, which unit tests must not require; what they can
@@ -27,6 +28,7 @@ const handlerFiles = readdirSync(utilsDir)
   .map((f) => ({ name: f, source: readFileSync(join(utilsDir, f), "utf8") }));
 
 const pubsub = readFileSync(join(srcRoot, "pubsub.ts"), "utf8");
+const socketAuth = readFileSync(join(utilsDir, "socketAuth.ts"), "utf8");
 
 describe("cross-instance signal routing", () => {
   test("every handler that resolves a socket also routes remotely", () => {
@@ -55,9 +57,18 @@ describe("cross-instance signal routing", () => {
       join(utilsDir, "handleMessage.ts"),
       "utf8",
     );
+    const authenticated = handleMessage.indexOf("if (authenticated)");
+    const activation = handleMessage.indexOf("activateVerifiedSocket(");
+    expect(authenticated).toBeGreaterThan(-1);
+    expect(activation).toBeGreaterThan(authenticated);
+
     // registerVerifiedSocket is the gate: it returns false unless isVerified.
-    const gate = handleMessage.indexOf("registerVerifiedSocket(wsClients, ws)");
-    const claim = handleMessage.indexOf("claimPeer(");
+    const body =
+      /export const activateVerifiedSocket[\s\S]*?\n\};/.exec(
+        socketAuth,
+      )?.[0] ?? "";
+    const gate = body.indexOf("registerVerifiedSocket(clients, ws)");
+    const claim = body.indexOf("claimPeer(ws.data.peerId)");
     expect(gate).toBeGreaterThan(-1);
     expect(claim).toBeGreaterThan(gate);
   });

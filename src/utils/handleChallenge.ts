@@ -52,7 +52,7 @@ const handleChallenge = async (
   challenge: string,
   signature: string,
   options: ChallengeVerificationOptions = {},
-): Promise<boolean> => {
+): Promise<WebSocketMessageSuccessfulChallenge | false> => {
   if (!isSocketChallengeBound(ws.data, fromPeerId, challenge))
     return rejectAuthentication(
       ws,
@@ -74,16 +74,11 @@ const handleChallenge = async (
         "Challenge response signature cannot be verified",
       );
 
-    const challengeId = consumeSocketChallenge(ws.data);
-    ws.send(
-      JSON.stringify({
-        type: "challenge",
-        challengeId,
-        protocolVersion: PROTOCOL_VERSION,
-      } satisfies WebSocketMessageSuccessfulChallenge),
-    );
-
-    return true;
+    return {
+      type: "challenge",
+      challengeId: consumeSocketChallenge(ws.data),
+      protocolVersion: PROTOCOL_VERSION,
+    } satisfies WebSocketMessageSuccessfulChallenge;
   } catch (error) {
     ws.data.isAuthenticating = false;
     return rejectAuthentication(

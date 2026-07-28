@@ -3,6 +3,11 @@ import { isUUID } from "class-validator";
 import handleConnection from "./utils/handleConnection";
 import handleMessage from "./utils/handleMessage";
 import handleInterval from "./utils/handleInterval";
+import {
+  closeSocketMessageQueue,
+  type SocketMessage,
+} from "./utils/socketMessageQueue";
+import { handleSocketMessageIngress } from "./utils/socketMessageIngress";
 import { unregisterSocketIfCurrent } from "./utils/socketAuth";
 import { releasePeer, SERVER_ID } from "./pubsub";
 import { PROTOCOL_VERSION } from "./utils/protocolV4";
@@ -11,12 +16,16 @@ import { SERVER_VERSION } from "./version";
 import type { Server, ServerWebSocket } from "bun";
 import type { SocketAuthState } from "./utils/socketAuth";
 
-export type P2PartyWSMsg = string | ArrayBufferView;
+export type P2PartyWSMsg = SocketMessage;
 
 export interface P2PartyWSData extends SocketAuthState {
   isAlive: boolean;
   pingInterval?: Timer;
   pongTimeout?: Timer;
+  messageQueue?: P2PartyWSMsg[];
+  messageQueueBytes?: number;
+  messageDrain?: Promise<void>;
+  messageQueueClosed?: boolean;
 }
 
 /** ServerWebSocket with server-bound identity and authentication state. */
@@ -53,11 +62,16 @@ export class P2PartyWS {
           }
         },
 
-        message: async (ws: P2PartyWSClient, message: P2PartyWSMsg) => {
-          await handleMessage(ws, message, events);
-        },
+        message: (ws: P2PartyWSClient, message: P2PartyWSMsg) =>
+          handleSocketMessageIngress(
+            wsClients,
+            ws,
+            message,
+            handleMessageWithEvents,
+          ),
 
         close: async (ws: P2PartyWSClient, _code: number, _message: string) => {
+          closeSocketMessageQueue(ws);
           ws.unsubscribe("global");
           if (ws.data.pongTimeout) clearTimeout(ws.data.pongTimeout);
           if (ws.data.pingInterval) clearInterval(ws.data.pingInterval);
@@ -134,6 +148,13 @@ export class P2PartyWS {
       },
       port,
     });
+
+    function handleMessageWithEvents(
+      ws: P2PartyWSClient,
+      message: P2PartyWSMsg,
+    ) {
+      return handleMessage(ws, message, events);
+    }
   }
   /** Publishes a message to all connected clients */
   publish(msg: P2PartyWSMsg, compress?: boolean): number {

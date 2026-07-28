@@ -36,6 +36,12 @@
     # every deploy. Pinned to the version this repo tests against: an unpinned
     # fetch would silently adopt a new major and run migrations differently.
     prisma_version: "7.9.0"
+    # Read the same package.json that bun build embeds through src/version.ts.
+    # A skip-build deploy of an older binary therefore fails the health gate
+    # instead of silently announcing a version different from the source tree.
+    expected_server_version: >-
+      {{ (lookup('ansible.builtin.file', repo_path ~ '/package.json')
+          | from_json).version }}
 
   tasks:
     # ------------------------------------------------------------------
@@ -71,13 +77,11 @@
           {{ binary_name }} not found in {{ repo_path }}. Run
           `{{ build_command }}` first, or drop skip_build.
 
-    - name: Compute signaling instance ports from available vCPUs
+    - name: Resolve the desired signaling instance ports
       set_fact:
         signaling_instance_ports: >-
           {{ signaling_ports
-             | default(range(app_port | int,
-                             (app_port | int) + (ansible_facts['processor_vcpus'] | default(1) | int))
-                       | list) }}
+             | default([app_port]) }}
 
     # ------------------------------------------------------------------
     # Ship the binary
@@ -109,6 +113,9 @@
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
         mode: "0600"
+      # The rendered file contains both database and TURN credentials. Keep an
+      # operator's --diff from copying either secret into the Ansible log.
+      diff: false
 
     # Same reasoning for the unit files. PORT is set here, per instance, and a
     # deploy that ships a new binary against stale units cannot fix an ordering
@@ -199,12 +206,51 @@
           when: migration_result is defined
 
     # ------------------------------------------------------------------
-    # Restart and verify
+    # Cut public routing over, restart, and verify
     # ------------------------------------------------------------------
+    # Caddy must consume the exact same desired-port fact as the unit and health
+    # tasks. Narrow routing before the restart so a breaking wire release cannot
+    # alternate between an obsolete worker and the new one. With the supported
+    # single-worker production topology this intentionally accepts a brief
+    # restart window.
+    - name: Render the candidate Caddy configuration
+      template:
+        src: "{{ playbook_dir }}/../templates/Caddyfile.j2"
+        dest: /etc/caddy/Caddyfile.p2party-candidate
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Validate the candidate Caddy configuration
+      command:
+        argv:
+          - caddy
+          - validate
+          - --config
+          - /etc/caddy/Caddyfile.p2party-candidate
+          - --adapter
+          - caddyfile
+      changed_when: false
+
+    - name: Atomically install the validated Caddy configuration
+      command:
+        argv:
+          - mv
+          - -f
+          - --
+          - /etc/caddy/Caddyfile.p2party-candidate
+          - /etc/caddy/Caddyfile
+
+    - name: Reload Caddy onto the desired signaling ports
+      systemd:
+        name: caddy
+        state: reloaded
+
     - name: Restart signaling services
       systemd:
         name: "p2party-signaling-{{ item }}"
         state: restarted
+        enabled: true
         daemon_reload: true
       loop: "{{ signaling_instance_ports }}"
       loop_control:
@@ -245,31 +291,132 @@
 
               {{ signaling_failure.stdout | default('no output captured') }}
 
-    # A deploy that restarts cleanly but speaks the wrong protocol version is
-    # the failure mode that matters here: v4 clients fail closed against a v3
-    # server. Prove the running binary announces 4 before declaring success.
-    - name: Verify the running server announces protocol version 4
-      become_user: "{{ app.user }}"
-      shell: |
-        set -o pipefail
-        printf '' | timeout 5 bash -c '
-          exec 3<>/dev/tcp/127.0.0.1/{{ signaling_instance_ports | first }}
-          printf "GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n" >&3
-          head -c 200 <&3
-        '
-      args:
-        executable: /bin/bash
-      register: upgrade_probe
-      changed_when: false
-      failed_when: false
+    # Probe every direct worker rather than sampling through Caddy. A mixed
+    # rollout is unsafe for clients that require room request correlation, and
+    # a TCP accept alone cannot distinguish the new binary from the old one.
+    - name: Read health from every signaling instance
+      uri:
+        url: "http://127.0.0.1:{{ item }}/health"
+        method: GET
+        return_content: true
+        status_code: 200
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+      register: signaling_health
 
-    - name: Report the handshake probe
-      debug:
-        msg: >-
-          Signaling responded: {{ (upgrade_probe.stdout | default('')) | truncate(80) }}
-          — confirm protocolVersion 4 with a real client before switching
-          traffic over.
+    - name: Verify every signaling instance reports the expected build
+      assert:
+        that:
+          - item.json.status == "ok"
+          - item.json.protocolVersion == 4
+          - item.json.version == expected_server_version
+          - item.json.serverId is string
+          - (item.json.serverId | trim | length) > 0
+        fail_msg: >-
+          Signaling port {{ item.item }} reported an unexpected health payload:
+          {{ item.content | default('no response body') }}
+      loop: "{{ signaling_health.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Collect signaling instance identifiers
+      set_fact:
+        signaling_server_ids: >-
+          {{ signaling_health.results
+             | map(attribute='json.serverId')
+             | list }}
+
+    - name: Verify every signaling port belongs to a distinct process
+      assert:
+        that:
+          - >-
+            (signaling_server_ids | unique | length)
+            == (signaling_instance_ports | length)
+        fail_msg: >-
+          Expected {{ signaling_instance_ports | length }} distinct signaling
+          processes but received server ids {{ signaling_server_ids }}.
+
+    # Caddy no longer routes new requests to obsolete ports. Retire their units
+    # only after every desired process has passed the exact direct health gate,
+    # leaving one ordering for both a scale-down and an ordinary release.
+    - name: Build the desired signaling unit path list
+      set_fact:
+        desired_signaling_unit_paths: >-
+          {{ signaling_instance_ports
+             | map('string')
+             | map('regex_replace', '^', '/etc/systemd/system/p2party-signaling-')
+             | map('regex_replace', '$', '.service')
+             | list }}
+      changed_when: false
+
+    - name: Discover installed signaling unit files
+      find:
+        paths: /etc/systemd/system
+        # The exact base name is the legacy cloud-init unit. Include it
+        # explicitly: the hyphenated pattern alone does not match it.
+        patterns:
+          - "p2party-signaling.service"
+          - "p2party-signaling-*.service"
+        file_type: file
+        recurse: false
+      register: installed_signaling_units
+
+    - name: Resolve obsolete signaling unit files
+      set_fact:
+        obsolete_signaling_unit_paths: >-
+          {{ installed_signaling_units.files
+             | map(attribute='path')
+             | difference(desired_signaling_unit_paths)
+             | list }}
+      changed_when: false
+
+    - name: Stop and disable obsolete signaling services
+      systemd:
+        name: "{{ item | basename }}"
+        state: stopped
+        enabled: false
+      loop: "{{ obsolete_signaling_unit_paths }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Remove obsolete signaling unit files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ obsolete_signaling_unit_paths }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Reload systemd after retiring obsolete signaling services
+      systemd:
+        daemon_reload: true
+      when: (obsolete_signaling_unit_paths | length) > 0
+
+    - name: Read public signaling health through Caddy
+      uri:
+        url: "https://{{ domains.signaling }}/health"
+        method: GET
+        return_content: true
+        status_code: 200
+        use_proxy: false
+        validate_certs: true
+      register: public_signaling_health
+
+    - name: Verify Caddy exposes only the expected signaling build
+      assert:
+        that:
+          - public_signaling_health.json.status == "ok"
+          - public_signaling_health.json.protocolVersion == 4
+          - public_signaling_health.json.version == expected_server_version
+          - public_signaling_health.json.serverId in signaling_server_ids
+        fail_msg: >-
+          Public signaling health reported an unexpected payload after cutover:
+          {{ public_signaling_health.content | default('no response body') }}
 
     - name: Deployment complete
       debug:
-        msg: "p2party signaling server deployed to {{ inventory_hostname }}"
+        msg: >-
+          p2party signaling server {{ expected_server_version }} deployed to
+          {{ inventory_hostname }} on {{ signaling_instance_ports | length }}
+          verified workers

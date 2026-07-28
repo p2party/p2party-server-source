@@ -5,6 +5,11 @@
 deployment_environment: production
 env_name: prod
 
+# One process is the production correctness boundary until cross-worker
+# same-identity session and room-mutation fencing are implemented. The server's
+# LISTEN/NOTIFY multi-worker path remains available as an explicit opt-in.
+signaling_ports: [3001]
+
 app:
   user: p2party
   group: p2party
@@ -35,9 +40,9 @@ database:
   ssl_mode: require
   # Server-side ceiling, set by install-postgres.yml.
   max_connections: 100
-  # Per-Prisma-instance pool. signaling runs one instance per vCPU, so keep
-  # (instances x connection_limit) comfortably under max_connections above or a
-  # restart storm exhausts the server's slots.
+  # Per-Prisma-instance pool. Keep (explicit signaling_ports x connection_limit)
+  # comfortably under max_connections above when experimentally opting into
+  # multiple workers, or a restart storm can exhaust the server's slots.
   connection_limit: 10
 
 logging:

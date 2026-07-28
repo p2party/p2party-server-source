@@ -7,6 +7,7 @@ import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const ROOM_ID = "00000000-0000-4000-8000-000000000001";
 const ROOM_TOKEN = "cc".repeat(32);
+const ROOM_REQUEST_ID = "00000000-0000-4000-8000-000000000099";
 const PEERS = [
   {
     id: "00000000-0000-4000-8000-000000000002",
@@ -48,9 +49,7 @@ describe("concurrent room joins", () => {
           return peer
             ? {
                 ...peer,
-                createdAt: new Date(0),
-                updatedAt: new Date(0),
-                lastPing: 0n,
+                rooms: [],
               }
             : null;
         },
@@ -93,10 +92,15 @@ describe("concurrent room joins", () => {
       },
     } as unknown as Parameters<typeof createHandleRoom>[0];
 
-    const responses: Array<{ type: string; roomId?: string }> = [];
+    const responses: Array<{
+      type: string;
+      roomId?: string;
+      roomRequestId?: string;
+    }> = [];
     const terminated: string[] = [];
-    const socket = (peer: (typeof PEERS)[number]) =>
-      ({
+    const clients = new Map<string, P2PartyWSClient>();
+    const socket = (peer: (typeof PEERS)[number]) => {
+      const ws = {
         data: {
           peerId: peer.id,
           publicKey: peer.publicKey,
@@ -106,17 +110,23 @@ describe("concurrent room joins", () => {
           isAuthenticating: false,
           isAlive: true,
         } satisfies P2PartyWSData,
+        readyState: 1,
         send: (serialized: string) => {
           responses.push(JSON.parse(serialized));
         },
         terminate: () => {
           terminated.push(peer.id);
         },
-      }) as unknown as P2PartyWSClient;
+      } as unknown as P2PartyWSClient;
+      clients.set(peer.id, ws);
+      return ws;
+    };
 
-    const handleRoom = createHandleRoom(database);
+    const handleRoom = createHandleRoom(database, clients);
     await Promise.all(
-      PEERS.map((peer) => handleRoom(peer.id, socket(peer), ROOM_TOKEN)),
+      PEERS.map((peer) =>
+        handleRoom(peer.id, socket(peer), ROOM_TOKEN, ROOM_REQUEST_ID),
+      ),
     );
 
     expect(terminated).toEqual([]);
@@ -126,6 +136,11 @@ describe("concurrent room joins", () => {
         .filter(({ type }) => type === "roomId")
         .map(({ roomId }) => roomId),
     ).toEqual([ROOM_ID, ROOM_ID, ROOM_ID]);
+    expect(
+      responses
+        .filter(({ type }) => type === "roomId")
+        .every(({ roomRequestId }) => roomRequestId === ROOM_REQUEST_ID),
+    ).toBe(true);
     expect(room?.peers.map(({ id }) => id).sort()).toEqual(
       PEERS.map(({ id }) => id).sort(),
     );
@@ -143,9 +158,7 @@ describe("concurrent room joins", () => {
       peer: {
         findUnique: async () => ({
           ...peer,
-          createdAt: new Date(0),
-          updatedAt: new Date(0),
-          lastPing: 0n,
+          rooms: [],
         }),
       },
       room: {
@@ -164,6 +177,7 @@ describe("concurrent room joins", () => {
         isAuthenticating: false,
         isAlive: true,
       } satisfies P2PartyWSData,
+      readyState: 1,
       send: (serialized: string) => {
         responses.push(JSON.parse(serialized));
       },
@@ -171,21 +185,29 @@ describe("concurrent room joins", () => {
         throw new Error("valid room request must not terminate the socket");
       },
     } as unknown as P2PartyWSClient;
+    const clients = new Map<string, P2PartyWSClient>([[peer.id, socket]]);
 
     try {
-      await createHandleRoom(database)(peer.id, socket, ROOM_TOKEN);
+      await createHandleRoom(database, clients)(
+        peer.id,
+        socket,
+        ROOM_TOKEN,
+        ROOM_REQUEST_ID,
+      );
 
       expect(responses).toHaveLength(1);
       const response = responses[0] as Record<string, unknown>;
       expect(Object.keys(response).sort()).toEqual([
         "protocolVersion",
         "roomId",
+        "roomRequestId",
         "roomUrl",
         "turnCredentials",
         "type",
       ]);
       expect(response.type).toBe("roomId");
       expect(response.roomId).toBe(ROOM_ID);
+      expect(response.roomRequestId).toBe(ROOM_REQUEST_ID);
       expect(response.roomUrl).toBe(ROOM_TOKEN);
       expect(response.protocolVersion).toBe(PROTOCOL_VERSION);
       expect("urls" in response).toBe(false);
@@ -198,6 +220,7 @@ describe("concurrent room joins", () => {
       >;
       expect(Object.keys(turnCredentials).sort()).toEqual([
         "credential",
+        "expiresAtUnixSeconds",
         "urls",
         "username",
       ]);
@@ -206,6 +229,11 @@ describe("concurrent room joins", () => {
         "turn:turn.example.com:3478",
       ]);
       expect(turnCredentials.username).toEndWith(`:${peer.publicKey}`);
+      expect(
+        String(turnCredentials.username).startsWith(
+          `${String(turnCredentials.expiresAtUnixSeconds)}:`,
+        ),
+      ).toBe(true);
       expect(typeof turnCredentials.credential).toBe("string");
     } finally {
       if (previousTurnSecret === undefined) delete process.env.COTURN_SECRET;

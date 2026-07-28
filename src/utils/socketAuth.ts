@@ -15,11 +15,47 @@ export interface SocketAuthClient {
   data: SocketAuthState;
 }
 
+export interface CurrentSocketAuthClient extends SocketAuthClient {
+  readyState: number;
+}
+
+export interface ReplaceableSocketAuthClient extends CurrentSocketAuthClient {
+  close: () => unknown;
+}
+
 export interface TurnCredentials {
   urls: string[];
   username: string;
   credential: string;
+  expiresAtUnixSeconds: number;
 }
+
+export const TURN_CREDENTIAL_CONTRACT = Object.freeze({
+  maxUrls: 16,
+  maxUrlChars: 2048,
+  maxCredentialChars: 256,
+  lifetimeSeconds: 60 * 60,
+});
+
+const normalizeTurnUrls = (urls: readonly unknown[]): string[] => {
+  const uniqueUrls = new Set<string>();
+
+  for (const value of urls) {
+    if (typeof value !== "string") continue;
+    const url = value.trim();
+    if (
+      url.length === 0 ||
+      url.length > TURN_CREDENTIAL_CONTRACT.maxUrlChars ||
+      !/^turns?:[^\s]+$/u.test(url)
+    )
+      continue;
+
+    uniqueUrls.add(url);
+    if (uniqueUrls.size === TURN_CREDENTIAL_CONTRACT.maxUrls) break;
+  }
+
+  return [...uniqueUrls];
+};
 
 /**
  * The relay endpoints clients should try, from COTURN_URLS.
@@ -28,14 +64,12 @@ export interface TurnCredentials {
  * server minted an HMAC every login and no client could act on it. Deployment
  * owns the schemes and ports, so a self-hoster can offer only `turns:` without
  * a code change. Anything that is not a turn/turns URI is dropped rather than
- * forwarded to a browser.
+ * forwarded to a browser. Duplicates and values beyond the SDK's closed wire
+ * bounds are removed here, before a credential object can be issued.
  */
 export const parseTurnUrls = (raw: string | undefined): string[] => {
   if (!raw) return [];
-  return raw
-    .split(",")
-    .map((url) => url.trim())
-    .filter((url) => /^turns?:[^\s]+$/u.test(url));
+  return normalizeTurnUrls(raw.split(","));
 };
 
 export const assertSecureTurnSecret = (secret: string | undefined): void => {
@@ -106,25 +140,50 @@ export const createTurnCredentials = (
   publicKey: string,
   secret: string | undefined,
   now = Date.now(),
-  urls: string[] = parseTurnUrls(process.env.COTURN_URLS),
+  urls: readonly string[] = parseTurnUrls(process.env.COTURN_URLS),
 ): TurnCredentials | undefined => {
   if (!secret) return undefined;
   assertSecureTurnSecret(secret);
+  const boundedUrls = normalizeTurnUrls(urls);
   // No endpoint means nothing to hand out; issuing a bare HMAC would only
   // repeat the previous no-op.
-  if (urls.length === 0) return undefined;
+  if (boundedUrls.length === 0) return undefined;
+  if (!isCanonicalPublicKey(publicKey))
+    throw new Error("TURN username public key is not canonical Ed25519 hex");
 
-  const unixTimeStamp = Math.floor(now / 1000) + 60 * 60;
+  const nowUnixSeconds = Math.floor(now / 1000);
+  const unixTimeStamp =
+    nowUnixSeconds + TURN_CREDENTIAL_CONTRACT.lifetimeSeconds;
+  if (
+    !Number.isSafeInteger(nowUnixSeconds) ||
+    nowUnixSeconds < 0 ||
+    !Number.isSafeInteger(unixTimeStamp) ||
+    unixTimeStamp < 1 ||
+    String(unixTimeStamp).length > 11
+  )
+    throw new Error("TURN credential timestamp is outside the wire contract");
+
   const username = `${String(unixTimeStamp)}:${publicKey}`;
   const credential = crypto
     .createHmac("sha1", secret)
     .update(username)
     .digest("base64");
+  if (
+    username.length > TURN_CREDENTIAL_CONTRACT.maxCredentialChars ||
+    credential.length === 0 ||
+    credential.length > TURN_CREDENTIAL_CONTRACT.maxCredentialChars
+  )
+    throw new Error("Generated TURN credential exceeds the wire contract");
 
-  return { urls, username, credential };
+  return {
+    urls: boundedUrls,
+    username,
+    credential,
+    expiresAtUnixSeconds: unixTimeStamp,
+  };
 };
 
-export const registerVerifiedSocket = <T extends SocketAuthClient>(
+export const registerVerifiedSocket = <T extends ReplaceableSocketAuthClient>(
   clients: Map<string, T>,
   ws: T,
 ): boolean => {
@@ -135,9 +194,32 @@ export const registerVerifiedSocket = <T extends SocketAuthClient>(
   )
     return false;
 
+  const predecessor = clients.get(ws.data.peerId);
   clients.set(ws.data.peerId, ws);
+  if (predecessor && predecessor !== ws) {
+    // Change ownership before close() can schedule the predecessor's close
+    // callback. That callback is identity-guarded and cannot evict this
+    // successor. Clearing authentication first also makes every stale frame
+    // fail while the transport finishes closing.
+    predecessor.data.isVerified = false;
+    predecessor.close();
+  }
   return true;
 };
+
+export const isCurrentProofOwnerSocket = <T extends CurrentSocketAuthClient>(
+  clients: Map<string, T>,
+  ws: T,
+): boolean =>
+  ws.readyState === 1 &&
+  ws.data.isVerified === true &&
+  clients.get(ws.data.peerId) === ws;
+
+export const isCurrentVerifiedSocket = <T extends CurrentSocketAuthClient>(
+  clients: Map<string, T>,
+  ws: T,
+): boolean =>
+  isCurrentProofOwnerSocket(clients, ws) && ws.data.isAuthenticating === false;
 
 export const unregisterSocketIfCurrent = <T extends SocketAuthClient>(
   clients: Map<string, T>,
@@ -145,4 +227,59 @@ export const unregisterSocketIfCurrent = <T extends SocketAuthClient>(
 ): boolean => {
   if (clients.get(ws.data.peerId) !== ws) return false;
   return clients.delete(ws.data.peerId);
+};
+
+/**
+ * Register, claim routing ownership, then re-check the exact socket before any
+ * caller subscribes it or emits an open event. A same-process replacement can
+ * happen while claimPeer awaits PostgreSQL; only the map owner may activate.
+ */
+export const activateVerifiedSocket = async <
+  T extends ReplaceableSocketAuthClient,
+>(
+  clients: Map<string, T>,
+  ws: T,
+  claimPeer: (peerId: string) => Promise<boolean>,
+  releasePeer: (peerId: string) => Promise<void>,
+): Promise<boolean> => {
+  // Cryptographic proof is complete, but the socket is not authorized to send
+  // post-auth frames until its cross-instance routing claim also succeeds.
+  ws.data.isAuthenticating = true;
+  if (ws.readyState !== 1 || !registerVerifiedSocket(clients, ws)) {
+    ws.data.isVerified = false;
+    ws.data.isAuthenticating = false;
+    ws.close();
+    return false;
+  }
+
+  let claimed = false;
+  try {
+    claimed = await claimPeer(ws.data.peerId);
+  } catch {
+    claimed = false;
+  }
+
+  const ownerAfterClaim = clients.get(ws.data.peerId);
+  if (
+    claimed &&
+    ws.readyState === 1 &&
+    ws.data.isVerified &&
+    ownerAfterClaim === ws
+  ) {
+    ws.data.isAuthenticating = false;
+    return true;
+  }
+
+  const wasCurrent = unregisterSocketIfCurrent(clients, ws);
+  ws.data.isVerified = false;
+  ws.data.isAuthenticating = false;
+  ws.close();
+  // If close cleanup removed this socket before the awaited claim committed,
+  // the successful late write must be undone. A distinct local successor owns
+  // the same SERVER_ID claim, so releasing in that case would fence the winner.
+  const hasLocalSuccessor =
+    ownerAfterClaim !== undefined && ownerAfterClaim !== ws;
+  if (wasCurrent || (claimed && !hasLocalSuccessor))
+    await releasePeer(ws.data.peerId);
+  return false;
 };

@@ -3,6 +3,7 @@ import findRoomPeers from "./findRoomPeers";
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
+import { isCurrentVerifiedSocket } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -40,14 +41,13 @@ const handleDescription = async (
       // Local socket: enforce the same checks as before. A local socket that
       // fails them is dropped rather than routed, since routing would take
       // sendToPeer's local fast path and skip exactly these checks.
-      if (wsClient.data.isVerified && wsClient.data.peerId === msg.toPeerId)
-        wsClient.send(payload);
+      if (isCurrentVerifiedSocket(wsClients, wsClient)) wsClient.send(payload);
       return;
     }
 
-    // Not on this instance. The deploy runs one process per vCPU behind a
-    // round-robin upstream, so this is the common case, not the exception.
-    // The owning instance verified the socket when it accepted it.
+    // Not on this instance. This path supports the explicit experimental
+    // multi-worker topology; the owning instance verified the socket when it
+    // accepted it.
     await sendToPeer(msg.toPeerId, payload);
   }
 };

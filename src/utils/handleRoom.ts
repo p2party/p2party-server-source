@@ -1,5 +1,9 @@
 import { createTurnCredentials } from "./socketAuth";
+import { isCurrentVerifiedSocket } from "./socketAuth";
+import { deriveRoomIdentifier } from "./roomIdentifier";
+import { runPeerRoomMutation } from "./peerRoomMutationQueue";
 import { prisma as sharedPrisma } from "../prismaClient";
+import { wsClients } from "../wsServer";
 
 import type { P2PartyWSClient } from "../wsServer.js";
 import type { ProcessPrismaClient } from "../prismaClient";
@@ -11,151 +15,133 @@ import { PROTOCOL_VERSION } from "./protocolV4";
 
 interface Peer {
   id: string;
-  createdAt: Date;
-  updatedAt: Date;
-  lastPing: bigint;
   publicKey: string;
+  rooms: { id: string }[];
 }
 
 type HandleRoomPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
+type SocketRegistry = Map<string, P2PartyWSClient>;
 
 const handleRoomWithClient = async (
   prisma: HandleRoomPrisma,
+  clients: SocketRegistry,
   fromPeerId: string,
   ws: P2PartyWSClient,
   roomUrl: string,
+  roomRequestId: string,
 ) => {
+  const isCurrent = () =>
+    ws.data.peerId === fromPeerId && isCurrentVerifiedSocket(clients, ws);
+
   try {
-    const hasher = new Bun.CryptoHasher("sha512");
-    hasher.update(roomUrl);
-    // hasher.digest("hex");
-    const identifier = hasher.digest("hex").toLowerCase();
+    await runPeerRoomMutation(fromPeerId, async () => {
+      if (!isCurrent())
+        throw new Error("Room request socket is no longer current");
 
-    // const peer = await db.peer.findUnique({
-    //   where: { id: fromPeerId },
-    //   include: {
-    //     challenges: true,
-    //   },
-    // });
-    //
-    // if (!peer) {
-    //   ws.send(
-    //     JSON.stringify({
-    //       type: "error",
-    //       fromAction: "requestRoomId",
-    //       error: {
-    //         message:
-    //           "Room id request was sent by a non-existing or unverified client",
-    //       },
-    //     } as WebSocketMessageError),
-    //   );
-    //
-    //   ws.terminate();
-    //
-    //   return;
-    // }
-
-    let peer: Peer | null;
-    try {
-      peer = await prisma.peer.findUnique({
+      const identifier = deriveRoomIdentifier(roomUrl);
+      const peer: Peer | null = await prisma.peer.findUnique({
         where: { id: fromPeerId },
+        select: {
+          id: true,
+          publicKey: true,
+          rooms: {
+            where: { identifier },
+            select: { id: true },
+            take: 1,
+          },
+        },
       });
 
-      if (
-        !peer ||
-        !ws.data.isVerified ||
-        ws.data.peerId !== fromPeerId ||
-        peer.publicKey !== ws.data.publicKey
-      ) {
-        ws.send(
-          JSON.stringify({
-            type: "error",
-            fromAction: "requestRoomId",
-            error: {
-              message:
-                "Room id request was sent by a non-existing or unverified client",
-            },
-          } as WebSocketMessageError),
+      if (!peer || peer.publicKey !== ws.data.publicKey || !isCurrent())
+        throw new Error(
+          "Room id request was sent by a non-existing or unverified client",
         );
 
-        ws.terminate();
+      // Keep unique room creation free of nested writes so Prisma emits one
+      // atomic PostgreSQL upsert instead of a find-then-create race.
+      const room = await prisma.room.upsert({
+        where: { identifier },
+        update: { identifier },
+        create: { identifier },
+      });
+      if (!isCurrent())
+        throw new Error("Room request socket was replaced before membership");
 
-        return;
+      const wasMember = peer.rooms.length > 0;
+      await prisma.room.update({
+        where: { id: room.id },
+        data: {
+          peers: {
+            connect: {
+              id: peer.id,
+            },
+          },
+        },
+      });
+
+      if (!isCurrent()) {
+        // The same-process peer mutation queue prevents a successor join from
+        // racing this compensation. Preserve membership that predated this
+        // request; remove only a link this stale request could have added.
+        if (!wasMember)
+          await prisma.room.update({
+            where: { id: room.id },
+            data: { peers: { disconnect: { id: peer.id } } },
+          });
+        throw new Error("Room request socket was replaced during membership");
       }
-    } catch (error) {
+
+      // The relay endpoint travels with the room response because that is
+      // where the client builds its RTCConfiguration. Credentials are
+      // short-lived and socket-identity-bound, so they are issued per join.
+      const turnCredentials = createTurnCredentials(
+        ws.data.publicKey,
+        process.env.COTURN_SECRET,
+      );
+
+      ws.send(
+        JSON.stringify({
+          type: "roomId",
+          roomId: room.id,
+          roomUrl,
+          roomRequestId,
+          protocolVersion: PROTOCOL_VERSION,
+          ...(turnCredentials ? { turnCredentials } : {}),
+        } satisfies WebSocketMessageRoomIdResponse),
+      );
+    });
+  } catch (error) {
+    console.error(error);
+
+    if (isCurrent())
       ws.send(
         JSON.stringify({
           type: "error",
           fromAction: "requestRoomId",
-          error: {
-            message:
-              "Room id request was sent by a non-existing or unverified client",
-          },
+          error,
         } as WebSocketMessageError),
       );
-
-      ws.terminate();
-
-      return;
-    }
-
-    // Keep the unique room creation free of nested writes so Prisma emits one
-    // native SQLite upsert instead of a find-then-create race.
-    const room = await prisma.room.upsert({
-      where: { identifier },
-      update: { identifier },
-      create: { identifier },
-    });
-    await prisma.room.update({
-      where: { id: room.id },
-      data: {
-        peers: {
-          connect: {
-            id: peer.id,
-          },
-        },
-      },
-    });
-
-    // The relay endpoint travels with the room response because that is where
-    // the client builds its RTCConfiguration. Credentials are short-lived and
-    // bound to this socket's public key, so they are re-issued per room join
-    // rather than cached.
-    const turnCredentials = createTurnCredentials(
-      ws.data.publicKey,
-      process.env.COTURN_SECRET,
-    );
-
-    ws.send(
-      JSON.stringify({
-        type: "roomId",
-        roomId: room.id,
-        roomUrl,
-        protocolVersion: PROTOCOL_VERSION,
-        ...(turnCredentials ? { turnCredentials } : {}),
-      } as WebSocketMessageRoomIdResponse),
-    );
-
-    return;
-  } catch (error) {
-    console.error(error);
-
-    ws.send(
-      JSON.stringify({
-        type: "error",
-        fromAction: "requestRoomId",
-        error,
-      } as WebSocketMessageError),
-    );
 
     ws.terminate();
   }
 };
 
 export const createHandleRoom =
-  (prisma: HandleRoomPrisma) =>
-  (fromPeerId: string, ws: P2PartyWSClient, roomUrl: string) =>
-    handleRoomWithClient(prisma, fromPeerId, ws, roomUrl);
+  (prisma: HandleRoomPrisma, clients?: SocketRegistry) =>
+  (
+    fromPeerId: string,
+    ws: P2PartyWSClient,
+    roomUrl: string,
+    roomRequestId: string,
+  ) =>
+    handleRoomWithClient(
+      prisma,
+      clients ?? wsClients,
+      fromPeerId,
+      ws,
+      roomUrl,
+      roomRequestId,
+    );
 
 const handleRoom = createHandleRoom(sharedPrisma);
 
