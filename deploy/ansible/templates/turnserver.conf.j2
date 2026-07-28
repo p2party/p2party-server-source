@@ -13,10 +13,10 @@ alt-tls-listening-port=0
 # ---- Network ----
 # Do not set listening-ip: coturn listens on all IPv4 and IPv6 by default
 # Do not set relay-ip: coturn auto-detects relay addresses
-external-ip={{ external_ipv4 }}
-{% if external_ipv6 is defined and external_ipv6 | length > 0 %}
-external-ip={{ external_ipv6 }}
-{% endif %}
+# Do not set external-ip: this host owns its public addresses directly rather
+# than through NAT. Coturn then advertises the relay address matching the
+# allocation family. A bare external-ip is single-valued, so emitting separate
+# bare IPv4 and IPv6 directives silently misadvertises one family.
 min-port=49152
 max-port=65535
 

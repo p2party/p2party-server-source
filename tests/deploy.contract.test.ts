@@ -26,6 +26,14 @@ const signalingCloudInit = readFileSync(
   ),
   "utf8",
 );
+const setupCoturn = readFileSync(
+  join(repoRoot, "deploy", "ansible", "playbooks", "setup-coturn.yml"),
+  "utf8",
+);
+const turnserverConfig = readFileSync(
+  join(repoRoot, "deploy", "ansible", "templates", "turnserver.conf.j2"),
+  "utf8",
+);
 
 describe("production deployment contract", () => {
   test("single-worker production is explicit and multi-worker is opt-in", () => {
@@ -122,5 +130,14 @@ describe("production deployment contract", () => {
 
     expect(deployEnvironment).toContain("diff: false");
     expect(setupEnvironment).toContain("diff: false");
+  });
+
+  test("directly addressed dual-stack coturn does not apply a NAT mapping", () => {
+    expect(turnserverConfig).not.toMatch(/^external-ip=/m);
+    expect(turnserverConfig).not.toMatch(/^listening-ip=/m);
+    expect(turnserverConfig).not.toMatch(/^relay-ip=/m);
+    expect(setupCoturn).not.toContain("coturn_external_ipv4");
+    expect(setupCoturn).not.toContain("coturn_external_ipv6");
+    expect(setupCoturn).not.toContain("ifconfig.me");
   });
 });

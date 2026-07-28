@@ -97,58 +97,6 @@
         mode: "0600"
         remote_src: yes
 
-    # ========================================================================
-    # Coturn Configuration
-    # ========================================================================
-    # external-ip must be exactly right: TURN advertises it in allocations, and
-    # a wrong or empty value silently breaks every relayed call. Ask the Hetzner
-    # metadata service, which is authoritative for this host and cannot be
-    # rate-limited or hijacked the way a third-party echo service can.
-    - name: Read public IPv4 from the cloud metadata service
-      uri:
-        url: http://169.254.169.254/hetzner/v1/metadata/public-ipv4
-        return_content: true
-      register: metadata_ipv4
-      changed_when: false
-      failed_when: false
-
-    - name: Fall back to an external echo service for IPv4
-      command: curl -4 -fsS --max-time 10 https://ifconfig.me
-      register: fallback_ipv4
-      changed_when: false
-      when: metadata_ipv4.status != 200 or (metadata_ipv4.content | default('') | trim) == ''
-
-    - name: Resolve the public IPv4 to advertise
-      set_fact:
-        coturn_external_ipv4: >-
-          {{ (metadata_ipv4.content | default('') | trim)
-             if (metadata_ipv4.status | default(0)) == 200
-                and (metadata_ipv4.content | default('') | trim) != ''
-             else (fallback_ipv4.stdout | default('') | trim) }}
-
-    - name: Fail when no public IPv4 could be determined
-      fail:
-        msg: >-
-          Could not determine the coturn host's public IPv4. Refusing to write a
-          turnserver.conf with an empty external-ip, which would break every
-          relayed allocation while appearing to start successfully.
-      when: coturn_external_ipv4 | length == 0
-
-    - name: Read public IPv6 from the cloud metadata service
-      uri:
-        url: http://169.254.169.254/hetzner/v1/metadata/public-ipv6
-        return_content: true
-      register: metadata_ipv6
-      changed_when: false
-      failed_when: false
-
-    - name: Resolve the public IPv6 to advertise, if any
-      set_fact:
-        coturn_external_ipv6: >-
-          {{ (metadata_ipv6.content | default('') | trim)
-             if (metadata_ipv6.status | default(0)) == 200
-             else '' }}
-
     - name: Create turnserver log directory
       file:
         path: /var/log/turnserver
@@ -164,9 +112,6 @@
         owner: turnserver
         group: turnserver
         mode: "0600"
-      vars:
-        external_ipv4: "{{ coturn_external_ipv4 }}"
-        external_ipv6: "{{ coturn_external_ipv6 | default('') }}"
       notify: Restart Coturn
 
     # simple-log writes an unbounded file; without rotation the relay fills its
