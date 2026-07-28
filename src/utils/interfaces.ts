@@ -23,8 +23,6 @@ export interface WebSocketMessageSuccessfulChallenge {
   type: "challenge";
   challengeId: string;
   protocolVersion: number;
-  username?: string;
-  credential?: string;
 }
 
 export interface WebSocketTurnCredentials {

@@ -41,11 +41,15 @@ const fakeSocket = () => {
 };
 
 describe("WebSocket-bound challenge verification", () => {
-  test("valid proof verifies bound bytes, consumes the nonce, and omits TURN when unconfigured", async () => {
+  test("valid proof verifies bound bytes and emits the exact challenge-success shape even when TURN is configured", async () => {
     const socket = fakeSocket();
     const challenge = "cd".repeat(32);
     const publicKey = "ab".repeat(32);
     const signature = "ef".repeat(64);
+    const previousTurnSecret = process.env.COTURN_SECRET;
+    const previousTurnUrls = process.env.COTURN_URLS;
+    process.env.COTURN_SECRET = "s".repeat(32);
+    process.env.COTURN_URLS = "turns:turn.example.com:443?transport=tcp";
     createFreshSocketChallenge(
       socket.ws.data,
       PEER_ID,
@@ -61,33 +65,39 @@ describe("WebSocket-bound challenge verification", () => {
         }
       | undefined;
 
-    const authenticated = await handleChallenge(
-      PEER_ID,
-      socket.ws,
-      challenge,
-      signature,
-      {
-        verifySignature: async (message, sig, pk) => {
-          verifiedBytes = { message, signature: sig, publicKey: pk };
-          return true;
+    try {
+      const authenticated = await handleChallenge(
+        PEER_ID,
+        socket.ws,
+        challenge,
+        signature,
+        {
+          verifySignature: async (message, sig, pk) => {
+            verifiedBytes = { message, signature: sig, publicKey: pk };
+            return true;
+          },
         },
-        turnSecret: null,
-      },
-    );
+      );
 
-    expect(authenticated).toBe(true);
-    expect(verifiedBytes?.message).toEqual(new Uint8Array(32).fill(0xcd));
-    expect(verifiedBytes?.signature).toEqual(new Uint8Array(64).fill(0xef));
-    expect(verifiedBytes?.publicKey).toEqual(new Uint8Array(32).fill(0xab));
-    expect(socket.ws.data.isVerified).toBe(true);
-    expect(socket.ws.data.challengeNonce).toBe("");
-    expect(socket.ws.data.challengeId).toBe("");
-    expect(JSON.parse(socket.sent[0])).toEqual({
-      type: "challenge",
-      challengeId: CHALLENGE_ID,
-      protocolVersion: PROTOCOL_VERSION,
-    });
-    expect(socket.wasTerminated()).toBe(false);
+      expect(authenticated).toBe(true);
+      expect(verifiedBytes?.message).toEqual(new Uint8Array(32).fill(0xcd));
+      expect(verifiedBytes?.signature).toEqual(new Uint8Array(64).fill(0xef));
+      expect(verifiedBytes?.publicKey).toEqual(new Uint8Array(32).fill(0xab));
+      expect(socket.ws.data.isVerified).toBe(true);
+      expect(socket.ws.data.challengeNonce).toBe("");
+      expect(socket.ws.data.challengeId).toBe("");
+      expect(JSON.parse(socket.sent[0])).toEqual({
+        type: "challenge",
+        challengeId: CHALLENGE_ID,
+        protocolVersion: PROTOCOL_VERSION,
+      });
+      expect(socket.wasTerminated()).toBe(false);
+    } finally {
+      if (previousTurnSecret === undefined) delete process.env.COTURN_SECRET;
+      else process.env.COTURN_SECRET = previousTurnSecret;
+      if (previousTurnUrls === undefined) delete process.env.COTURN_URLS;
+      else process.env.COTURN_URLS = previousTurnUrls;
+    }
   });
 
   test("a proof for another socket identity is rejected before signature verification", async () => {
@@ -112,7 +122,6 @@ describe("WebSocket-bound challenge verification", () => {
           verifierCalled = true;
           return true;
         },
-        turnSecret: null,
       },
     );
 

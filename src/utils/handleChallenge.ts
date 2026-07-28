@@ -1,10 +1,6 @@
 import ondemos from "@ondemos/core";
 
-import {
-  consumeSocketChallenge,
-  createTurnCredentials,
-  isSocketChallengeBound,
-} from "./socketAuth";
+import { consumeSocketChallenge, isSocketChallengeBound } from "./socketAuth";
 import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -21,9 +17,6 @@ type VerifySignature = (
 
 export interface ChallengeVerificationOptions {
   verifySignature?: VerifySignature;
-  /** `null` deliberately disables TURN even when the process env has a value. */
-  turnSecret?: string | null;
-  now?: number;
 }
 
 const hexBytes = (value: string): Uint8Array => {
@@ -82,21 +75,11 @@ const handleChallenge = async (
       );
 
     const challengeId = consumeSocketChallenge(ws.data);
-    const configuredSecret =
-      options.turnSecret === null
-        ? undefined
-        : (options.turnSecret ?? process.env.COTURN_SECRET);
-    const turnCredentials = createTurnCredentials(
-      ws.data.publicKey,
-      configuredSecret,
-      options.now,
-    );
     ws.send(
       JSON.stringify({
         type: "challenge",
         challengeId,
         protocolVersion: PROTOCOL_VERSION,
-        ...turnCredentials,
       } satisfies WebSocketMessageSuccessfulChallenge),
     );
 

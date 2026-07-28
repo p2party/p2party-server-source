@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createHandleRoom } from "../../src/utils/handleRoom";
+import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
@@ -128,5 +129,89 @@ describe("concurrent room joins", () => {
     expect(room?.peers.map(({ id }) => id).sort()).toEqual(
       PEERS.map(({ id }) => id).sort(),
     );
+  });
+
+  test("configured TURN credentials are nested only in the room response", async () => {
+    const peer = PEERS[0];
+    const previousTurnSecret = process.env.COTURN_SECRET;
+    const previousTurnUrls = process.env.COTURN_URLS;
+    process.env.COTURN_SECRET = "s".repeat(32);
+    process.env.COTURN_URLS =
+      "turns:turn.example.com:443?transport=tcp,turn:turn.example.com:3478";
+
+    const database = {
+      peer: {
+        findUnique: async () => ({
+          ...peer,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+          lastPing: 0n,
+        }),
+      },
+      room: {
+        upsert: async () => ({ id: ROOM_ID, identifier: ROOM_TOKEN }),
+        update: async () => ({ id: ROOM_ID, identifier: ROOM_TOKEN }),
+      },
+    } as unknown as Parameters<typeof createHandleRoom>[0];
+    const responses: unknown[] = [];
+    const socket = {
+      data: {
+        peerId: peer.id,
+        publicKey: peer.publicKey,
+        challengeNonce: "",
+        challengeId: "",
+        isVerified: true,
+        isAuthenticating: false,
+        isAlive: true,
+      } satisfies P2PartyWSData,
+      send: (serialized: string) => {
+        responses.push(JSON.parse(serialized));
+      },
+      terminate: () => {
+        throw new Error("valid room request must not terminate the socket");
+      },
+    } as unknown as P2PartyWSClient;
+
+    try {
+      await createHandleRoom(database)(peer.id, socket, ROOM_TOKEN);
+
+      expect(responses).toHaveLength(1);
+      const response = responses[0] as Record<string, unknown>;
+      expect(Object.keys(response).sort()).toEqual([
+        "protocolVersion",
+        "roomId",
+        "roomUrl",
+        "turnCredentials",
+        "type",
+      ]);
+      expect(response.type).toBe("roomId");
+      expect(response.roomId).toBe(ROOM_ID);
+      expect(response.roomUrl).toBe(ROOM_TOKEN);
+      expect(response.protocolVersion).toBe(PROTOCOL_VERSION);
+      expect("urls" in response).toBe(false);
+      expect("username" in response).toBe(false);
+      expect("credential" in response).toBe(false);
+
+      const turnCredentials = response.turnCredentials as Record<
+        string,
+        unknown
+      >;
+      expect(Object.keys(turnCredentials).sort()).toEqual([
+        "credential",
+        "urls",
+        "username",
+      ]);
+      expect(turnCredentials.urls).toEqual([
+        "turns:turn.example.com:443?transport=tcp",
+        "turn:turn.example.com:3478",
+      ]);
+      expect(turnCredentials.username).toEndWith(`:${peer.publicKey}`);
+      expect(typeof turnCredentials.credential).toBe("string");
+    } finally {
+      if (previousTurnSecret === undefined) delete process.env.COTURN_SECRET;
+      else process.env.COTURN_SECRET = previousTurnSecret;
+      if (previousTurnUrls === undefined) delete process.env.COTURN_URLS;
+      else process.env.COTURN_URLS = previousTurnUrls;
+    }
   });
 });

@@ -36,8 +36,8 @@ actually holds the target peer's socket, over `LISTEN`/`NOTIFY`.
 
 For an Internet-facing deployment, terminate TLS in front of this process and
 expose the WebSocket over `wss://`. The server does not configure TLS or launch
-a TURN service. `COTURN_SECRET` only lets it issue short-lived credentials for
-an independently operated TURN server.
+a TURN service. `COTURN_SECRET` and `COTURN_URLS` together let it issue
+short-lived credentials for an independently operated TURN server.
 
 Run the release checks with:
 
@@ -48,11 +48,12 @@ bun run format:check
 
 ## Configuration
 
-| Variable        | Required | Meaning                                                                                                 |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`  | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                       |
-| `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                            |
-| `COTURN_SECRET` | no       | TURN REST shared secret (minimum 32 bytes). If absent, the server emits no TURN username or credential. |
+| Variable        | Required | Meaning                                                                                                                                                      |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`  | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                                                                            |
+| `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                                                                                 |
+| `COTURN_SECRET` | for TURN | TURN REST shared secret (minimum 32 bytes). Credentials are issued only when this and `COTURN_URLS` are both configured.                                     |
+| `COTURN_URLS`   | for TURN | Comma-separated `turn:` or `turns:` relay URLs. Credentials are issued only when this and `COTURN_SECRET` are both configured and at least one URL is valid. |
 
 There is no built-in TURN secret and no development authentication bypass.
 
@@ -127,8 +128,8 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 
 | Server message   | Sent when                                                        |
 | ---------------- | ---------------------------------------------------------------- |
-| `challenge`      | A socket connects, or a challenge is re-issued.                  |
-| `peerId`         | The challenge signature verified; this is your bound peer ID.    |
+| `peerId`         | A socket connects and receives its bound peer ID and challenge.  |
+| `challenge`      | The challenge signature verified; authentication is complete.    |
 | `roomId`         | A `room` request created or joined a room.                       |
 | `peers`          | The room's current peer list, in response to `peerConnection`.   |
 | `peerConnection` | Another peer asked to be introduced to you.                      |
@@ -193,9 +194,12 @@ return:
 }
 ```
 
-When `COTURN_SECRET` is configured, the final object additionally contains
-both `username` and `credential`. Historical challenge signatures are not
-accepted as reconnect credentials.
+This challenge-success object always has exactly those three fields. TURN
+configuration does not alter authentication. When both `COTURN_SECRET` and
+`COTURN_URLS` are configured, short-lived credentials arrive later in the
+`roomId` response as a nested `turnCredentials` object containing `urls`,
+`username`, and `credential`. Historical challenge signatures are not accepted
+as reconnect credentials.
 
 ## Privacy boundary
 
