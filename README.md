@@ -49,6 +49,10 @@ bun run check
 bun run format:check
 ```
 
+`check` is `db:generate`, `typecheck` and `bun test`. CI runs the same gates
+plus `db:migrate` against a real PostgreSQL
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
 ## Configuration
 
 | Variable        | Required | Meaning                                                                                                                                                                                                                                                                        |
@@ -139,7 +143,7 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 | `challenge`      | The challenge signature verified; authentication is complete.    |
 | `roomId`         | A `room` request created or joined a room.                       |
 | `roomLeft`       | The requested membership is absent after an idempotent leave.    |
-| `peers`          | The room's current peer list, in response to `peerConnection`.   |
+| `peers`          | One peer that accepted an introduction. A delta, not a snapshot. |
 | `peerConnection` | Another peer asked to be introduced to you.                      |
 | `connection`     | A peer requested DataChannel signaling with you.                 |
 | `description`    | A relayed WebRTC session description.                            |
@@ -150,12 +154,72 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 > The interfaces in [`src/utils/interfaces.ts`](src/utils/interfaces.ts) are the
 > starting point, not a complete schema. Handlers construct responses with an
 > `as` cast, which bypasses TypeScript's excess-property check, so a frame can
-> carry fields the interface does not declare — for example the human-readable
-> `message` string on relayed `description` and `candidate` frames
-> (`handleDescription.ts:40`, `handleCandidate.ts:39`). Read the handler
-> alongside the interface before writing a client. Note also that the peer list
-> is emitted by the `peerConnection` handler; the `peers` handler's own send is
-> currently commented out (`handlePeers.ts:114-120`).
+> carry fields the interface does not declare — the human-readable `message`
+> string on relayed `description` and `candidate` frames
+> (`handleDescription.ts:36`, `handleCandidate.ts:35`), and `fromPeerPublicKey`
+> on a relayed `connection` frame (`handlePeerConnection.ts:59`). Read the
+> handler alongside the interface before writing a client. Note also that a
+> `peers` frame is emitted by the handler for the client's `peerConnection`
+> message, not by the `peers` handler, whose own reply to the requester is
+> commented out (`handlePeers.ts:125-131`).
+
+### Message flow
+
+Every frame is an event. Nothing the server sends is a room snapshot.
+
+1. **`peerId`** (server → client), immediately on open: the socket's peer id and
+   a fresh 32-byte challenge nonce.
+2. **`challenge`** (client → server): the Ed25519 signature over that exact
+   nonce. This is the only frame accepted before authentication.
+3. **`challenge`** (server → client): `challengeId` and nothing else. The socket
+   is now the current verified socket for its peer id.
+4. **`room`** (client → server) with a 64-hex room token and a UUIDv4
+   `roomRequestId`; **`roomId`** (server → client) echoes both and carries the
+   room's server-side UUID, plus `turnCredentials` when TURN is configured.
+5. **`peers`** (client → server) with that room UUID. The server does **not**
+   answer the requester. It sends a **`peerConnection`** introduction naming the
+   requester — `{ id, publicKey }` — to every _other_ member of that room
+   (`handlePeers.ts`).
+6. **`peerConnection`** (existing member → server) accepts the introduction; the
+   server sends the joiner a **`peers`** frame whose array holds exactly one
+   entry, the accepting peer (`handlePeerAcceptsConnection.ts:87-92`). One
+   accepted peer per frame, one frame per acceptance.
+7. **`connection`**, **`description`** and **`candidate`** are relayed to
+   `toPeerId` after `findRoomPeers` re-checks that both peers exist and both are
+   members of that room. The relayed copy drops `toPeerId` and carries the
+   sender's `fromPeerId`.
+
+Because a `peers` frame is one accepted peer, a client that treated it as the
+room roster would delete every other member. The SDK merges it as an additive
+delta (`p2party-js/src/handlers/peerRosterDelta.ts`).
+
+**The server never signals a departure.** Its close handler releases the peer's
+routing claim and logs (`src/wsServer.ts`, `src/index.ts`); it sends nothing to
+the room. There is no `peerLeft` frame in the protocol, and a `leaveRoom` is
+acknowledged only to the peer that sent it. The membership row survives the
+disconnect too — only an explicit `leaveRoom` removes one. Clients therefore
+learn that a peer is gone from their own transport state, not from this server.
+
+### Heartbeat and timeouts
+
+Once a socket has a peer id, the server sends `{"type":"ping"}` every 10 seconds
+and marks the socket not-alive. A `pong` clears the mark. If it is still unset
+5 seconds later, or still unset when the next ping is due, the server closes the
+socket ([`src/utils/handleInterval.ts`](src/utils/handleInterval.ts)).
+
+Bun's own socket limits sit behind that: `idleTimeout` 60 seconds and
+`maxPayloadLength` 1 MiB (`src/wsServer.ts:88-89`). The 60-second idle timer is
+the backstop for a connection that sends nothing at all; in practice the
+10-second ping loop closes a dead socket first.
+
+The ping loop starts before authentication, and a `pong` is accepted only from a
+socket that already holds the proof — the fast path checks current process-local
+ownership (`handlePong.ts`), the queued path requires a current verified socket
+(`handleMessage.ts`). A socket that has not completed the challenge therefore
+cannot answer its first ping, and is closed roughly 10 to 15 seconds after
+connecting.
+
+### Enforced bounds
 
 Enforced bounds live in
 [`src/utils/protocolV4.ts`](src/utils/protocolV4.ts): 524,288 characters per
@@ -163,6 +227,11 @@ signaling message, 262,144 characters in the SDP string, 4,096 characters in
 the ICE candidate string, 256 characters each in `sdpMid` and
 `usernameFragment`, and at most 64 DataChannel labels of 193 characters each.
 Malformed, downgraded, cross-room, or cross-identity signaling fails closed.
+
+A frame that fails validation in `handleMessage` closes the socket from that
+function's `catch` without sending an `error` frame; the `error` frames listed
+above come from individual handlers, most of which also close or terminate the
+socket after sending one.
 
 ### Room correlation and TURN credentials
 
@@ -188,8 +257,17 @@ When TURN is configured, the `roomId` response includes:
 ```
 
 The expiry is bound to both the numeric username prefix and the authenticated
-socket public key suffix. URL normalization follows the `COTURN_URLS` limits
-above.
+socket public key suffix. `credential` is the base64 HMAC-SHA1 of `username`
+under `COTURN_SECRET` — the coturn REST convention — and the lifetime is one
+hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
+[`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)). A fresh bundle is minted
+on every successful room join, not once per socket. URL normalization follows
+the `COTURN_URLS` limits above.
+
+When `COTURN_SECRET` or `COTURN_URLS` is missing, or no URL survives
+normalization, `turnCredentials` is omitted from the `roomId` response entirely
+and clients stay STUN-only. The server never issues a credential without a
+relay endpoint to use it against.
 
 A protocol-v4 room leave is an exact-shape request with `type` equal to
 `"leaveRoom"`, the socket-bound `fromPeerId`, the same 64-hex `roomUrl` used
@@ -269,13 +347,92 @@ WebSocket message handlers but does not promise per-socket await ordering.
 Only an exact `pong` from the cryptographically proved current socket owner
 bypasses that FIFO; malformed, unproved, or replaced-socket pongs do not.
 
+## Client compatibility
+
+This build speaks protocol version 4 only, in the exact shapes above. There is
+no negotiation and no fallback for an older client: a frame carrying any other
+`protocolVersion`, or a `room`/`leaveRoom` request whose key set is not exactly
+the one documented, closes the socket.
+
+Protocol v4 itself shipped in `p2party-js` 0.13.0, but the correlated room wire
+this server requires — `roomRequestId`, `roomLeaveId`, and TURN credentials with
+an absolute expiry — shipped in `p2party-js` 0.14.4, whose changelog names
+`p2party-server` 0.1.1 as the matching server. A v4 client older than 0.14.4
+sends a `room` request with no `roomRequestId`, fails the exact-shape check in
+`handleMessage.ts`, and has its socket closed. So: `p2party-js` 0.14.4 or newer.
+
+## What the server stores
+
+The Postgres schema is [`prisma/schema.prisma`](prisma/schema.prisma): four
+models plus the implicit `PeerRooms` join table. The running server writes all
+of them except `Challenge`.
+
+- **`Peer`** — one row per Ed25519 identity public key, holding that key, a
+  stable peer id, `lastPing`, and `serverId`: which process currently holds the
+  socket, or null. Created on connect (`handleConnection.ts`) and never deleted.
+- **`Room`** — one row per room, keyed by `identifier`, the SHA-512 of the
+  64-hex room token ([`src/utils/roomIdentifier.ts`](src/utils/roomIdentifier.ts)).
+  The token itself is not stored, though the operator sees it on the wire when a
+  client joins. Rooms are never deleted, including when the last member leaves.
+- **`Peer`↔`Room` membership** — added by a `room` request, removed only by a
+  `leaveRoom` request. A socket close clears `Peer.serverId` and nothing else,
+  so membership outlives the connection.
+- **`PendingSignal`** — a serialized frame written only when the target peer's
+  socket belongs to another instance. Deleted on delivery, when the target is no
+  longer here, at shutdown, and by a startup sweep of rows addressed to server
+  ids no connected peer claims.
+- **`Challenge`** — declared in the schema, but the running server never writes
+  it. Challenge nonces live on the socket
+  ([`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)) and are discarded when
+  consumed.
+
+## Deployment
+
+`deploy/` provisions and updates the reference deployment. None of it is
+required to run the server; a self-hoster needs only Bun, Postgres, and a TLS
+terminator in front.
+
+[`deploy/terraform`](deploy/terraform) (Hetzner Cloud + Cloudflare) declares
+four servers on one private `10.231.0.0/24` network — PostgreSQL, coturn,
+signaling behind Caddy, and a WireGuard gateway — with per-host firewalls
+(Postgres accepts 5432 and SSH from the subnet only), a shared egress allowlist,
+and the DNS records for the signaling, TURN and STUN names. Run it through
+`deploy/tf`, which loads credentials from `deploy/.env`.
+
+[`deploy/ansible`](deploy/ansible) configures those hosts
+(`playbooks/site.yml`) and ships releases (`playbooks/deploy.yml`, wrapped by
+`deploy/deploy.sh`). A deploy builds `p2party_linux_x64` from this repo with
+`bun run build:linux` and refuses to continue if the binary is missing; copies
+it with a rendered environment file and one systemd unit per entry in
+`signaling_ports`; runs `prisma migrate deploy` on the host and fails the play
+if it errors, so a binary is never restarted against a schema it does not match;
+narrows the Caddy upstream list before restarting; verifies the version,
+protocol version and per-process `serverId` on every instance directly; retires
+obsolete units; and only then checks that public Caddy answers with one of those
+exact `serverId`s. [`tests/deploy.contract.test.ts`](tests/deploy.contract.test.ts)
+pins that ordering.
+
+Production sets `signaling_ports: [3001]` — one process — for the fencing
+reasons above. Caddy terminates TLS, proxies the WebSocket, sets HSTS and a
+content-security policy, and logs with client IPs masked to /24 and /48. coturn
+is configured by `playbooks/setup-coturn.yml`; this server only issues
+credentials for it.
+
 ## Privacy boundary
 
-The server learns stable signaling public keys, peer IDs, room membership, and
-network metadata needed to establish WebRTC. It does **not** currently
-implement blind rendezvous, hide room membership from the signaling operator,
-or make TURN traffic peer-to-peer. Do not describe it as doing so until the L2
-blind-meeting-point design is implemented and reviewed.
+The server sees each client's Ed25519 identity public key, the room token a
+client joins with, which peer ids share a room, the WebRTC descriptions and ICE
+candidates it relays — which carry IP addresses — and the timing of all of it.
+
+It does not see application message or file content. No frame type carries an
+application payload and no handler forwards one: messages and files travel over
+the peers' DataChannels, end-to-end encrypted by
+[`p2party-js`](https://github.com/p2party/p2party-js).
+
+It does **not** currently implement blind rendezvous, hide room membership from
+the signaling operator, or make TURN traffic peer-to-peer. Do not describe it as
+doing so until the L2 blind-meeting-point design is implemented and reviewed.
+There has been no independent third-party security audit of this server.
 
 ## Security
 
