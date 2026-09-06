@@ -34,6 +34,7 @@ const turnserverConfig = readFileSync(
   join(repoRoot, "deploy", "ansible", "templates", "turnserver.conf.j2"),
   "utf8",
 );
+const prismaConfig = readFileSync(join(repoRoot, "prisma.config.ts"), "utf8");
 
 describe("production deployment contract", () => {
   test("single-worker production is explicit and multi-worker is opt-in", () => {
@@ -139,5 +140,38 @@ describe("production deployment contract", () => {
     expect(setupCoturn).not.toContain("coturn_external_ipv4");
     expect(setupCoturn).not.toContain("coturn_external_ipv6");
     expect(setupCoturn).not.toContain("ifconfig.me");
+  });
+
+  test("prisma.config.ts is loadable on a host that has no node_modules", () => {
+    // The host carries one compiled binary and no node_modules; the playbook
+    // runs the CLI through `bunx prisma@<pinned>`, which unpacks into a
+    // temporary tree of its own. A value import inside this file is resolved
+    // from this file's directory upwards and never reaches that tree, so it
+    // fails with "Cannot find module 'prisma/config'" and no migration runs.
+    // Type-only imports are erased before the loader ever sees them.
+    // Read the code, not the comment that explains it: the comment has to
+    // name both `defineConfig` and the import it warns against.
+    const code = prismaConfig
+      .replace(/\/\*[\s\S]*?\*\//gu, "")
+      .split("\n")
+      .filter((line) => !/^\s*\/\//u.test(line))
+      .join("\n");
+
+    const valueImports = code
+      .split("\n")
+      .filter(
+        (line) =>
+          /^\s*import\s/u.test(line) && !/^\s*import\s+type\s/u.test(line),
+      );
+    expect(valueImports).toEqual([]);
+    expect(code).not.toMatch(/\brequire\s*\(/u);
+    // Nothing is lost by not calling it: the loader's parseDefaultExport()
+    // tries the plain PrismaConfig shape first and applies defineConfig itself.
+    expect(code).not.toMatch(/\bdefineConfig\s*\(/u);
+    expect(code).toContain("satisfies PrismaConfig");
+
+    // The file is only consulted if the playbook still ships it beside the
+    // schema; without it the Prisma 7 CLI has no datasource at all.
+    expect(deploy).toContain('dest: "{{ app.home }}/server/prisma.config.ts"');
   });
 });
