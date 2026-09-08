@@ -57,6 +57,12 @@ const handlePeersWithClient = async (
         return;
       } else fromPeerPublicKey = fromPeer.publicKey;
     } catch (error) {
+      // A caught database error is a server fault, not evidence about the
+      // requester. Pool exhaustion or a replica hiccup used to close a healthy
+      // member's socket -- terminal on the client (C4) -- while telling it that
+      // it does not exist. Refuse this one request and leave the socket up,
+      // exactly as findRoomPeers now does.
+      console.error("handlePeers peer lookup failed", error);
       if (!isCurrentRequester()) return;
       ws.send(
         JSON.stringify({
@@ -64,14 +70,12 @@ const handlePeersWithClient = async (
           fromAction: "requestPeers",
           error: {
             message:
-              "Peers' request was sent from peer with id " +
+              "Peers request from peer with id " +
               fromPeerId +
-              " who does not exist",
+              " could not be served",
           },
         } as WebSocketMessageError),
       );
-
-      ws.close();
 
       return;
     }
@@ -135,6 +139,14 @@ const handlePeersWithClient = async (
 
       return;
     } catch (error) {
+      // Two unrelated causes land here and neither earns a close. One is a
+      // database fault, the same server-side fault as above. The other is the
+      // membership check, which a requestPeers already in flight when its peer
+      // leaves and rejoins trips on a pure race: the roster is momentarily
+      // missing a member whose socket is perfectly healthy. Both used to close
+      // that socket and blame a room that does exist. The message stays
+      // identical for both causes, so no room-existence bit is exposed.
+      console.error("handlePeers room lookup failed", error);
       if (!isCurrentRequester()) return;
       ws.send(
         JSON.stringify({
@@ -142,14 +154,12 @@ const handlePeersWithClient = async (
           fromAction: "requestPeers",
           error: {
             message:
-              "Peers request refers to room with id " +
+              "Peers request for room with id " +
               roomId +
-              " which does not exist",
+              " could not be served",
           },
         } as WebSocketMessageError),
       );
-
-      ws.close();
 
       return;
     }
