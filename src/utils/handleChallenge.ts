@@ -1,6 +1,10 @@
 import ondemos from "@ondemos/core";
 
-import { consumeSocketChallenge, isSocketChallengeBound } from "./socketAuth";
+import {
+  consumeSocketChallenge,
+  isSocketChallengeBound,
+  PERMANENT_CLOSE_CODE,
+} from "./socketAuth";
 import { PROTOCOL_VERSION } from "./protocolV4";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -27,7 +31,28 @@ const hexBytes = (value: string): Uint8Array => {
   );
 };
 
-const rejectAuthentication = (ws: P2PartyWSClient, message: string): false => {
+/**
+ * Reject one challenge/signature-response attempt.
+ *
+ * Only `permanent` gets `PERMANENT_CLOSE_CODE`: a signature that genuinely
+ * fails to verify is the one case here that proves the client does not hold
+ * the key, so retrying can never succeed. Every other caller of this
+ * function is not that -- a stale/mismatched challenge also fires for a
+ * legitimate duplicate or late "challenge" frame on an already-verified or
+ * already-authenticating socket (not a credentials verdict at all), a
+ * malformed signature encoding is a fixable client-side bug, and an
+ * exception from the verification library itself could be transient -- so
+ * those close bare, leaving the client's reconnect ladder free to retry.
+ *
+ * close(), never terminate(), in both cases: terminate() can drop the
+ * ws.send() error frame above it before it reaches the wire, which is
+ * exactly the frame a rejected client needs to see.
+ */
+const rejectAuthentication = (
+  ws: P2PartyWSClient,
+  message: string,
+  permanent: boolean,
+): false => {
   ws.send(
     JSON.stringify({
       type: "error",
@@ -35,7 +60,8 @@ const rejectAuthentication = (ws: P2PartyWSClient, message: string): false => {
       error: { message },
     } as WebSocketMessageError),
   );
-  ws.terminate();
+  if (permanent) ws.close(PERMANENT_CLOSE_CODE, message);
+  else ws.close();
   return false;
 };
 
@@ -57,9 +83,10 @@ const handleChallenge = async (
     return rejectAuthentication(
       ws,
       "Challenge is not the fresh challenge bound to this WebSocket",
+      false,
     );
   if (!/^[0-9a-f]{128}$/.test(signature))
-    return rejectAuthentication(ws, "Challenge signature is malformed");
+    return rejectAuthentication(ws, "Challenge signature is malformed", false);
 
   ws.data.isAuthenticating = true;
   try {
@@ -72,6 +99,7 @@ const handleChallenge = async (
       return rejectAuthentication(
         ws,
         "Challenge response signature cannot be verified",
+        true,
       );
 
     return {
@@ -86,6 +114,7 @@ const handleChallenge = async (
       error instanceof Error
         ? error.message
         : "Challenge response could not be verified",
+      false,
     );
   }
 };

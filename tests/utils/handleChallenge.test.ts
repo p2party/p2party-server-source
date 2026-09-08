@@ -13,6 +13,7 @@ const CHALLENGE_ID = "00000000-0000-4000-8000-000000000002";
 const fakeSocket = () => {
   const sent: string[] = [];
   let terminated = false;
+  const closeArgs: { code?: number; reason?: string }[] = [];
   const data: P2PartyWSData = {
     peerId: "",
     publicKey: "",
@@ -29,6 +30,9 @@ const fakeSocket = () => {
       sent.push(message);
       return message.length;
     },
+    close: (code?: number, reason?: string) => {
+      closeArgs.push({ code, reason });
+    },
     terminate: () => {
       terminated = true;
     },
@@ -37,6 +41,7 @@ const fakeSocket = () => {
   return {
     ws,
     sent,
+    closeArgs,
     wasTerminated: () => terminated,
   };
 };
@@ -135,6 +140,124 @@ describe("WebSocket-bound challenge verification", () => {
     expect(authenticated).toBe(false);
     expect(verifierCalled).toBe(false);
     expect(socket.ws.data.isVerified).toBe(false);
-    expect(socket.wasTerminated()).toBe(true);
+    // A stale/mismatched challenge is not proof the credentials are bad --
+    // on a live, already-verified socket the identical branch fires for a
+    // duplicate/late "challenge" frame, so this must stay retryable (a bare
+    // close, no code) rather than the permanent 1008 code. It must still be
+    // close(), not terminate(): terminate() can drop the error frame sent
+    // just above it.
+    expect(socket.wasTerminated()).toBe(false);
+    expect(socket.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
+  });
+
+  test("a signature that fails verification closes permanently with 1008, after the error frame is delivered", async () => {
+    const socket = fakeSocket();
+    const challenge = "cd".repeat(32);
+    createFreshSocketChallenge(
+      socket.ws.data,
+      PEER_ID,
+      "ab".repeat(32),
+      challenge,
+      CHALLENGE_ID,
+    );
+
+    const authenticated = await handleChallenge(
+      PEER_ID,
+      socket.ws,
+      challenge,
+      "ef".repeat(64),
+      {
+        verifySignature: async () => false,
+      },
+    );
+
+    expect(authenticated).toBe(false);
+    expect(socket.ws.data.isVerified).toBe(false);
+    // The client proved it does not hold the key. Retrying with the same
+    // credentials can never succeed, so this is the one branch that must
+    // carry the permanent code -- and terminate() would risk dropping the
+    // error frame ws.send() just queued, so this must be close(), not
+    // terminate().
+    expect(socket.wasTerminated()).toBe(false);
+    expect(socket.closeArgs).toEqual([
+      { code: 1008, reason: expect.any(String) },
+    ]);
+    expect(socket.closeArgs[0]!.reason!.length).toBeGreaterThan(0);
+    expect(socket.sent).toHaveLength(1);
+    const frame = JSON.parse(socket.sent[0]!) as {
+      type: string;
+      fromAction: string;
+      error: { message: string };
+    };
+    expect(frame.type).toBe("error");
+    expect(frame.fromAction).toBe("sendChallengeResponse");
+    expect(frame.error.message).toBe(
+      "Challenge response signature cannot be verified",
+    );
+  });
+
+  test("a malformed signature encoding closes without a permanent code", async () => {
+    const socket = fakeSocket();
+    const challenge = "cd".repeat(32);
+    createFreshSocketChallenge(
+      socket.ws.data,
+      PEER_ID,
+      "ab".repeat(32),
+      challenge,
+      CHALLENGE_ID,
+    );
+    let verifierCalled = false;
+
+    // Uppercase hex is syntactically 128 characters but fails handleChallenge's
+    // own canonical-lowercase-hex check -- an encoding bug a corrected client
+    // could fix, not proof the key is wrong.
+    const authenticated = await handleChallenge(
+      PEER_ID,
+      socket.ws,
+      challenge,
+      "EF".repeat(64),
+      {
+        verifySignature: async () => {
+          verifierCalled = true;
+          return true;
+        },
+      },
+    );
+
+    expect(authenticated).toBe(false);
+    expect(verifierCalled).toBe(false);
+    expect(socket.wasTerminated()).toBe(false);
+    expect(socket.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
+  });
+
+  test("an exception from the verification library itself closes without a permanent code", async () => {
+    const socket = fakeSocket();
+    const challenge = "cd".repeat(32);
+    createFreshSocketChallenge(
+      socket.ws.data,
+      PEER_ID,
+      "ab".repeat(32),
+      challenge,
+      CHALLENGE_ID,
+    );
+
+    const authenticated = await handleChallenge(
+      PEER_ID,
+      socket.ws,
+      challenge,
+      "ef".repeat(64),
+      {
+        verifySignature: async () => {
+          throw new Error("verifier crashed");
+        },
+      },
+    );
+
+    expect(authenticated).toBe(false);
+    // A thrown exception from the verification library is not evidence the
+    // key is bad -- it could be transient. Leave it retryable.
+    expect(socket.wasTerminated()).toBe(false);
+    expect(socket.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
+    expect(socket.ws.data.isAuthenticating).toBe(false);
   });
 });
