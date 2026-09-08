@@ -40,7 +40,11 @@ const client = (
 };
 
 const errorFrame = (raw: string) =>
-  JSON.parse(raw) as { type: string; fromAction: string };
+  JSON.parse(raw) as {
+    type: string;
+    fromAction: string;
+    error: { message: string };
+  };
 
 describe("the requester's socket survives a server-side fault", () => {
   test("a peer-query fault does not close the requester's socket", async () => {
@@ -70,6 +74,11 @@ describe("the requester's socket survives a server-side fault", () => {
     const frame = errorFrame(requester.sent[0]);
     expect(frame.type).toBe("error");
     expect(frame.fromAction).toBe("requestPeers");
+    // The old text asserted the peer did not exist, which was false: this is
+    // a database fault, not an identity verdict.
+    expect(frame.error.message).toBe(
+      "Peers request from peer with id " + PEER_A_ID + " could not be served",
+    );
   });
 
   test("a room-query fault does not close the requester's socket", async () => {
@@ -93,7 +102,13 @@ describe("the requester's socket survives a server-side fault", () => {
 
     expect(requester.closes).toBe(0);
     expect(requester.sent).toHaveLength(1);
-    expect(errorFrame(requester.sent[0]).type).toBe("error");
+    const frame = errorFrame(requester.sent[0]);
+    expect(frame.type).toBe("error");
+    // The old text asserted the room did not exist, which was false: this is
+    // a database fault, not a room-existence verdict.
+    expect(frame.error.message).toBe(
+      "Peers request for room with id " + ROOM_ID + " could not be served",
+    );
   });
 
   test("a leave-and-rejoin race does not close the requester's socket", async () => {
@@ -121,6 +136,12 @@ describe("the requester's socket survives a server-side fault", () => {
 
     expect(requester.closes).toBe(0);
     expect(requester.sent).toHaveLength(1);
-    expect(errorFrame(requester.sent[0]).type).toBe("error");
+    const frame = errorFrame(requester.sent[0]);
+    expect(frame.type).toBe("error");
+    // Same catch, same honest text, for a membership race as for a database
+    // fault: neither is evidence the room does not exist.
+    expect(frame.error.message).toBe(
+      "Peers request for room with id " + ROOM_ID + " could not be served",
+    );
   });
 });

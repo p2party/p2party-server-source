@@ -111,6 +111,12 @@ const handlePeerAcceptsConnectionWithClient = async (
 
       return;
     } catch (error) {
+      // A caught database error is a server fault, not evidence about the
+      // acceptor. Pool exhaustion or a replica hiccup used to close the
+      // acceptor's socket -- terminal on the client (C4) -- while telling it
+      // that it does not exist. Refuse this one acceptance and leave the
+      // socket up, exactly as handlePeers now does.
+      console.error("handlePeerAcceptsConnection peer lookup failed", error);
       if (!isCurrentSource()) return;
       ws.send(
         JSON.stringify({
@@ -118,18 +124,27 @@ const handlePeerAcceptsConnectionWithClient = async (
           fromAction: "requestPeers",
           error: {
             message:
-              "Peers' request was sent from peer with id " +
+              "Peers request from peer with id " +
               fromPeerId +
-              " who does not exist",
+              " could not be served",
           },
         } as WebSocketMessageError),
       );
 
-      ws.close();
-
       return;
     }
   } catch (error) {
+    // Provably unreachable: every fallible call in this outer try is inside
+    // the inner try/catch above. findPeers (findRoomPeers) already catches
+    // its own database faults and returns false rather than throwing,
+    // isCurrentSource() is a plain field comparison, and the !allGood branch
+    // above only logs and returns. JSON.stringify below is safe because
+    // fromPeerId and roomId are isUUID()-validated before this function is
+    // ever called (handleMessage.ts:209-211); Bun's ws.send returns a status
+    // number instead of throwing; and sendToPeer is explicitly non-throwing.
+    // If a future edit adds a fallible call out here, it is silently
+    // reviving the close-an-innocent-socket defect this file was fixed for
+    // -- put new fallible calls inside the inner try/catch instead.
     if (!isCurrentSource()) return;
     ws.send(
       JSON.stringify({
