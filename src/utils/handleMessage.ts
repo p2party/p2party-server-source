@@ -15,7 +15,11 @@ import {
   isProtocolV4,
   MAX_SIGNALING_MESSAGE_CHARS,
 } from "./protocolV4";
-import { activateVerifiedSocket, isCurrentVerifiedSocket } from "./socketAuth";
+import {
+  activateVerifiedSocket,
+  isCurrentVerifiedSocket,
+  MALFORMED_PROTOCOL_CLOSE_CODE,
+} from "./socketAuth";
 import { isExactPongMessage } from "./handlePong";
 import { claimPeer, releasePeer } from "../pubsub";
 
@@ -36,6 +40,17 @@ import type {
   WebSocketMessagePeerConnectionRequest,
   WebSocketMessageLeaveRoomRequest,
 } from "../utils/interfaces";
+
+/**
+ * Marks exactly the nine "Malformed protocol-v4 <thing>" throws below, so the
+ * catch at the bottom of handleMessage can close with
+ * MALFORMED_PROTOCOL_CLOSE_CODE for those alone. Everything else the same
+ * catch can see -- the identity check, the protocolVersion check, the
+ * oversized-frame guard, JSON.parse, and every awaited handler -- still
+ * throws a plain Error and still closes bare, because none of those are
+ * provably a client-build mismatch that retrying cannot fix.
+ */
+class MalformedProtocolV4Message extends Error {}
 
 const hasExactKeys = (value: object, allowed: readonly string[]): boolean => {
   const keys = Object.keys(value);
@@ -127,7 +142,7 @@ const handleMessage = async (
     switch (msg.type) {
       case "pong": {
         if (!isExactPongMessage(msg))
-          throw new Error("Malformed protocol-v4 pong");
+          throw new MalformedProtocolV4Message("Malformed protocol-v4 pong");
         ws.data.isAlive = true;
         clearTimeout(ws.data.pongTimeout); // Clear the pong timeout
         ws.data.pongTimeout = undefined;
@@ -178,7 +193,9 @@ const handleMessage = async (
             events.open(ws);
           }
         } else {
-          throw new Error("Malformed protocol-v4 challenge response");
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 challenge response",
+          );
         }
         break;
       }
@@ -191,14 +208,20 @@ const handleMessage = async (
             msg.roomUrl,
             msg.roomLeaveId,
           );
-        } else throw new Error("Malformed protocol-v4 room leave");
+        } else
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 room leave",
+          );
         break;
       }
 
       case "room": {
         if (isExactRoomRequest(msg)) {
           await handleRoom(msg.fromPeerId, ws, msg.roomUrl, msg.roomRequestId);
-        } else throw new Error("Malformed protocol-v4 room request");
+        } else
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 room request",
+          );
         break;
       }
 
@@ -217,7 +240,9 @@ const handleMessage = async (
             ws,
           );
         } else
-          throw new Error("Malformed protocol-v4 peer-connection response");
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 peer-connection response",
+          );
         break;
       }
 
@@ -229,7 +254,10 @@ const handleMessage = async (
           isUUID(msg.roomId)
         ) {
           await handlePeers(msg.fromPeerId, ws, msg.roomId);
-        } else throw new Error("Malformed protocol-v4 peers request");
+        } else
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 peers request",
+          );
         break;
       }
 
@@ -242,7 +270,10 @@ const handleMessage = async (
           isBoundedCandidate(msg.candidate)
         ) {
           await handleCandidate(ws, msg);
-        } else throw new Error("Malformed protocol-v4 ICE candidate");
+        } else
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 ICE candidate",
+          );
 
         break;
       }
@@ -256,7 +287,10 @@ const handleMessage = async (
           isBoundedDescription(msg.description)
         ) {
           await handleDescription(ws, msg);
-        } else throw new Error("Malformed protocol-v4 description");
+        } else
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 description",
+          );
 
         break;
       }
@@ -270,7 +304,10 @@ const handleMessage = async (
           areBoundedLabels(msg.labels)
         ) {
           await handlePeerConnection(ws, msg);
-        } else throw new Error("Malformed protocol-v4 connection request");
+        } else
+          throw new MalformedProtocolV4Message(
+            "Malformed protocol-v4 connection request",
+          );
 
         break;
       }
@@ -283,7 +320,13 @@ const handleMessage = async (
   } catch (error) {
     console.error(error);
 
-    ws.close();
+    // Only the nine malformed-shape throws above are provably a client-build
+    // mismatch that retrying can never fix; every other cause this catch can
+    // see (identity, protocol-version, oversized-frame, JSON.parse, and any
+    // awaited handler) still closes bare, unchanged from before this split.
+    if (error instanceof MalformedProtocolV4Message)
+      ws.close(MALFORMED_PROTOCOL_CLOSE_CODE, error.message);
+    else ws.close();
   }
 };
 

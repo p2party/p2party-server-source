@@ -53,6 +53,25 @@ export interface ReplaceableSocketAuthClient extends CurrentSocketAuthClient {
  */
 export const PERMANENT_CLOSE_CODE = 1008;
 
+/**
+ * Close code for a message that is well-formed JSON, declares a protocol
+ * version the server matches, but violates the exact protocol-v4 wire shape
+ * for its `type` -- an extra/missing field, a wrong field type, or a value
+ * outside the bounds an `isExact*`/`isBounded*` guard checks (handleMessage.ts,
+ * protocolV4.ts). Retrying changes nothing: the same bytes fail the same
+ * validator forever, so this is the SDK's 1003 ("unsupported data") case --
+ * a build mismatch, not PERMANENT_CLOSE_CODE's "you were refused or
+ * superseded" case.
+ *
+ * This must never be applied to a throw a healthy client can hit from a
+ * transient or server-side cause: a stale/evicted socket sending a post-auth
+ * frame, a protocolVersion mismatch (a rolling deploy can make this resolve
+ * on the next socket, so it is not provably the client's fault), an
+ * oversized frame, or a database fault surfaced as an exception. Those keep
+ * closing with no code so the SDK's reconnect ladder keeps retrying.
+ */
+export const MALFORMED_PROTOCOL_CLOSE_CODE = 1003;
+
 export interface TurnCredentials {
   urls: string[];
   username: string;
