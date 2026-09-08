@@ -74,7 +74,16 @@ const handlePeerAcceptsConnectionWithClient = async (
       const introduction = JSON.stringify({
         type: "peers",
         roomId,
-        peers: [{ id: fromPeerId, publicKey: fromPeer.publicKey }],
+        peers: [
+          {
+            id: fromPeerId,
+            publicKey: fromPeer.publicKey,
+            // Names the acceptor's current socket. Without it the joiner
+            // cannot tell this introduction from one sent by the session it
+            // already holds a transport to (C1).
+            socketGeneration: ws.data.socketGeneration,
+          },
+        ],
         protocolVersion: PROTOCOL_VERSION,
       } as WebSocketMessagePeersResponse);
 

@@ -28,6 +28,7 @@ const state = (): SocketAuthState => ({
   publicKey: "",
   challengeNonce: "",
   challengeId: "",
+  socketGeneration: "",
   isVerified: false,
   isAuthenticating: false,
 });

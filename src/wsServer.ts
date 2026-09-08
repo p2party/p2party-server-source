@@ -136,6 +136,7 @@ export class P2PartyWS {
               peerId: "",
               challengeNonce: "",
               challengeId: "",
+              socketGeneration: "",
               isVerified: false,
               isAuthenticating: false,
               isAlive: true,

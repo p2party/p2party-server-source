@@ -7,6 +7,21 @@ export interface SocketAuthState {
   publicKey: string;
   challengeNonce: string;
   challengeId: string;
+  /**
+   * Identifies THIS socket for the whole of its authenticated life.
+   *
+   * The database binds one stable peerId to an identity public key, so a
+   * second tab or a phrase-restored second device reconnects as the same
+   * peerId and evicts its predecessor with a bare close() that nothing is
+   * told about. Peers therefore had no way to learn that "peerId X" was now a
+   * different session and kept a transport bound to the evicted one forever
+   * (C1). The verified challenge id is already fresh per socket; it is
+   * preserved here rather than re-randomised.
+   *
+   * Empty until this socket proves ownership of the key, and empty again
+   * whenever a fresh challenge is issued on it.
+   */
+  socketGeneration: string;
   isVerified: boolean;
   isAuthenticating: boolean;
 }
@@ -102,6 +117,9 @@ export const createFreshSocketChallenge = (
   state.publicKey = publicKey;
   state.challengeNonce = nonce;
   state.challengeId = challengeId;
+  // An unproven socket has no generation: the value only becomes meaningful,
+  // and only reaches the wire, once this socket has answered the challenge.
+  state.socketGeneration = "";
   state.isVerified = false;
   state.isAuthenticating = false;
 
@@ -131,6 +149,9 @@ export const consumeSocketChallenge = (state: SocketAuthState): string => {
   const challengeId = state.challengeId;
   state.challengeNonce = "";
   state.challengeId = "";
+  // Kept as this socket's generation: it is a fresh UUIDv4 per socket and the
+  // only value in this state that is already unique per connection.
+  state.socketGeneration = challengeId;
   state.isAuthenticating = false;
   state.isVerified = true;
   return challengeId;

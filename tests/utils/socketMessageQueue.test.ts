@@ -102,6 +102,7 @@ const membershipFixture = (
       publicKey: PUBLIC_KEY,
       challengeNonce: "",
       challengeId: "",
+      socketGeneration: "",
       isVerified: true,
       isAuthenticating: false,
       isAlive: true,

@@ -57,6 +57,9 @@ const handlePeerConnectionWithClient = async (
       roomId: msg.roomId,
       fromPeerId: msg.fromPeerId,
       fromPeerPublicKey: fromPeer.publicKey,
+      // Names the dialling socket, so a target holding a transport bound to a
+      // replaced session for this same peerId can retire it (C1).
+      fromPeerSocketGeneration: ws.data.socketGeneration,
       labels: msg.labels,
       protocolVersion: PROTOCOL_VERSION,
     } as WebSocketMessagePeerConnectionResponse);

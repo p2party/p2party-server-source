@@ -108,10 +108,25 @@ export interface WebSocketMessagePeersRequest {
   protocolVersion: number;
 }
 
+export interface RoomPeer {
+  id: string;
+  publicKey: string;
+  /**
+   * The introduced peer's per-socket generation (see SocketAuthState).
+   *
+   * Optional and additive: a 0.14.7 client ignores unknown fields, and a
+   * client talking to a pre-generation server sees `undefined` and behaves
+   * exactly as before. It is what lets a peer tell "the same identity, same
+   * socket" from "the same identity, a new socket that replaced the one my
+   * transport is bound to" (C1).
+   */
+  socketGeneration?: string;
+}
+
 export interface WebSocketMessagePeersResponse {
   type: "peers";
   roomId: string;
-  peers: { id: string; publicKey: string }[];
+  peers: RoomPeer[];
   protocolVersion: number;
 }
 
@@ -143,6 +158,8 @@ export interface WebSocketMessagePeerConnectionResponse {
   type: "connection";
   roomId: string;
   fromPeerId: string;
+  /** The dialling peer's per-socket generation; optional and additive. */
+  fromPeerSocketGeneration?: string;
   labels: string[];
   protocolVersion: number;
 }

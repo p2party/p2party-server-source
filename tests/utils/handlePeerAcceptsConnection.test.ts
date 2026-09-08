@@ -26,6 +26,7 @@ const socket = () => {
       publicKey: SOURCE_KEY,
       challengeNonce: "",
       challengeId: "",
+      socketGeneration: "",
       isVerified: true,
       isAuthenticating: false,
       isAlive: true,

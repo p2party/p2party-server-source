@@ -18,6 +18,7 @@ const fakeSocket = () => {
     publicKey: "",
     challengeNonce: "",
     challengeId: "",
+    socketGeneration: "",
     isVerified: false,
     isAuthenticating: false,
     isAlive: true,

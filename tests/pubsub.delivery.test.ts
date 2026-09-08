@@ -16,6 +16,7 @@ describe("pending signal activation boundary", () => {
         publicKey: "ab".repeat(32),
         challengeNonce: "",
         challengeId: "",
+        socketGeneration: "",
         isVerified: true,
         isAuthenticating: true,
         isAlive: true,

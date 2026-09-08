@@ -1,0 +1,267 @@
+import { afterEach, describe, expect, test } from "bun:test";
+
+import { wsClients } from "../../src/wsServer";
+import {
+  consumeSocketChallenge,
+  createFreshSocketChallenge,
+  registerVerifiedSocket,
+} from "../../src/utils/socketAuth";
+import { createHandlePeerAcceptsConnection } from "../../src/utils/handlePeerAcceptsConnection";
+import { createHandlePeerConnection } from "../../src/utils/handlePeerConnection";
+
+import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
+
+const ROOM_ID = "00000000-0000-4000-8000-000000000001";
+const PEER_A_ID = "00000000-0000-4000-8000-000000000002";
+const PEER_B_ID = "00000000-0000-4000-8000-000000000003";
+const PEER_A_KEY = "aa".repeat(32);
+const PEER_B_KEY = "bb".repeat(32);
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+const emptyState = (): P2PartyWSData =>
+  ({
+    publicKey: "",
+    peerId: "",
+    challengeNonce: "",
+    challengeId: "",
+    socketGeneration: "",
+    isVerified: false,
+    isAuthenticating: false,
+    isAlive: true,
+  }) as P2PartyWSData;
+
+const client = (
+  peerId: string,
+  publicKey: string,
+  socketGeneration: string,
+): P2PartyWSClient & { sent: string[] } => {
+  const sent: string[] = [];
+  return {
+    readyState: 1,
+    data: {
+      ...emptyState(),
+      peerId,
+      publicKey,
+      socketGeneration,
+      isVerified: true,
+    },
+    sent,
+    send: (payload: string) => sent.push(payload),
+    close: () => undefined,
+    terminate: () => undefined,
+  } as unknown as P2PartyWSClient & { sent: string[] };
+};
+
+afterEach(() => {
+  wsClients.clear();
+});
+
+describe("per-socket generation", () => {
+  test("verification preserves the challenge id as the socket generation", () => {
+    const state = emptyState();
+    createFreshSocketChallenge(state, PEER_A_ID, PEER_A_KEY);
+    expect(state.socketGeneration).toBe("");
+    const challengeId = consumeSocketChallenge(state);
+    expect(challengeId).toMatch(UUID_V4);
+    expect(state.challengeId).toBe("");
+    expect(state.socketGeneration).toBe(challengeId);
+  });
+
+  test("a second socket for the same identity gets a different generation", () => {
+    const first = emptyState();
+    const second = emptyState();
+    createFreshSocketChallenge(first, PEER_A_ID, PEER_A_KEY);
+    createFreshSocketChallenge(second, PEER_A_ID, PEER_A_KEY);
+    consumeSocketChallenge(first);
+    consumeSocketChallenge(second);
+    expect(second.socketGeneration).not.toBe(first.socketGeneration);
+    expect(second.socketGeneration).toMatch(UUID_V4);
+  });
+
+  test("a fresh challenge on the same socket clears the old generation", () => {
+    const state = emptyState();
+    createFreshSocketChallenge(state, PEER_A_ID, PEER_A_KEY);
+    consumeSocketChallenge(state);
+    createFreshSocketChallenge(state, PEER_A_ID, PEER_A_KEY);
+    expect(state.socketGeneration).toBe("");
+  });
+
+  test("the peers introduction carries the accepting socket's generation", async () => {
+    const acceptor = client(
+      PEER_A_ID,
+      PEER_A_KEY,
+      "11111111-1111-4111-8111-111111111111",
+    );
+    const joiner = client(
+      PEER_B_ID,
+      PEER_B_KEY,
+      "22222222-2222-4222-8222-222222222222",
+    );
+    const clients = new Map([
+      [PEER_A_ID, acceptor as P2PartyWSClient],
+      [PEER_B_ID, joiner as P2PartyWSClient],
+    ]);
+    const routed: string[] = [];
+    const handle = createHandlePeerAcceptsConnection(
+      {
+        peer: {
+          findUnique: async () => ({ id: PEER_A_ID, publicKey: PEER_A_KEY }),
+        },
+      } as never,
+      {
+        clients,
+        findRoomPeers: async () => true,
+        sendToPeer: async (peerId: string) => {
+          routed.push(peerId);
+          return true;
+        },
+      },
+    );
+    await handle(PEER_A_ID, PEER_B_ID, ROOM_ID, acceptor as P2PartyWSClient);
+
+    expect(routed).toEqual([]);
+    expect(joiner.sent).toHaveLength(1);
+    const frame = JSON.parse(joiner.sent[0]!) as {
+      peers: { id: string; publicKey: string; socketGeneration?: string }[];
+      protocolVersion: number;
+    };
+    expect(frame.protocolVersion).toBe(4);
+    expect(frame.peers[0]!.socketGeneration).toBe(
+      "11111111-1111-4111-8111-111111111111",
+    );
+    expect(frame.peers[0]!.id).toBe(PEER_A_ID);
+    expect(frame.peers[0]!.publicKey).toBe(PEER_A_KEY);
+  });
+
+  test("the connection frame carries the dialling socket's generation", async () => {
+    const dialer = client(
+      PEER_A_ID,
+      PEER_A_KEY,
+      "33333333-3333-4333-8333-333333333333",
+    );
+    const target = client(
+      PEER_B_ID,
+      PEER_B_KEY,
+      "44444444-4444-4444-8444-444444444444",
+    );
+    const clients = new Map([
+      [PEER_A_ID, dialer as P2PartyWSClient],
+      [PEER_B_ID, target as P2PartyWSClient],
+    ]);
+    const handle = createHandlePeerConnection(
+      {
+        peer: {
+          findUnique: async () => ({ id: PEER_A_ID, publicKey: PEER_A_KEY }),
+        },
+      } as never,
+      {
+        clients,
+        findRoomPeers: async () => true,
+        sendToPeer: async () => true,
+      },
+    );
+    await handle(
+      dialer as P2PartyWSClient,
+      {
+        type: "connection",
+        roomId: ROOM_ID,
+        fromPeerId: PEER_A_ID,
+        toPeerId: PEER_B_ID,
+        labels: ["main"],
+        protocolVersion: 4,
+      } as never,
+    );
+
+    expect(target.sent).toHaveLength(1);
+    const frame = JSON.parse(target.sent[0]!) as {
+      type: string;
+      fromPeerId: string;
+      fromPeerPublicKey: string;
+      fromPeerSocketGeneration?: string;
+    };
+    expect(frame.type).toBe("connection");
+    expect(frame.fromPeerId).toBe(PEER_A_ID);
+    expect(frame.fromPeerPublicKey).toBe(PEER_A_KEY);
+    expect(frame.fromPeerSocketGeneration).toBe(
+      "33333333-3333-4333-8333-333333333333",
+    );
+  });
+
+  /**
+   * C1 itself: the same identity on a second tab reconnects as the SAME
+   * peerId (handleConnection upserts Peer by publicKey), the registry entry is
+   * replaced and the predecessor closed with nothing on the wire. The peer on
+   * the other side must be able to see, from the introduction alone, that the
+   * session behind that peerId changed.
+   */
+  test("a second socket for one identity dials with its own generation", async () => {
+    const firstTab = client(
+      PEER_A_ID,
+      PEER_A_KEY,
+      "55555555-5555-4555-8555-555555555555",
+    );
+    const secondTab = client(
+      PEER_A_ID,
+      PEER_A_KEY,
+      "66666666-6666-4666-8666-666666666666",
+    );
+    const target = client(
+      PEER_B_ID,
+      PEER_B_KEY,
+      "77777777-7777-4777-8777-777777777777",
+    );
+    const clients = new Map<string, P2PartyWSClient>([
+      [PEER_B_ID, target as P2PartyWSClient],
+    ]);
+    expect(registerVerifiedSocket(clients, firstTab as P2PartyWSClient)).toBe(
+      true,
+    );
+    expect(registerVerifiedSocket(clients, secondTab as P2PartyWSClient)).toBe(
+      true,
+    );
+    expect(clients.get(PEER_A_ID)).toBe(secondTab as P2PartyWSClient);
+
+    const handle = createHandlePeerConnection(
+      {
+        peer: {
+          findUnique: async () => ({ id: PEER_A_ID, publicKey: PEER_A_KEY }),
+        },
+      } as never,
+      {
+        clients,
+        findRoomPeers: async () => true,
+        sendToPeer: async () => true,
+      },
+    );
+    await handle(
+      secondTab as P2PartyWSClient,
+      {
+        type: "connection",
+        roomId: ROOM_ID,
+        fromPeerId: PEER_A_ID,
+        toPeerId: PEER_B_ID,
+        labels: ["main"],
+        protocolVersion: 4,
+      } as never,
+    );
+
+    expect(target.sent).toHaveLength(1);
+    const frame = JSON.parse(target.sent[0]!) as {
+      fromPeerId: string;
+      fromPeerSocketGeneration?: string;
+    };
+    expect(frame.fromPeerId).toBe(PEER_A_ID);
+    expect(frame.fromPeerSocketGeneration).toBe(
+      "66666666-6666-4666-8666-666666666666",
+    );
+    expect(frame.fromPeerSocketGeneration).not.toBe(
+      firstTab.data.socketGeneration,
+    );
+  });
+
+  test("the protocol version is not bumped by the new field", async () => {
+    const { PROTOCOL_VERSION } = await import("../../src/utils/protocolV4");
+    expect(PROTOCOL_VERSION).toBe(4);
+  });
+});

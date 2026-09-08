@@ -23,6 +23,7 @@ const client = (
     publicKey,
     challengeNonce: "",
     challengeId: "",
+    socketGeneration: "",
     isVerified: true,
     isAuthenticating: false,
     isAlive: true,
