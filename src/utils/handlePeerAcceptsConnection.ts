@@ -45,6 +45,15 @@ const handlePeerAcceptsConnectionWithClient = async (
       // a race, not a protocol violation by the acceptor — handlePeerConnection
       // drops the identical condition silently. Closing the acceptor's socket
       // here left a live member with no signaling and no wake event (C4).
+      // findRoomPeers returns false without logging on its membership path, so
+      // without this line the whole branch is invisible to the operator too.
+      console.warn(
+        "peer acceptance dropped: no current room pair for " +
+          fromPeerId +
+          " -> " +
+          toPeerId,
+      );
+
       return;
     }
 
