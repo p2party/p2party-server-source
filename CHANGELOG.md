@@ -4,13 +4,30 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. 0.1.1
+`protocolVersion` on the wire is versioned separately from this package. 0.1.2
 speaks protocol version 4 and nothing else.
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-09-08
+
+### Added
+
+- Peer introductions carry an optional socket generation derived from the
+  successfully consumed challenge. A replacement tab retains its stable peer
+  identity but receives a fresh generation, allowing SDK 0.14.8 to replace a
+  transport bound to the predecessor. Unverified sockets omit the field.
+  Protocol version remains 4; SDK 0.14.7 ignores the optional fields.
+
 ### Fixed
 
+- Introductions no longer disappear while a verified socket awaits its pong.
+  The current socket ownership checks and heartbeat timeout still fence and
+  evict stale sockets.
+- A departing introduction target or a database failure no longer closes the
+  innocent requester or acceptor. Recoverable server faults are logged and
+  affect the current request; identity refusals and predecessor eviction use
+  close code 1008, while malformed protocol-v4 messages use 1003.
 - Documentation. The README described the server `peers` frame as "the room's
   current peer list". It is not a list: `handlePeerAcceptsConnection` emits one
   accepted peer per frame, and the SDK merges those as additive deltas

@@ -78,7 +78,7 @@ curl -s https://signaling.p2party.com/health | jq
 {
   "status": "ok",
   "protocolVersion": 4,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
 ```
@@ -360,6 +360,13 @@ an absolute expiry — shipped in `p2party-js` 0.14.4, whose changelog names
 `p2party-server` 0.1.1 as the matching server. A v4 client older than 0.14.4
 sends a `room` request with no `roomRequestId`, fails the exact-shape check in
 `handleMessage.ts`, and has its socket closed. So: `p2party-js` 0.14.4 or newer.
+
+Server 0.1.2 adds optional per-socket generations to introductions. SDK 0.14.8
+uses them to distinguish a replacement tab from the previous transport for
+the same peer identity; earlier clients ignore the fields. Deploy both builds
+to obtain that recovery behavior. SDK 0.14.8 can still use a 0.1.1 server, but
+the server cannot identify a replacement socket and the client's bounded
+watchdog does not guarantee convergence in that case.
 
 ## What the server stores
 
