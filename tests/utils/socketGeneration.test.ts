@@ -189,6 +189,66 @@ describe("per-socket generation", () => {
   });
 
   /**
+   * SocketAuthState.socketGeneration is "" (not undefined) before a socket
+   * proves ownership and again right after a fresh challenge is issued on it
+   * (socketAuth.ts's doc comment on that field). That is a real runtime value
+   * of the field, not just a type-level possibility, and the wire contract
+   * for both RoomPeer.socketGeneration and
+   * WebSocketMessagePeerConnectionResponse.fromPeerSocketGeneration
+   * (interfaces.ts) documents only `undefined` as "no information". A client
+   * implementing the natural `if (seen !== incoming) retire()` would treat an
+   * observed "" as a real, different generation from any UUID it already
+   * holds and retire a perfectly healthy edge -- reintroducing the exact
+   * class of bug (C1/C4) this whole feature exists to fix. The server must
+   * therefore never put "" on the wire where a generation is expected: the
+   * field must be omitted entirely, exactly as it already is for a
+   * pre-generation server.
+   */
+  test("an empty socket generation never reaches the wire as a value", async () => {
+    const dialer = client(PEER_A_ID, PEER_A_KEY, "");
+    const target = client(
+      PEER_B_ID,
+      PEER_B_KEY,
+      "88888888-8888-4888-8888-888888888888",
+    );
+    const clients = new Map([
+      [PEER_A_ID, dialer as P2PartyWSClient],
+      [PEER_B_ID, target as P2PartyWSClient],
+    ]);
+    const handle = createHandlePeerConnection(
+      {
+        peer: {
+          findUnique: async () => ({ id: PEER_A_ID, publicKey: PEER_A_KEY }),
+        },
+      } as never,
+      {
+        clients,
+        findRoomPeers: async () => true,
+        sendToPeer: async () => true,
+      },
+    );
+    await handle(
+      dialer as P2PartyWSClient,
+      {
+        type: "connection",
+        roomId: ROOM_ID,
+        fromPeerId: PEER_A_ID,
+        toPeerId: PEER_B_ID,
+        labels: ["main"],
+        protocolVersion: 4,
+      } as never,
+    );
+
+    expect(target.sent).toHaveLength(1);
+    const raw = target.sent[0]!;
+    // Byte-level check first: the key must not appear on the wire at all,
+    // not merely parse back to undefined.
+    expect(raw.includes("fromPeerSocketGeneration")).toBe(false);
+    const frame = JSON.parse(raw) as { fromPeerSocketGeneration?: string };
+    expect(frame.fromPeerSocketGeneration).toBeUndefined();
+  });
+
+  /**
    * C1 itself: the same identity on a second tab reconnects as the SAME
    * peerId (handleConnection upserts Peer by publicKey), the registry entry is
    * replaced and the predecessor closed with nothing on the wire. The peer on

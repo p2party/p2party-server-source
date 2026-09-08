@@ -145,6 +145,26 @@ export const isSocketChallengeBound = (
   state.challengeId.length > 0 &&
   isCanonicalPublicKey(state.publicKey);
 
+/**
+ * The wire form of a socket's generation: `undefined` when there is none.
+ *
+ * `SocketAuthState.socketGeneration` is `""` (not `undefined`) before a
+ * socket has proved ownership of its key, and `""` again the instant a fresh
+ * challenge is issued on it. That is a real runtime value of a `string`
+ * field, not just a type-level possibility. The wire-facing fields it feeds
+ * (`RoomPeer.socketGeneration`, `WebSocketMessagePeerConnectionResponse.
+ * fromPeerSocketGeneration` in interfaces.ts) document only `undefined` as
+ * "no information". A client comparing generations with a bare
+ * `seen !== incoming` would treat an observed `""` as a real, different
+ * generation and retire a healthy edge -- the exact class of bug (C1/C4)
+ * this feature exists to fix. Every site that puts a generation on the wire
+ * must route it through this function so `""` can never be mistaken for one.
+ */
+export const wireSocketGeneration = (
+  state: Pick<SocketAuthState, "socketGeneration">,
+): string | undefined =>
+  state.socketGeneration.length > 0 ? state.socketGeneration : undefined;
+
 export const consumeSocketChallenge = (state: SocketAuthState): string => {
   const challengeId = state.challengeId;
   state.challengeNonce = "";

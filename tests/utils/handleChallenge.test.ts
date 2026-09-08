@@ -91,6 +91,12 @@ describe("WebSocket-bound challenge verification", () => {
       expect(socket.ws.data.isVerified).toBe(true);
       expect(socket.ws.data.challengeNonce).toBe("");
       expect(socket.ws.data.challengeId).toBe("");
+      // This is the production seam the whole per-socket-generation feature
+      // rides on: consumeSocketChallenge must actually write the consumed
+      // challenge id into ws.data.socketGeneration, through the real
+      // handleChallenge() call above -- not a hand-constructed fixture. See
+      // socketAuth.ts's SocketAuthState.socketGeneration doc comment.
+      expect(socket.ws.data.socketGeneration).toBe(CHALLENGE_ID);
       expect(socket.sent).toEqual([]);
       expect(socket.wasTerminated()).toBe(false);
     } finally {

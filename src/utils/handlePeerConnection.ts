@@ -5,7 +5,7 @@ import findRoomPeers from "./findRoomPeers";
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
-import { isCurrentVerifiedSocket } from "./socketAuth";
+import { isCurrentVerifiedSocket, wireSocketGeneration } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type { ProcessPrismaClient } from "../prismaClient";
@@ -58,8 +58,10 @@ const handlePeerConnectionWithClient = async (
       fromPeerId: msg.fromPeerId,
       fromPeerPublicKey: fromPeer.publicKey,
       // Names the dialling socket, so a target holding a transport bound to a
-      // replaced session for this same peerId can retire it (C1).
-      fromPeerSocketGeneration: ws.data.socketGeneration,
+      // replaced session for this same peerId can retire it (C1). Omitted
+      // rather than sent as "" when this socket has no generation yet -- see
+      // wireSocketGeneration's doc comment.
+      fromPeerSocketGeneration: wireSocketGeneration(ws.data),
       labels: msg.labels,
       protocolVersion: PROTOCOL_VERSION,
     } as WebSocketMessagePeerConnectionResponse);
