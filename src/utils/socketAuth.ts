@@ -45,11 +45,16 @@ export interface ReplaceableSocketAuthClient extends CurrentSocketAuthClient {
  * identity has just superseded.
  *
  * The SDK's reconnect ladder retries every close except 1003/1008/1010
- * chosen BY THE SERVER; a bare ws.close() reaches it as 1005 ("no status
- * received"), which it deliberately keeps retrying so the reconnect fix
- * itself is not undone. The SDK also closes its own ingress backlog with
- * 1008 locally, so this code must mean only "the server refused you" --
- * never anything else -- everywhere the server sends it.
+ * chosen BY THE SERVER; a bare ws.close() reaches it as 1000 ("normal
+ * closure"), not 1005 ("no status received") as this comment used to claim --
+ * measured (20/20 runs) against a real Bun WebSocket server, Bun 1.3.14. That
+ * is Bun's behaviour, not a protocol guarantee: a different WebSocket
+ * implementation may still send 1005 for the same bare close(). Either way
+ * 1000 and 1005 both sit outside the permanent set, so the SDK deliberately
+ * keeps retrying it and the reconnect fix is not undone. The SDK also closes
+ * its own ingress backlog with 1008 locally, so this code must mean only
+ * "the server refused you" -- never anything else -- everywhere the server
+ * sends it.
  */
 export const PERMANENT_CLOSE_CODE = 1008;
 
