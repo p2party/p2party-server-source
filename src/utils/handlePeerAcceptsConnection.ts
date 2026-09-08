@@ -41,21 +41,10 @@ const handlePeerAcceptsConnectionWithClient = async (
 
     if (!isCurrentSource()) return;
     if (!allGood) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          fromAction: "requestPeers",
-          error: {
-            message:
-              "Peers' request was sent from peer with id " +
-              fromPeerId +
-              " who does not exist",
-          },
-        } as WebSocketMessageError),
-      );
-
-      ws.close();
-
+      // The joiner left between its introduction and this acceptance. That is
+      // a race, not a protocol violation by the acceptor — handlePeerConnection
+      // drops the identical condition silently. Closing the acceptor's socket
+      // here left a live member with no signaling and no wake event (C4).
       return;
     }
 
@@ -79,8 +68,6 @@ const handlePeerAcceptsConnectionWithClient = async (
           } as WebSocketMessageError),
         );
 
-        ws.close();
-
         return;
       }
 
@@ -93,10 +80,9 @@ const handlePeerAcceptsConnectionWithClient = async (
 
       const peerWsClient = clients.get(toPeerId);
       if (peerWsClient) {
-        if (
-          peerWsClient.data.isAlive &&
-          isCurrentVerifiedSocket(clients, peerWsClient)
-        )
+        // Same as handlePeers: the ping-to-pong window is not a liveness
+        // verdict, and this is the frame that starts the WebRTC exchange.
+        if (isCurrentVerifiedSocket(clients, peerWsClient))
           peerWsClient.send(introduction);
       } else {
         // The introduction is what starts the WebRTC exchange. Dropping it

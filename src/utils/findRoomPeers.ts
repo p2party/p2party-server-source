@@ -101,7 +101,10 @@ const findRoomPeersWithClient = async (
 
     return isInRoom && isCurrentSource();
   } catch (error) {
-    if (isCurrentSource()) ws.terminate();
+    // A caught database error is a server fault. Terminating the caller's
+    // socket for it strands a live member with no signaling and no wake event
+    // (C4); returning false refuses this one request and leaves the socket up.
+    console.error("findRoomPeers failed", error);
 
     return false;
   }

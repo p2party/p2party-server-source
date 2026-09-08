@@ -106,9 +106,12 @@ const handlePeersWithClient = async (
           const peerWsClient = clients.get(peer.id);
 
           if (peerWsClient) {
+            // No isAlive conjunct: it is false for the whole round trip of
+            // every 10 s ping, and sendToPeer does not check it either, so it
+            // was never a transport requirement. The pong timer is what evicts
+            // a dead socket; gating here only dropped introductions silently.
             if (
               isCurrentRequester() &&
-              peerWsClient.data.isAlive &&
               isCurrentVerifiedSocket(clients, peerWsClient) &&
               peerWsClient.data.publicKey === peer.publicKey
             )
