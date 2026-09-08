@@ -11,7 +11,7 @@ import type {
 } from "../utils/interfaces";
 import findRoomPeers from "./findRoomPeers";
 import { PROTOCOL_VERSION } from "./protocolV4";
-import { isCurrentVerifiedSocket } from "./socketAuth";
+import { isCurrentVerifiedSocket, wireSocketGeneration } from "./socketAuth";
 
 type HandlePeerAcceptsConnectionPrisma = Pick<ProcessPrismaClient, "peer">;
 type FindRoomPeers = typeof findRoomPeers;
@@ -89,8 +89,10 @@ const handlePeerAcceptsConnectionWithClient = async (
             publicKey: fromPeer.publicKey,
             // Names the acceptor's current socket. Without it the joiner
             // cannot tell this introduction from one sent by the session it
-            // already holds a transport to (C1).
-            socketGeneration: ws.data.socketGeneration,
+            // already holds a transport to (C1). Omitted rather than sent as
+            // "" when this socket has no generation yet -- see
+            // wireSocketGeneration's doc comment.
+            socketGeneration: wireSocketGeneration(ws.data),
           },
         ],
         protocolVersion: PROTOCOL_VERSION,

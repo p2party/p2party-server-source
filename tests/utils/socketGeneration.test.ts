@@ -249,6 +249,52 @@ describe("per-socket generation", () => {
   });
 
   /**
+   * Same defect as above, at the OTHER emit site: handlePeerAcceptsConnection
+   * builds the `peers` introduction's RoomPeer entry directly from
+   * `ws.data.socketGeneration` (handlePeerAcceptsConnection.ts). An acceptor
+   * whose socket has not yet proved ownership of its key -- or whose
+   * challenge was just refreshed -- holds "" there, and RoomPeer.socketGeneration
+   * documents `undefined` as the only "no information" value. Without routing
+   * through wireSocketGeneration(), this site would put "" on the wire and a
+   * `seen !== incoming` client would retire a healthy edge (C1/C4).
+   */
+  test("an empty socket generation never reaches the wire via the peers introduction", async () => {
+    const acceptor = client(PEER_A_ID, PEER_A_KEY, "");
+    const joiner = client(
+      PEER_B_ID,
+      PEER_B_KEY,
+      "99999999-9999-4999-8999-999999999999",
+    );
+    const clients = new Map([
+      [PEER_A_ID, acceptor as P2PartyWSClient],
+      [PEER_B_ID, joiner as P2PartyWSClient],
+    ]);
+    const handle = createHandlePeerAcceptsConnection(
+      {
+        peer: {
+          findUnique: async () => ({ id: PEER_A_ID, publicKey: PEER_A_KEY }),
+        },
+      } as never,
+      {
+        clients,
+        findRoomPeers: async () => true,
+        sendToPeer: async () => true,
+      },
+    );
+    await handle(PEER_A_ID, PEER_B_ID, ROOM_ID, acceptor as P2PartyWSClient);
+
+    expect(joiner.sent).toHaveLength(1);
+    const raw = joiner.sent[0]!;
+    // Byte-level check first: the key must not appear on the wire at all,
+    // not merely parse back to undefined.
+    expect(raw.includes("socketGeneration")).toBe(false);
+    const frame = JSON.parse(raw) as {
+      peers: { id: string; publicKey: string; socketGeneration?: string }[];
+    };
+    expect(frame.peers[0]!.socketGeneration).toBeUndefined();
+  });
+
+  /**
    * C1 itself: the same identity on a second tab reconnects as the SAME
    * peerId (handleConnection upserts Peer by publicKey), the registry entry is
    * replaced and the predecessor closed with nothing on the wire. The peer on

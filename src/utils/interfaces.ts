@@ -120,18 +120,16 @@ export interface RoomPeer {
    * socket" from "the same identity, a new socket that replaced the one my
    * transport is bound to" (C1).
    *
-   * `undefined` is the ONLY "no information" value: the server must never
-   * put an empty string here. `SocketAuthState.socketGeneration` is `""`
-   * (not `undefined`) before a socket proves ownership of its key, and `""`
-   * again right after a fresh challenge is issued on it, so `""` is a real
-   * runtime value the server can hold -- it must be omitted, never emitted,
-   * at the point a `RoomPeer` is built. A client comparing generations with
-   * a bare `seen !== incoming` would otherwise treat an observed `""` as a
-   * real, different generation and retire a healthy edge, reintroducing the
-   * exact class of bug (C1/C4) this field exists to fix. Because that
-   * omission is enforced at each construction site rather than by this
-   * type, a defensive client should still treat `""` and `undefined`
-   * identically if it ever observes one.
+   * `undefined` is the ONLY "no information" value -- never an empty
+   * string. `SocketAuthState.socketGeneration` is `""` before a socket
+   * proves ownership of its key and `""` again right after a fresh
+   * challenge, so every site that builds a `RoomPeer` routes it through
+   * `wireSocketGeneration()` (socketAuth.ts), which turns `""` into
+   * `undefined` before it can reach `JSON.stringify` and the wire. See
+   * `WebSocketMessagePeerConnectionResponse.fromPeerSocketGeneration`'s doc
+   * comment for why this matters: a naive `seen !== incoming` client would
+   * otherwise retire a healthy edge on an observed `""` (the exact C1/C4
+   * class of bug this field exists to fix).
    */
   socketGeneration?: string;
 }
