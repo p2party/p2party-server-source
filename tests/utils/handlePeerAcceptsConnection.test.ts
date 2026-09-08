@@ -190,9 +190,7 @@ describe("peer acceptance dropped by a mid-flight leave", () => {
               publicKey: SOURCE_KEY,
             }),
           },
-        } as unknown as Parameters<
-          typeof createHandlePeerAcceptsConnection
-        >[0],
+        } as unknown as Parameters<typeof createHandlePeerAcceptsConnection>[0],
         {
           clients,
           findRoomPeers: async () => false,

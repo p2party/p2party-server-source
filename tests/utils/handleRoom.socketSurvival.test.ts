@@ -50,9 +50,7 @@ const rawClient = (): P2PartyWSClient & {
   };
 };
 
-const client = (
-  clients: Map<string, P2PartyWSClient>,
-) => {
+const client = (clients: Map<string, P2PartyWSClient>) => {
   const ws = rawClient();
   clients.set(PEER_ID, ws);
   return ws;
@@ -72,7 +70,11 @@ describe("the room requester's socket survives a server-side fault", () => {
     const handleRoom = createHandleRoom(
       {
         peer: {
-          findUnique: async () => ({ id: PEER_ID, publicKey: PEER_KEY, rooms: [] }),
+          findUnique: async () => ({
+            id: PEER_ID,
+            publicKey: PEER_KEY,
+            rooms: [],
+          }),
         },
         room: {
           upsert: async () => {
@@ -105,7 +107,11 @@ describe("the room requester's socket survives a server-side fault", () => {
     const handleRoom = createHandleRoom(
       {
         peer: {
-          findUnique: async () => ({ id: PEER_ID, publicKey: PEER_KEY, rooms: [] }),
+          findUnique: async () => ({
+            id: PEER_ID,
+            publicKey: PEER_KEY,
+            rooms: [],
+          }),
         },
         room: {
           upsert: async () => {

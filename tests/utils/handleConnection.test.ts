@@ -48,7 +48,11 @@ const socket = (): P2PartyWSClient & {
 };
 
 const errorFrame = (raw: string) =>
-  JSON.parse(raw) as { type: string; fromAction: string; error: { message: string } };
+  JSON.parse(raw) as {
+    type: string;
+    fromAction: string;
+    error: { message: string };
+  };
 
 describe("the identity-bootstrap socket survives a server-side fault", () => {
   test("a peer-upsert fault closes with 1011 (retryable), not a bare terminate", async () => {
