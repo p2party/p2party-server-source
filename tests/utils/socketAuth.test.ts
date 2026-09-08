@@ -35,12 +35,15 @@ const state = (): SocketAuthState => ({
 
 const replaceableSocket = (): ReplaceableSocketAuthClient & {
   closeCalls: number;
+  closeArgs: { code?: number; reason?: string }[];
 } => ({
   data: state(),
   readyState: 1,
   closeCalls: 0,
-  close() {
+  closeArgs: [],
+  close(code?: number, reason?: string) {
     this.closeCalls += 1;
+    this.closeArgs.push({ code, reason });
   },
 });
 
@@ -114,6 +117,46 @@ describe("verified socket registry", () => {
     expect(clients.get(PEER_ID)).toBe(replacement);
     expect(unregisterSocketIfCurrent(clients, replacement)).toBe(true);
     expect(clients.has(PEER_ID)).toBe(false);
+  });
+
+  /**
+   * The client's signaling reconnect ladder retries every close except
+   * codes 1003/1008/1010 chosen BY THE SERVER, which it treats as
+   * permanent. A bare close() reaches the client as 1005 ("no status
+   * received"), which the client deliberately retries -- otherwise the
+   * reconnect fix itself would be undone. Before that reconnect ladder
+   * existed, an evicted predecessor (a second tab, or a phrase-restored
+   * second device reconnecting as the same identity) just went quiet. Now
+   * a bare close here makes the evicted tab reconnect, evict whichever
+   * socket displaced it, and the two sockets evict each other forever --
+   * reintroducing the exact desync class this feature exists to fix, one
+   * layer up. 1008 (policy violation) is in the client's permanent set, so
+   * the evicted predecessor must be closed with it: "do not retry, another
+   * session has taken over this identity" is exactly the right verdict for
+   * a socket that was never invalid, only superseded.
+   */
+  test("eviction closes the predecessor with 1008 so it cannot retry into another eviction loop", () => {
+    const clients = new Map<string, ReplaceableSocketAuthClient>();
+    const predecessor = replaceableSocket();
+    const successor = replaceableSocket();
+    predecessor.data.peerId = PEER_ID;
+    predecessor.data.publicKey = "ab".repeat(32);
+    predecessor.data.isVerified = true;
+    successor.data.peerId = PEER_ID;
+    successor.data.publicKey = "ab".repeat(32);
+    successor.data.isVerified = true;
+
+    expect(registerVerifiedSocket(clients, predecessor)).toBe(true);
+    expect(registerVerifiedSocket(clients, successor)).toBe(true);
+
+    expect(predecessor.closeCalls).toBe(1);
+    expect(predecessor.closeArgs).toEqual([
+      { code: 1008, reason: expect.any(String) },
+    ]);
+    expect(predecessor.closeArgs[0]!.reason!.length).toBeGreaterThan(0);
+    // The surviving socket must be completely untouched by the eviction.
+    expect(successor.closeCalls).toBe(0);
+    expect(successor.data.isVerified).toBe(true);
   });
 
   test("a failed routing claim closes and removes the unrouteable socket", async () => {

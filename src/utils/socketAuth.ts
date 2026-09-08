@@ -35,8 +35,23 @@ export interface CurrentSocketAuthClient extends SocketAuthClient {
 }
 
 export interface ReplaceableSocketAuthClient extends CurrentSocketAuthClient {
-  close: () => unknown;
+  close: (code?: number, reason?: string) => unknown;
 }
+
+/**
+ * Close code for a server-chosen refusal the client must never retry:
+ * a challenge/signature/key refusal, or -- as used in registerVerifiedSocket
+ * below -- an authenticated socket that a newer session for the same
+ * identity has just superseded.
+ *
+ * The SDK's reconnect ladder retries every close except 1003/1008/1010
+ * chosen BY THE SERVER; a bare ws.close() reaches it as 1005 ("no status
+ * received"), which it deliberately keeps retrying so the reconnect fix
+ * itself is not undone. The SDK also closes its own ingress backlog with
+ * 1008 locally, so this code must mean only "the server refused you" --
+ * never anything else -- everywhere the server sends it.
+ */
+export const PERMANENT_CLOSE_CODE = 1008;
 
 export interface TurnCredentials {
   urls: string[];
@@ -243,7 +258,17 @@ export const registerVerifiedSocket = <T extends ReplaceableSocketAuthClient>(
     // successor. Clearing authentication first also makes every stale frame
     // fail while the transport finishes closing.
     predecessor.data.isVerified = false;
-    predecessor.close();
+    // A bare close() reaches the client as 1005, which its reconnect ladder
+    // deliberately retries. Without a permanent code here, the evicted
+    // predecessor reconnects, evicts whichever socket displaced it, and the
+    // two sockets evict each other forever. PERMANENT_CLOSE_CODE tells the
+    // predecessor's client "do not retry, another session has taken over
+    // this identity" -- correct even though this socket was never invalid,
+    // only superseded.
+    predecessor.close(
+      PERMANENT_CLOSE_CODE,
+      "Replaced by a newer session for this identity",
+    );
   }
   return true;
 };

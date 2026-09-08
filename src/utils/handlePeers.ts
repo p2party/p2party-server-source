@@ -5,7 +5,7 @@ import type { ProcessPrismaClient } from "../prismaClient";
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
-import { isCurrentVerifiedSocket } from "./socketAuth";
+import { isCurrentVerifiedSocket, PERMANENT_CLOSE_CODE } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -52,7 +52,18 @@ const handlePeersWithClient = async (
           } as WebSocketMessageError),
         );
 
-        ws.close();
+        // Peer rows are never deleted, and this socket already proved
+        // ownership of ws.data.publicKey via the challenge, so this branch
+        // means the identity claim itself is broken -- not a database fault
+        // (that is the catch below) and not a race (isCurrentRequester()
+        // above already confirmed this is still the current owner of
+        // fromPeerId). Retrying with the same credentials cannot succeed;
+        // PERMANENT_CLOSE_CODE tells the client so instead of the bare
+        // close's 1005, which its reconnect ladder retries forever.
+        ws.close(
+          PERMANENT_CLOSE_CODE,
+          "Peer identity does not match this socket",
+        );
 
         return;
       } else fromPeerPublicKey = fromPeer.publicKey;
