@@ -113,7 +113,23 @@ const handleRoomWithClient = async (
   } catch (error) {
     console.error(error);
 
-    if (isCurrent())
+    if (isCurrent()) {
+      // Every explicit throw in the mutation above ("...no longer current",
+      // "...replaced before/during membership") only fires when isCurrent()
+      // is already false at that throw site, and stays false here -- no
+      // await separates that throw from this catch (peerRoomMutationQueue's
+      // own cleanup is synchronous). The identity-mismatch throw ("...sent
+      // by a non-existing or unverified client") is likewise provably
+      // unreachable while isCurrent() is true: fromPeerId is already
+      // ws.data.peerId, and Peer rows are never deleted or have their
+      // publicKey changed after creation (the same fact d502ac0 relies on
+      // for handlePeers.ts), so a peer row this exact socket already proved
+      // ownership of cannot fail that lookup or that comparison. So a throw
+      // reaching here with isCurrent() still true can only be a database or
+      // server fault (peer.findUnique / room.upsert / room.update),
+      // reaching this innocent, still-current socket. Terminating it for
+      // that is exactly the defect 15af423/d502ac0/ee91b95 removed from the
+      // three sibling functions -- leave it open instead.
       ws.send(
         JSON.stringify({
           type: "error",
@@ -121,7 +137,13 @@ const handleRoomWithClient = async (
           error,
         } as WebSocketMessageError),
       );
+      return;
+    }
 
+    // Not current: this socket was already superseded (or is mid a fresh
+    // authentication cycle) before or during the mutation -- a race, not a
+    // fault against a live client. No frame was sent above, so there is
+    // nothing terminate() can drop here.
     ws.terminate();
   }
 };
