@@ -5,12 +5,16 @@ import type { ProcessPrismaClient } from "../prismaClient";
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
-import { isCurrentVerifiedSocket, PERMANENT_CLOSE_CODE } from "./socketAuth";
+import {
+  isCurrentVerifiedSocket,
+  PERMANENT_CLOSE_CODE,
+  wireSocketGeneration,
+} from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
   WebSocketMessageError,
-  // WebSocketMessagePeersResponse,
+  WebSocketMessagePeersResponse,
   WebSocketMessageConnectionRequest,
 } from "../utils/interfaces";
 
@@ -29,6 +33,9 @@ const handlePeersWithClient = async (
   fromPeerId: string,
   ws: P2PartyWSClient,
   roomId: string,
+  rosterRequestId?: string,
+  excludedPeerIds: readonly string[] = [],
+  targetPeerIds?: readonly string[],
 ) => {
   const isCurrentRequester = () =>
     ws.data.peerId === fromPeerId && isCurrentVerifiedSocket(clients, ws);
@@ -41,6 +48,7 @@ const handlePeersWithClient = async (
       });
 
       if (!isCurrentRequester()) return;
+
       if (!fromPeer || fromPeer.publicKey !== ws.data.publicKey) {
         ws.send(
           JSON.stringify({
@@ -107,10 +115,46 @@ const handlePeersWithClient = async (
         throw new Error("Requesting peer is not a member of this room");
       if (!isCurrentRequester()) return;
 
+      // An explicit request opts in: old clients still receive only accepted
+      // peer deltas. This is membership, including offline members, not proof
+      // that any listed peer accepted a connection. Send before any remote
+      // delivery await so a delayed introduction cannot stale this snapshot.
+      if (rosterRequestId)
+        ws.send(
+          JSON.stringify({
+            type: "peers",
+            rosterKind: "snapshot",
+            rosterRequestId,
+            roomId,
+            peers: room.peers
+              .filter((peer) => peer.id !== fromPeerId)
+              .map((peer) => {
+                const live = clients.get(peer.id);
+                return {
+                  id: peer.id,
+                  publicKey: peer.publicKey,
+                  ...(live &&
+                  isCurrentVerifiedSocket(clients, live) &&
+                  live.data.publicKey === peer.publicKey
+                    ? { socketGeneration: wireSocketGeneration(live.data) }
+                    : {}),
+                };
+              }),
+            protocolVersion: PROTOCOL_VERSION,
+          } satisfies WebSocketMessagePeersResponse),
+        );
+
       const len = room?.peers.length ?? 0;
       for (let i = 0; i < len; i++) {
         if (!isCurrentRequester()) return;
-        if (room && room.peers[i] && room.peers[i].id !== fromPeerId) {
+        if (
+          room &&
+          room.peers[i] &&
+          room.peers[i].id !== fromPeerId &&
+          !excludedPeerIds.includes(room.peers[i].id) &&
+          (targetPeerIds === undefined ||
+            targetPeerIds.includes(room.peers[i].id))
+        ) {
           const peer = room.peers[i];
           const introduction = JSON.stringify({
             type: "peerConnection",
@@ -192,7 +236,14 @@ const handlePeersWithClient = async (
 
 export const createHandlePeers =
   (prisma: HandlePeersPrisma, dependencies: HandlePeersDependencies = {}) =>
-  (fromPeerId: string, ws: P2PartyWSClient, roomId: string) =>
+  (
+    fromPeerId: string,
+    ws: P2PartyWSClient,
+    roomId: string,
+    rosterRequestId?: string,
+    excludedPeerIds?: readonly string[],
+    targetPeerIds?: readonly string[],
+  ) =>
     handlePeersWithClient(
       prisma,
       dependencies.clients ?? wsClients,
@@ -200,6 +251,9 @@ export const createHandlePeers =
       fromPeerId,
       ws,
       roomId,
+      rosterRequestId,
+      excludedPeerIds,
+      targetPeerIds,
     );
 
 const handlePeers = createHandlePeers(sharedPrisma);

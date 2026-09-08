@@ -82,6 +82,7 @@ const handlePeerAcceptsConnectionWithClient = async (
 
       const introduction = JSON.stringify({
         type: "peers",
+        rosterKind: "delta",
         roomId,
         peers: [
           {

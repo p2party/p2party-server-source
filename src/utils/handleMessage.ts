@@ -109,6 +109,32 @@ export const isExactLeaveRoomRequest = (
   );
 };
 
+export const isBoundedPeersRequest = (
+  value: unknown,
+): value is WebSocketMessagePeersRequest => {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const msg = value as WebSocketMessagePeersRequest;
+  const boundedIds = (ids: unknown): boolean =>
+    ids === undefined ||
+    (Array.isArray(ids) &&
+      ids.length <= 64 &&
+      ids.every((id) => typeof id === "string" && isUUID(id)));
+  return (
+    msg.type === "peers" &&
+    isProtocolV4(msg.protocolVersion) &&
+    typeof msg.fromPeerId === "string" &&
+    isUUID(msg.fromPeerId) &&
+    typeof msg.roomId === "string" &&
+    isUUID(msg.roomId) &&
+    (msg.rosterRequestId === undefined ||
+      (typeof msg.rosterRequestId === "string" &&
+        isUUID(msg.rosterRequestId, 4))) &&
+    boundedIds(msg.excludedPeerIds) &&
+    boundedIds(msg.targetPeerIds)
+  );
+};
+
 const handleMessage = async (
   ws: P2PartyWSClient,
   message: P2PartyWSMsg,
@@ -247,13 +273,15 @@ const handleMessage = async (
       }
 
       case "peers": {
-        if (
-          msg.type === "peers" &&
-          isProtocolV4(msg.protocolVersion) &&
-          isUUID(msg.fromPeerId) &&
-          isUUID(msg.roomId)
-        ) {
-          await handlePeers(msg.fromPeerId, ws, msg.roomId);
+        if (isBoundedPeersRequest(msg)) {
+          await handlePeers(
+            msg.fromPeerId,
+            ws,
+            msg.roomId,
+            msg.rosterRequestId,
+            msg.excludedPeerIds,
+            msg.targetPeerIds,
+          );
         } else
           throw new MalformedProtocolV4Message(
             "Malformed protocol-v4 peers request",

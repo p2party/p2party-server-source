@@ -3,6 +3,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import handleMessage, {
   isExactRoomRequest,
   isExactLeaveRoomRequest,
+  isBoundedPeersRequest,
 } from "../../src/utils/handleMessage";
 import { wsClients } from "../../src/wsServer";
 
@@ -16,6 +17,42 @@ const PEER_ID = "00000000-0000-4000-8000-000000000001";
 
 afterEach(() => {
   wsClients.clear();
+});
+
+describe("additive bounded roster discovery", () => {
+  const base = {
+    type: "peers",
+    fromPeerId: PEER_ID,
+    roomId: "00000000-0000-4000-8000-000000000002",
+    protocolVersion: 4,
+  };
+  test("legacy and correlated snapshot requests coexist without changing the challenge", () => {
+    expect(isBoundedPeersRequest(base)).toBe(true);
+    expect(
+      isBoundedPeersRequest({
+        ...base,
+        rosterRequestId: PEER_ID,
+        excludedPeerIds: [PEER_ID],
+        targetPeerIds: [PEER_ID],
+      }),
+    ).toBe(true);
+  });
+  test("malformed ids and over-cap exclusion lists are rejected before database work", () => {
+    for (const extra of [
+      { rosterRequestId: "bad" },
+      { rosterRequestId: 1 },
+      { excludedPeerIds: "all" },
+      { excludedPeerIds: [null] },
+      { excludedPeerIds: ["bad"] },
+      { excludedPeerIds: Array(65).fill(PEER_ID) },
+      { targetPeerIds: "all" },
+      { targetPeerIds: [null] },
+      { targetPeerIds: ["bad"] },
+      { targetPeerIds: Array(65).fill(PEER_ID) },
+      { roomId: null },
+    ])
+      expect(isBoundedPeersRequest({ ...base, ...extra })).toBe(false);
+  });
 });
 
 describe("protocol-v4 authentication boundary", () => {

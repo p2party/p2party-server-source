@@ -106,6 +106,9 @@ export interface WebSocketMessagePeersRequest {
   fromPeerId: string;
   roomId: string;
   protocolVersion: number;
+  rosterRequestId?: string;
+  excludedPeerIds?: string[];
+  targetPeerIds?: string[];
 }
 
 export interface RoomPeer {
@@ -138,6 +141,8 @@ export interface WebSocketMessagePeersResponse {
   type: "peers";
   roomId: string;
   peers: RoomPeer[];
+  rosterKind?: "snapshot" | "delta";
+  rosterRequestId?: string;
   protocolVersion: number;
 }
 

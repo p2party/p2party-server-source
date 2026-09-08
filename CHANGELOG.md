@@ -4,10 +4,44 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. 0.1.2
+`protocolVersion` on the wire is versioned separately from this package. 0.1.3
 speaks protocol version 4 and nothing else.
 
 ## [Unreleased]
+
+## [0.1.3] — 2026-09-08
+
+Coordinated with `p2party-js` 0.14.9 for membership-driven mesh repair. Protocol
+version remains 4; existing clients retain the acceptance-delta flow.
+
+### Added
+
+- Optional UUIDv4 `rosterRequestId` on `peers` requests. The server responds
+  directly with `rosterKind: "snapshot"`, the matching request ID and room UUID,
+  and complete membership excluding the requester, including offline members.
+  A snapshot represents one database read, not a globally ordered revision or
+  evidence that a listed peer accepted a connection. It is sent before awaiting
+  introduction routing.
+- Optional `targetPeerIds` and `excludedPeerIds`, each bounded to 64 UUIDs.
+  They select introductions only and never filter snapshot membership.
+  Exclusions win; an empty target list requests no introductions, and an
+  omitted target list retains the earlier all-other-members behavior. This
+  lets SDK 0.14.9 repair missing edges while suppressing automatic retries
+  after terminal PIN or policy failures.
+- Explicit `rosterKind: "delta"` on one-peer acceptance responses. Requests
+  without `rosterRequestId` receive no snapshot, preserving older SDK behavior.
+
+### Fixed
+
+- Snapshot and introduction work is fenced by the exact current verified
+  requester socket after database awaits and before each introduction. A
+  displaced socket cannot publish delayed membership or continue requesting
+  peer connections; a requester absent from the room lookup receives no
+  snapshot.
+- The README now distinguishes opt-in snapshots from acceptance deltas,
+  documents offline membership and targeted repair, and states that SDK 0.14.9
+  needs server 0.1.3 for these mesh-repair features. The historical 0.1.2 behavior
+  remains documented below.
 
 ## [0.1.2] — 2026-09-08
 

@@ -78,7 +78,7 @@ curl -s https://signaling.p2party.com/health | jq
 {
   "status": "ok",
   "protocolVersion": 4,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
 ```
@@ -121,35 +121,35 @@ After the server's initial `peerId` challenge, signaling is JSON. The
 Every message other than `pong` must use exact protocol version `4`, and every
 message must repeat the socket's bound `fromPeerId`.
 
-| Client message   | Purpose                                                       |
-| ---------------- | ------------------------------------------------------------- |
-| `challenge`      | Prove possession of the Ed25519 identity key for this socket. |
-| `room`           | Create or join the room represented by a 64-hex room token.   |
-| `leaveRoom`      | Idempotently remove this authenticated peer from one room.    |
-| `peers`          | Ask the server to introduce this peer to existing room peers. |
-| `peerConnection` | Accept a room peer introduction.                              |
-| `connection`     | Request signaling for the listed DataChannel labels.          |
-| `description`    | Forward a bounded WebRTC session description to a room peer.  |
-| `candidate`      | Forward a bounded ICE candidate to a room peer.               |
-| `pong`           | Answer the server heartbeat.                                  |
+| Client message   | Purpose                                                                |
+| ---------------- | ---------------------------------------------------------------------- |
+| `challenge`      | Prove possession of the Ed25519 identity key for this socket.          |
+| `room`           | Create or join the room represented by a 64-hex room token.            |
+| `leaveRoom`      | Idempotently remove this authenticated peer from one room.             |
+| `peers`          | Request introductions and optionally a correlated membership snapshot. |
+| `peerConnection` | Accept a room peer introduction.                                       |
+| `connection`     | Request signaling for the listed DataChannel labels.                   |
+| `description`    | Forward a bounded WebRTC session description to a room peer.           |
+| `candidate`      | Forward a bounded ICE candidate to a room peer.                        |
+| `pong`           | Answer the server heartbeat.                                           |
 
 ### Server messages
 
 The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 
-| Server message   | Sent when                                                        |
-| ---------------- | ---------------------------------------------------------------- |
-| `peerId`         | A socket connects and receives its bound peer ID and challenge.  |
-| `challenge`      | The challenge signature verified; authentication is complete.    |
-| `roomId`         | A `room` request created or joined a room.                       |
-| `roomLeft`       | The requested membership is absent after an idempotent leave.    |
-| `peers`          | One peer that accepted an introduction. A delta, not a snapshot. |
-| `peerConnection` | Another peer asked to be introduced to you.                      |
-| `connection`     | A peer requested DataChannel signaling with you.                 |
-| `description`    | A relayed WebRTC session description.                            |
-| `candidate`      | A relayed ICE candidate.                                         |
-| `ping`           | Heartbeat. **Carries no `protocolVersion` and no `fromPeerId`.** |
-| `error`          | Any rejection; the socket may or may not be closed.              |
+| Server message   | Sent when                                                            |
+| ---------------- | -------------------------------------------------------------------- |
+| `peerId`         | A socket connects and receives its bound peer ID and challenge.      |
+| `challenge`      | The challenge signature verified; authentication is complete.        |
+| `roomId`         | A `room` request created or joined a room.                           |
+| `roomLeft`       | The requested membership is absent after an idempotent leave.        |
+| `peers`          | An acceptance delta, or an explicitly requested membership snapshot. |
+| `peerConnection` | Another peer asked to be introduced to you.                          |
+| `connection`     | A peer requested DataChannel signaling with you.                     |
+| `description`    | A relayed WebRTC session description.                                |
+| `candidate`      | A relayed ICE candidate.                                             |
+| `ping`           | Heartbeat. **Carries no `protocolVersion` and no `fromPeerId`.**     |
+| `error`          | Any rejection; the socket may or may not be closed.                  |
 
 > The interfaces in [`src/utils/interfaces.ts`](src/utils/interfaces.ts) are the
 > starting point, not a complete schema. Handlers construct responses with an
@@ -158,14 +158,14 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 > string on relayed `description` and `candidate` frames
 > (`handleDescription.ts:36`, `handleCandidate.ts:35`), and `fromPeerPublicKey`
 > on a relayed `connection` frame (`handlePeerConnection.ts:59`). Read the
-> handler alongside the interface before writing a client. Note also that a
-> `peers` frame is emitted by the handler for the client's `peerConnection`
-> message, not by the `peers` handler, whose own reply to the requester is
-> commented out (`handlePeers.ts:125-131`).
+> handler alongside the interface before writing a client. `handlePeers`
+> emits explicitly requested snapshots; `handlePeerAcceptsConnection` emits
+> acceptance deltas. Clients must distinguish the two by `rosterKind`.
 
 ### Message flow
 
-Every frame is an event. Nothing the server sends is a room snapshot.
+Membership snapshots are opt-in. Requests without `rosterRequestId` retain
+the earlier introduction-and-acceptance flow.
 
 1. **`peerId`** (server → client), immediately on open: the socket's peer id and
    a fresh 32-byte challenge nonce.
@@ -176,29 +176,73 @@ Every frame is an event. Nothing the server sends is a room snapshot.
 4. **`room`** (client → server) with a 64-hex room token and a UUIDv4
    `roomRequestId`; **`roomId`** (server → client) echoes both and carries the
    room's server-side UUID, plus `turnCredentials` when TURN is configured.
-5. **`peers`** (client → server) with that room UUID. The server does **not**
-   answer the requester. It sends a **`peerConnection`** introduction naming the
-   requester — `{ id, publicKey }` — to every _other_ member of that room
-   (`handlePeers.ts`).
+5. **`peers`** (client → server) with that room UUID. If it includes a UUIDv4
+   `rosterRequestId`, the server first answers with **`peers`** carrying
+   `rosterKind: "snapshot"`, that request ID, the room UUID and every _other_
+   member. It then sends **`peerConnection`** introductions naming the requester
+   — `{ id, publicKey }` — to the selected room members. Without the optional
+   request ID, the requester receives no direct snapshot reply.
 6. **`peerConnection`** (existing member → server) accepts the introduction; the
-   server sends the joiner a **`peers`** frame whose array holds exactly one
-   entry, the accepting peer (`handlePeerAcceptsConnection.ts:87-92`). One
-   accepted peer per frame, one frame per acceptance.
+   server sends the joiner a **`peers`** frame with `rosterKind: "delta"` whose
+   array holds exactly one entry, the accepting peer. One accepted peer per
+   frame, one frame per acceptance.
 7. **`connection`**, **`description`** and **`candidate`** are relayed to
    `toPeerId` after `findRoomPeers` re-checks that both peers exist and both are
    members of that room. The relayed copy drops `toPeerId` and carries the
    sender's `fromPeerId`.
 
-Because a `peers` frame is one accepted peer, a client that treated it as the
-room roster would delete every other member. The SDK merges it as an additive
-delta (`p2party-js/src/handlers/peerRosterDelta.ts`).
+An acceptance delta is additive; treating it as the whole roster would delete
+every other member. A snapshot can replace the membership view only after the
+client verifies its current socket, room UUID and outstanding
+`rosterRequestId`. An empty snapshot means the database read found no other
+members; an empty delta is not a departure signal.
+
+### Membership snapshots and targeted repair
+
+An authenticated room member can request a snapshot without introducing itself
+to anyone:
+
+```json
+{
+  "type": "peers",
+  "fromPeerId": "<socket-bound peer UUID>",
+  "roomId": "<joined room UUID>",
+  "rosterRequestId": "<fresh UUIDv4>",
+  "targetPeerIds": [],
+  "protocolVersion": 4
+}
+```
+
+The snapshot contains the room's complete membership except the requester,
+including offline members. It is not proof that a listed peer is online or
+accepted a connection. A member's optional `socketGeneration` is included only
+when this process holds its current verified socket with the matching public
+key. The server sends the snapshot immediately after its room lookup and
+ownership check, before awaiting introduction routing.
+
+`targetPeerIds` and `excludedPeerIds` are optional UUID arrays, each limited to
+64 entries. They filter introductions only; neither changes snapshot contents.
+An omitted target list selects all other room members; an empty list selects
+none. Otherwise only listed room members receive introductions, and exclusions
+always win. IDs outside the room receive nothing. A client can therefore repair
+specific missing edges while excluding peers whose PIN or policy failure awaits
+an explicit retry, without causing every healthy room edge to dial again.
+
+The requester must still own the exact current verified socket and remain a
+member in the room lookup. Ownership is rechecked after database awaits and
+before each introduction, so a displaced request cannot reply or continue
+introducing its predecessor. A snapshot describes one database read, not a
+globally ordered membership revision: it has no revision counter, lease or
+cross-process ordering guarantee. Clients must correlate responses and request
+a fresh snapshot to discover later membership changes.
 
 **The server never signals a departure.** Its close handler releases the peer's
 routing claim and logs (`src/wsServer.ts`, `src/index.ts`); it sends nothing to
 the room. There is no `peerLeft` frame in the protocol, and a `leaveRoom` is
 acknowledged only to the peer that sent it. The membership row survives the
-disconnect too — only an explicit `leaveRoom` removes one. Clients therefore
-learn that a peer is gone from their own transport state, not from this server.
+disconnect too — only an explicit `leaveRoom` removes one. Clients learn
+transport loss from their own edge state; a later correlated snapshot can
+discover an explicit membership departure. An offline member remains listed.
 
 ### Heartbeat and timeouts
 
@@ -226,6 +270,8 @@ Enforced bounds live in
 signaling message, 262,144 characters in the SDP string, 4,096 characters in
 the ICE candidate string, 256 characters each in `sdpMid` and
 `usernameFragment`, and at most 64 DataChannel labels of 193 characters each.
+Peer requests additionally limit each target/exclusion list to 64 UUIDs and
+require UUIDv4 when the optional `rosterRequestId` is present.
 Malformed, downgraded, cross-room, or cross-identity signaling fails closed.
 
 A frame that fails validation in `handleMessage` closes the socket from that
@@ -361,12 +407,20 @@ an absolute expiry — shipped in `p2party-js` 0.14.4, whose changelog names
 sends a `room` request with no `roomRequestId`, fails the exact-shape check in
 `handleMessage.ts`, and has its socket closed. So: `p2party-js` 0.14.4 or newer.
 
-Server 0.1.2 adds optional per-socket generations to introductions. SDK 0.14.8
+Server 0.1.2 added optional per-socket generations to introductions. SDK 0.14.8
 uses them to distinguish a replacement tab from the previous transport for
 the same peer identity; earlier clients ignore the fields. Deploy both builds
 to obtain that recovery behavior. SDK 0.14.8 can still use a 0.1.1 server, but
 the server cannot identify a replacement socket and the client's bounded
 watchdog does not guarantee convergence in that case.
+
+Server 0.1.3 adds opt-in correlated membership snapshots and bounded
+target/exclusion lists for introductions. Existing SDK 0.14.4–0.14.8 clients
+keep their legacy flow: without `rosterRequestId` they receive acceptance deltas
+and no unsolicited snapshot; `rosterKind: "delta"` is additive metadata.
+SDK 0.14.9 requires server 0.1.3 for its membership-driven mesh repair and
+targeted redial behavior. Older servers do not provide this contract; matching
+protocol version 4 alone does not establish support for these repair features.
 
 ## What the server stores
 
