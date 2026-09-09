@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { checkServerIdentity } from "node:tls";
 
 /**
  * One place that decides how TLS to Postgres is negotiated.
@@ -21,7 +22,12 @@ import { readFileSync } from "node:fs";
  */
 
 export type PostgresSslOptions =
-  false | { rejectUnauthorized: boolean; ca?: string };
+  | false
+  | {
+      rejectUnauthorized: true;
+      ca?: string;
+      checkServerIdentity: typeof checkServerIdentity;
+    };
 
 export interface PostgresConnection {
   /** The URL with every ssl parameter removed, so pg cannot re-derive them. */
@@ -41,38 +47,57 @@ export interface PostgresConnection {
  *                        self-signed certificate does not have.
  *   sslmode=verify-full  verify against the system trust store.
  *   sslmode=disable      no TLS.
- *   anything else        encrypt without verifying.
+ *   absent / require / prefer / verify-ca: verify against the system trust store.
+ *   unknown              reject configuration before a connection is attempted.
  *
- * The last case is a bounded, deliberate compromise: strictly better than the
- * plaintext it replaces, since it defeats passive capture on the private
- * network, and strictly worse than verification, since it cannot detect an
- * active in-path attacker. Provisioning a real certificate and setting
- * sslrootcert closes it with no code change.
+ * Every encrypted mode authenticates the server. Explicit disable remains for
+ * disposable local databases; production supplies verify-full and a pinned CA.
  */
 export const postgresConnection = (raw: string): PostgresConnection => {
   const url = new URL(raw);
   const mode = url.searchParams.get("sslmode")?.toLowerCase();
   const rootCert = url.searchParams.get("sslrootcert");
+  if (
+    mode !== undefined &&
+    !["disable", "require", "prefer", "verify-ca", "verify-full"].includes(mode)
+  )
+    throw new Error("Unsupported PostgreSQL sslmode");
 
   // Remove them so the Client constructor has nothing to re-interpret.
-  for (const key of ["sslmode", "sslrootcert", "sslcert", "sslkey"])
+  for (const key of [
+    "ssl",
+    "sslmode",
+    "sslrootcert",
+    "sslcert",
+    "sslkey",
+    "sslnegotiation",
+    "uselibpqcompat",
+  ])
     url.searchParams.delete(key);
 
   const connectionString = url.toString();
 
   if (mode === "disable") return { connectionString, ssl: false };
+  // pg omits SNI for IP literals. Its already-connected TLS socket otherwise
+  // falls back to localhost for name validation under Bun. Bind verification
+  // to the address actually configured, without putting an IP into SNI.
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const verified = {
+    rejectUnauthorized: true as const,
+    checkServerIdentity: (
+      _servername: string,
+      certificate: Parameters<typeof checkServerIdentity>[1],
+    ) => checkServerIdentity(hostname, certificate),
+  };
 
   if (rootCert) {
     // Fail loudly: silently continuing unverified because a path was mistyped
     // would defeat the only reason to configure it.
-    const ca = readFileSync(decodeURIComponent(rootCert), "utf8");
-    return { connectionString, ssl: { rejectUnauthorized: true, ca } };
+    const ca = readFileSync(rootCert, "utf8");
+    return { connectionString, ssl: { ...verified, ca } };
   }
 
-  if (mode === "verify-full")
-    return { connectionString, ssl: { rejectUnauthorized: true } };
+  if (mode === "verify-full") return { connectionString, ssl: verified };
 
-  // Unrecognised or absent lands here on purpose: defaulting to `false` would
-  // silently downgrade the link to plaintext.
-  return { connectionString, ssl: { rejectUnauthorized: false } };
+  return { connectionString, ssl: verified };
 };

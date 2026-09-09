@@ -117,18 +117,9 @@ export const initPubSub = async (): Promise<void> => {
     connectionString: pgConnection.connectionString,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: CONNECT_TIMEOUT_MS,
-    // node-postgres does not implement libpq's sslmode semantics. libpq reads
-    // `prefer` as "try TLS, fall back to plaintext"; node-postgres treats any
-    // TLS request as strict, so Postgres's default self-signed certificate is
-    // rejected with DEPTH_ZERO_SELF_SIGNED_CERT and the connection fails
-    // outright rather than falling back.
-    //
-    // The link is private-network only and the certificate is the one Debian
-    // generates at install time, so there is no chain to verify against.
-    // Encrypting without verifying is strictly better than the plaintext this
-    // otherwise falls back to: it stops passive capture on the private network,
-    // while offering no protection against an active in-path attacker. Issuing
-    // a real certificate and moving to full verification is the remaining step.
+    // The shared parser verifies every encrypted connection. Production pins
+    // the CA installed by postgres-tls.yml; only explicit local sslmode=disable
+    // skips TLS. The LISTEN channel and Prisma must use the same trust policy.
     ssl: pgConnection.ssl,
   });
 

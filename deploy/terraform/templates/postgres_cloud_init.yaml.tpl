@@ -40,7 +40,7 @@ write_files:
       PG_CONF="/etc/postgresql/17/main/postgresql.conf"
       PG_HBA="/etc/postgresql/17/main/pg_hba.conf"
       
-      sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" $PG_CONF
+      sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" $PG_CONF
       
       cat >> $PG_CONF << PGEOF
       
@@ -55,7 +55,8 @@ write_files:
       cat >> $PG_HBA << HBAEOF
       
       # P2Party Private Network Access
-      host    all    all    $DB_SUBNET    scram-sha-256
+      hostnossl all all $DB_SUBNET reject
+      hostssl all all $DB_SUBNET scram-sha-256
       HBAEOF
       
       systemctl restart postgresql@17-main

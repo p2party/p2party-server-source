@@ -1,4 +1,10 @@
-import { isUUID } from "class-validator";
+import { isUUID } from "./utils/formats";
+import {
+  admission,
+  admissionAddress,
+  admissionLimits,
+  type AdmissionLease,
+} from "./utils/admission";
 
 import handleConnection from "./utils/handleConnection";
 import handleMessage from "./utils/handleMessage";
@@ -8,7 +14,10 @@ import {
   type SocketMessage,
 } from "./utils/socketMessageQueue";
 import { handleSocketMessageIngress } from "./utils/socketMessageIngress";
-import { unregisterSocketIfCurrent } from "./utils/socketAuth";
+import {
+  unregisterSocketIfCurrent,
+  isCurrentVerifiedSocket,
+} from "./utils/socketAuth";
 import { releasePeer, SERVER_ID } from "./pubsub";
 import { PROTOCOL_VERSION } from "./utils/protocolV4";
 import { SERVER_VERSION } from "./version";
@@ -26,6 +35,8 @@ export interface P2PartyWSData extends SocketAuthState {
   messageQueueBytes?: number;
   messageDrain?: Promise<void>;
   messageQueueClosed?: boolean;
+  admission?: AdmissionLease;
+  authenticationTimeout?: Timer;
 }
 
 /** ServerWebSocket with server-bound identity and authentication state. */
@@ -51,11 +62,16 @@ export class P2PartyWS {
     this.server = Bun.serve({
       websocket: {
         open: async (ws: P2PartyWSClient) => {
+          ws.data.authenticationTimeout = setTimeout(() => {
+            if (!isCurrentVerifiedSocket(wsClients, ws))
+              ws.close(1013, "Authentication timed out");
+          }, admissionLimits.authenticationTimeoutMs);
           const { publicKey } = ws.data;
 
           const peerId = await handleConnection(publicKey, ws);
 
           if (isUUID(peerId)) {
+            if (ws.readyState !== 1) return;
             ws.data.isAlive = true;
             // Start pinging the client at regular intervals
             ws.data.pingInterval = await handleInterval(ws);
@@ -72,6 +88,9 @@ export class P2PartyWS {
 
         close: async (ws: P2PartyWSClient, _code: number, _message: string) => {
           closeSocketMessageQueue(ws);
+          ws.data.admission?.release();
+          if (ws.data.authenticationTimeout)
+            clearTimeout(ws.data.authenticationTimeout);
           ws.unsubscribe("global");
           if (ws.data.pongTimeout) clearTimeout(ws.data.pongTimeout);
           if (ws.data.pingInterval) clearInterval(ws.data.pingInterval);
@@ -129,10 +148,23 @@ export class P2PartyWS {
           return new Response("Forbidden", { status: 403 });
         }
 
+        const address = admissionAddress(
+          server.requestIP(req)?.address,
+          req.headers.get("x-real-ip"),
+          process.env.TRUST_LOCAL_PROXY === "true",
+        );
+        const lease = address ? admission.reserve(address, p) : undefined;
+        if (!lease)
+          return new Response("Signaling admission limit reached", {
+            status: 429,
+            headers: { "retry-after": "60" },
+          });
+
         if (
           server.upgrade(req, {
             data: {
               publicKey: p,
+              admission: lease,
               peerId: "",
               challengeNonce: "",
               challengeId: "",
@@ -145,6 +177,7 @@ export class P2PartyWS {
         )
           return; // do not return a Response
 
+        lease.release();
         return new Response("Upgrade failed", { status: 500 });
       },
       port,

@@ -1,4 +1,5 @@
-import { isUUID, isHexadecimal } from "class-validator";
+import { isUUID, isHexadecimal } from "./formats";
+import { persistVerifiedIdentity } from "./peerIdentity";
 
 import handleChallenge from "./handleChallenge";
 import handleRoom from "./handleRoom";
@@ -164,6 +165,14 @@ const handleMessage = async (
       throw new Error("WebSocket identity is not freshly authenticated");
     if (msg.type !== "pong" && !isProtocolV4(msg.protocolVersion))
       throw new Error("Incompatible signaling protocol version");
+    if (
+      (msg.type === "room" || msg.type === "leaveRoom") &&
+      ws.data.admission &&
+      !ws.data.admission.roomMutation()
+    ) {
+      ws.close(1013, "Room request rate exceeded");
+      return;
+    }
 
     switch (msg.type) {
       case "pong": {
@@ -199,6 +208,11 @@ const handleMessage = async (
             msg.signature,
           );
           if (authenticated) {
+            if (ws.data.admission && !ws.data.admission.authenticate()) {
+              ws.data.isVerified = false;
+              ws.close(1013, "Identity admission limit reached");
+              break;
+            }
             // Record which instance now owns this socket, so the other workers
             // can route signals here instead of dropping them. Awaited: a peer
             // that is routable before it is claimed is a lost signal.
@@ -206,7 +220,9 @@ const handleMessage = async (
               !(await activateVerifiedSocket(
                 wsClients,
                 ws,
-                claimPeer,
+                async (peerId) =>
+                  (await persistVerifiedIdentity(ws)) &&
+                  (await claimPeer(peerId)),
                 releasePeer,
               ))
             )
@@ -215,6 +231,8 @@ const handleMessage = async (
             // claimPeer's await. No await belongs between that fence and these
             // activation side effects.
             ws.send(JSON.stringify(authenticated));
+            if (ws.data.authenticationTimeout)
+              clearTimeout(ws.data.authenticationTimeout);
             ws.subscribe("global");
             events.open(ws);
           }

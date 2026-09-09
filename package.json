@@ -1,6 +1,6 @@
 {
   "name": "p2party-server",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Protocol-v4 signaling server for p2party WebRTC room meshes",
   "private": true,
   "license": "Apache-2.0",
@@ -20,7 +20,12 @@
   },
   "overrides": {
     "defu": "6.1.7",
-    "effect": "3.22.0"
+    "effect": "3.22.0",
+    "deepmerge-ts": "8.0.2",
+    "valibot": "1.4.2",
+    "find-my-way": "9.9.0",
+    "fast-uri": "3.1.7",
+    "mysql2": "3.24.4"
   },
   "scripts": {
     "start": "bun run src/index.ts",
@@ -41,7 +46,6 @@
     "@ondemos/core": "0.2.7",
     "@prisma/adapter-pg": "7.9.0",
     "@prisma/client": "7.9.0",
-    "class-validator": "0.15.1",
     "pg": "^8.22.0"
   },
   "devDependencies": {

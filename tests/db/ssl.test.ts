@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pg from "pg";
 
 import { postgresConnection } from "../../src/db/ssl";
 
@@ -29,15 +30,44 @@ describe("postgres TLS decision", () => {
     expect(postgresConnection(url("sslmode=disable")).ssl).toBe(false);
   });
 
-  test("an unrecognised or absent mode encrypts rather than falling back", () => {
-    for (const q of ["schema=public", "sslmode=prefer", "sslmode=banana"])
-      expect(postgresConnection(url(q)).ssl).toEqual({
-        rejectUnauthorized: false,
+  test("every encrypted mode verifies the server", () => {
+    for (const q of [
+      "schema=public",
+      "sslmode=prefer",
+      "sslmode=require",
+      "sslmode=verify-ca",
+    ])
+      expect(postgresConnection(url(q)).ssl).toMatchObject({
+        rejectUnauthorized: true,
       });
   });
 
+  test("an unknown TLS mode is a configuration error", () => {
+    expect(() => postgresConnection(url("sslmode=banana"))).toThrow(
+      "Unsupported PostgreSQL sslmode",
+    );
+  });
+
+  test("remaining connection-string knobs cannot override the verified pg.Client decision", () => {
+    const effectiveSsl = (query: string) =>
+      (
+        new pg.Client(postgresConnection(url(query))) as unknown as {
+          connectionParameters: { ssl: unknown };
+        }
+      ).connectionParameters.ssl;
+    for (const query of [
+      "sslmode=verify-full&ssl=0",
+      "sslmode=require&ssl=false",
+      "sslnegotiation=direct&ssl=0",
+    ])
+      expect(effectiveSsl(query)).toMatchObject({ rejectUnauthorized: true });
+    expect(effectiveSsl("sslmode=disable&ssl=true&sslnegotiation=direct")).toBe(
+      false,
+    );
+  });
+
   test("verify-full demands a verifiable chain", () => {
-    expect(postgresConnection(url("sslmode=verify-full")).ssl).toEqual({
+    expect(postgresConnection(url("sslmode=verify-full")).ssl).toMatchObject({
       rejectUnauthorized: true,
     });
   });

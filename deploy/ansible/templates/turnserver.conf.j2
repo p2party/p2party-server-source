@@ -41,11 +41,13 @@ realm={{ vault_coturn_realm }}
 # whoever runs it: any client that can obtain a credential can relay traffic at
 # line rate, and a leaked secret becomes an open relay with no ceiling.
 # total-quota is concurrent allocations server-wide, user-quota per username.
-# max-bps is per-allocation bytes/sec; bps-capacity is the server-wide ceiling.
+# Both bandwidth settings are bytes/sec, with input and output counted separately.
+# Clients without a BANDWIDTH request reserve max-bps per allocation: the default
+# aggregate budget admits about ten such allocations. Raise it for larger rooms.
 total-quota={{ coturn_total_quota | default(1200) }}
 user-quota={{ coturn_user_quota | default(12) }}
 max-bps={{ coturn_max_bps | default(3000000) }}
-bps-capacity={{ coturn_bps_capacity | default(0) }}
+bps-capacity={{ coturn_bps_capacity | default(30000000) }}
 
 # ---- Logging ----
 log-file=/var/log/turnserver/turnserver.log

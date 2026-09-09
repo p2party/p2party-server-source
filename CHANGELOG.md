@@ -4,10 +4,34 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. 0.1.3
+`protocolVersion` on the wire is versioned separately from this package. 0.1.4
 speaks protocol version 4 and nothing else.
 
 ## [Unreleased]
+
+## [0.1.4] — 2026-09-09
+
+Security and publication preparation; the wire protocol remains v4.
+
+- Defer persistent identity creation until the fresh Ed25519 proof succeeds.
+  Preserve existing IDs and derive stable provisional IDs for new keys; enforce
+  the durable identity ceiling transactionally before routing activation.
+- Bound connection, proved-identity, message and room admission, with a proof
+  deadline and constant-bounded address-table cleanup. Unproved users cannot
+  reserve another identity's quota. Prune only stale empty rooms, preserving
+  verified identity IDs and offline membership.
+- Verify encrypted PostgreSQL connections and reject invalid TLS modes. Provision
+  a private-address SAN certificate and CA trust over SSH, require private-network
+  TLS before legacy HBA rules, and remove conflicting connection-string controls.
+- Set a finite, operator-overridable TURN aggregate bandwidth budget; document
+  its allocation-reservation tradeoff and distinguish it from Sybil prevention.
+- Remove identifying request URIs/headers from Caddy logs and suppress sensitive
+  migration output. Replace class-validator's two format helpers with local
+  validated equivalents; update vulnerable Prisma CLI dependencies with reviewed
+  compatibility coverage. Deployed migration tooling now uses that same frozen
+  manifest and lockfile, including security overrides.
+- Correct contributor and security documentation to PostgreSQL and protocol v4;
+  document admission defaults, operator trust configuration and remaining limits.
 
 ## [0.1.3] — 2026-09-08
 

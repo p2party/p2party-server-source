@@ -1,5 +1,6 @@
 import { prisma as sharedPrisma } from "../prismaClient";
 import { createFreshSocketChallenge } from "./socketAuth";
+import { provisionalPeerId } from "./peerIdentity";
 
 import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
@@ -22,51 +23,27 @@ const handleConnectionWithClient = async (
     // The database binds one stable peer id to the identity public key. Socket
     // authentication is deliberately NOT restored from the peer's historical
     // challenge rows: every connection receives a new in-memory nonce.
-    const peer = await prisma.peer.upsert({
+    const peer = await prisma.peer.findUnique({
       where: { publicKey },
-      update: {
-        lastPing: Date.now(),
-      },
-      create: {
-        lastPing: Date.now(),
-        publicKey,
-      },
+      select: { id: true },
     });
 
-    const request = createFreshSocketChallenge(ws.data, peer.id, publicKey);
+    const peerId = peer?.id ?? provisionalPeerId(publicKey);
+    const request = createFreshSocketChallenge(ws.data, peerId, publicKey);
     ws.send(JSON.stringify(request satisfies WebSocketMessageChallengeRequest));
 
-    return peer.id;
+    return peerId;
   } catch (error) {
     console.error("handleConnection failed", error);
     ws.send(
       JSON.stringify({
         type: "error",
         fromAction: "requestPeerId",
-        error:
-          error instanceof Error
-            ? { message: error.message }
-            : { message: "Could not initialize WebSocket identity" },
+        error: { message: "Could not initialize WebSocket identity" },
       } as WebSocketMessageError),
     );
-    // close(), not terminate(): terminate() can drop the send() above before
-    // it reaches the wire. 1011 ("handler failed"), matching the code
-    // socketMessageQueue.ts already uses for an unexpected handler
-    // exception -- not the bare close this used to send, and never
-    // PERMANENT_CLOSE_CODE (1008): the malformed-public-key branch above is
-    // provably unreachable here (wsServer.ts's fetch handler already
-    // rejects any publicKey that fails this exact regex before the
-    // WebSocket is ever upgraded, so ws.data.publicKey is always canonical
-    // by the time `open` calls this function), so the only realistically
-    // reachable cause of this catch is prisma.peer.upsert throwing -- the
-    // same database/server-fault class 15af423/d502ac0/ee91b95 fixed
-    // elsewhere. Unlike those three sites, though, there is no live,
-    // keepalive'd connection to leave open: the ping loop only starts once
-    // this function returns a real peer id, and there is no message-level
-    // retry for the initial identity handshake, so the client's only path
-    // forward is a fresh connection. 1011 tells its reconnect ladder to
-    // make one instead of retrying a bare 1005 forever against a socket
-    // that can never move past this point.
+    // A bootstrap lookup fault is retryable. Send only a generic error and
+    // close gracefully so it reaches the client before reconnect.
     ws.close(1011, "Could not initialize WebSocket identity");
     return "";
   }

@@ -9,6 +9,9 @@
 #     --vault-id production@vault_pass_production.sh
 # ============================================================================
 ---
+- name: Provision verified PostgreSQL TLS
+  import_playbook: postgres-tls.yml
+
 # ============================================================================
 # Pre-flight Health Check
 # ============================================================================

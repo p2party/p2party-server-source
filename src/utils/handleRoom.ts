@@ -12,11 +12,13 @@ import type {
   WebSocketMessageRoomIdResponse,
 } from "../utils/interfaces.js";
 import { PROTOCOL_VERSION } from "./protocolV4";
+import { admission, admissionLimits } from "./admission";
 
 interface Peer {
   id: string;
   publicKey: string;
   rooms: { id: string }[];
+  _count?: { rooms: number };
 }
 
 type HandleRoomPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
@@ -44,6 +46,7 @@ const handleRoomWithClient = async (
         select: {
           id: true,
           publicKey: true,
+          _count: { select: { rooms: true } },
           rooms: {
             where: { identifier },
             select: { id: true },
@@ -57,84 +60,91 @@ const handleRoomWithClient = async (
           "Room id request was sent by a non-existing or unverified client",
         );
 
-      // Keep unique room creation free of nested writes so Prisma emits one
-      // atomic PostgreSQL upsert instead of a find-then-create race.
-      const room = await prisma.room.upsert({
-        where: { identifier },
-        update: { identifier },
-        create: { identifier },
-      });
-      if (!isCurrent())
-        throw new Error("Room request socket was replaced before membership");
-
       const wasMember = peer.rooms.length > 0;
-      await prisma.room.update({
-        where: { id: room.id },
-        data: {
-          peers: {
-            connect: {
-              id: peer.id,
+      if (
+        !wasMember &&
+        ((peer._count?.rooms ?? 0) >= admissionLimits.roomsPerIdentity ||
+          !admission.newMembership())
+      )
+        throw new Error("Room membership capacity reached");
+
+      // Serialize different identities joining one room on the supported worker.
+      // Keep the peer queue outside this lock so stale-socket compensation cannot
+      // erase a successor's membership.
+      await runPeerRoomMutation(`room:${identifier}`, async () => {
+        // Keep unique room creation free of nested writes so Prisma emits one
+        // atomic PostgreSQL upsert instead of a find-then-create race.
+        const room = await prisma.room.upsert({
+          where: { identifier },
+          update: { identifier },
+          create: { identifier },
+          include: { _count: { select: { peers: true } } },
+        });
+        if (!isCurrent())
+          throw new Error("Room request socket was replaced before membership");
+
+        if (
+          !wasMember &&
+          (room._count?.peers ?? 0) >= admissionLimits.peersPerRoom
+        )
+          throw new Error("Room member capacity reached");
+        await prisma.room.update({
+          where: { id: room.id },
+          data: {
+            peers: {
+              connect: {
+                id: peer.id,
+              },
             },
           },
-        },
+        });
+
+        if (!isCurrent()) {
+          // The same-process peer mutation queue prevents a successor join from
+          // racing this compensation. Preserve membership that predated this
+          // request; remove only a link this stale request could have added.
+          if (!wasMember)
+            await prisma.room.update({
+              where: { id: room.id },
+              data: { peers: { disconnect: { id: peer.id } } },
+            });
+          throw new Error("Room request socket was replaced during membership");
+        }
+
+        // The relay endpoint travels with the room response because that is
+        // where the client builds its RTCConfiguration. Credentials are
+        // short-lived and socket-identity-bound, so they are issued per join.
+        const turnCredentials = createTurnCredentials(
+          ws.data.publicKey,
+          process.env.COTURN_SECRET,
+        );
+
+        ws.send(
+          JSON.stringify({
+            type: "roomId",
+            roomId: room.id,
+            roomUrl,
+            roomRequestId,
+            protocolVersion: PROTOCOL_VERSION,
+            ...(turnCredentials ? { turnCredentials } : {}),
+          } satisfies WebSocketMessageRoomIdResponse),
+        );
       });
-
-      if (!isCurrent()) {
-        // The same-process peer mutation queue prevents a successor join from
-        // racing this compensation. Preserve membership that predated this
-        // request; remove only a link this stale request could have added.
-        if (!wasMember)
-          await prisma.room.update({
-            where: { id: room.id },
-            data: { peers: { disconnect: { id: peer.id } } },
-          });
-        throw new Error("Room request socket was replaced during membership");
-      }
-
-      // The relay endpoint travels with the room response because that is
-      // where the client builds its RTCConfiguration. Credentials are
-      // short-lived and socket-identity-bound, so they are issued per join.
-      const turnCredentials = createTurnCredentials(
-        ws.data.publicKey,
-        process.env.COTURN_SECRET,
-      );
-
-      ws.send(
-        JSON.stringify({
-          type: "roomId",
-          roomId: room.id,
-          roomUrl,
-          roomRequestId,
-          protocolVersion: PROTOCOL_VERSION,
-          ...(turnCredentials ? { turnCredentials } : {}),
-        } satisfies WebSocketMessageRoomIdResponse),
-      );
     });
   } catch (error) {
     console.error(error);
 
     if (isCurrent()) {
-      // Every explicit throw in the mutation above ("...no longer current",
-      // "...replaced before/during membership") only fires when isCurrent()
-      // is already false at that throw site, and stays false here -- no
-      // await separates that throw from this catch (peerRoomMutationQueue's
-      // own cleanup is synchronous). The identity-mismatch throw ("...sent
-      // by a non-existing or unverified client") is likewise provably
-      // unreachable while isCurrent() is true: fromPeerId is already
-      // ws.data.peerId, and Peer rows are never deleted or have their
-      // publicKey changed after creation (the same fact d502ac0 relies on
-      // for handlePeers.ts), so a peer row this exact socket already proved
-      // ownership of cannot fail that lookup or that comparison. So a throw
-      // reaching here with isCurrent() still true can only be a database or
-      // server fault (peer.findUnique / room.upsert / room.update),
-      // reaching this innocent, still-current socket. Terminating it for
-      // that is exactly the defect 15af423/d502ac0/ee91b95 removed from the
-      // three sibling functions -- leave it open instead.
+      // Capacity and database failures refuse this request without stranding
+      // an otherwise healthy authenticated socket.
       ws.send(
         JSON.stringify({
           type: "error",
           fromAction: "requestRoomId",
-          error,
+          error: {
+            message:
+              "Room request could not be served or its admission limit was reached",
+          },
         } as WebSocketMessageError),
       );
       return;

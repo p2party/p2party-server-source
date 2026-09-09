@@ -55,7 +55,7 @@ const errorFrame = (raw: string) =>
   };
 
 describe("the identity-bootstrap socket survives a server-side fault", () => {
-  test("a peer-upsert fault closes with 1011 (retryable), not a bare terminate", async () => {
+  test("a peer-lookup fault closes with 1011 (retryable), not a bare terminate", async () => {
     // Pool exhaustion or a replica hiccup is a server fault, not evidence the
     // public key is bad. The old catch called ws.terminate(): no close code
     // at all, so the client's reconnect ladder could not tell this apart
@@ -64,7 +64,7 @@ describe("the identity-bootstrap socket survives a server-side fault", () => {
     const ws = socket();
     const handleConnection = createHandleConnection({
       peer: {
-        upsert: async () => {
+        findUnique: async () => {
           throw new Error("connection pool exhausted");
         },
       },
@@ -83,11 +83,11 @@ describe("the identity-bootstrap socket survives a server-side fault", () => {
     expect(frame.fromAction).toBe("requestPeerId");
   });
 
-  test("a successful upsert never closes the socket", async () => {
+  test("a successful lookup never closes the socket", async () => {
     const ws = socket();
     const handleConnection = createHandleConnection({
       peer: {
-        upsert: async () => ({
+        findUnique: async () => ({
           id: "00000000-0000-4000-8000-000000000001",
           publicKey: PUBLIC_KEY,
         }),

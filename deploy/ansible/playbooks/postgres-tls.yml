@@ -1,0 +1,251 @@
+---
+- name: Provision PostgreSQL server identity
+  hosts: databases_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
+  vars:
+    database_tls_dir: /etc/postgresql/p2party-tls
+  tasks:
+    - name: Install certificate tooling
+      apt:
+        name: openssl
+        state: present
+
+    - name: Create private PostgreSQL certificate directory
+      file:
+        path: "{{ database_tls_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0700"
+
+    - name: Create a local database trust anchor
+      command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -x509
+          - -newkey
+          - rsa:3072
+          - -nodes
+          - -days
+          - "3650"
+          - -subj
+          - /CN=p2party PostgreSQL CA
+          - -addext
+          - basicConstraints=critical,CA:TRUE
+          - -addext
+          - keyUsage=critical,keyCertSign,cRLSign
+          - -keyout
+          - "{{ database_tls_dir }}/ca.key"
+          - -out
+          - "{{ database_tls_dir }}/ca.crt"
+        creates: "{{ database_tls_dir }}/ca.crt"
+      become_user: postgres
+      no_log: true
+
+    - name: Require a valid trust anchor before issuing or deploying a leaf
+      command:
+        argv:
+          [
+            openssl,
+            x509,
+            -checkend,
+            "2592000",
+            -noout,
+            -in,
+            "{{ database_tls_dir }}/ca.crt",
+          ]
+      changed_when: false
+      # Rotation is explicit: silently replacing the CA would break every
+      # existing client and could hide loss of the original trust material.
+
+    - name: Create the database server key and signing request
+      command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -newkey
+          - rsa:3072
+          - -nodes
+          - -subj
+          - /CN=p2party PostgreSQL
+          - -keyout
+          - "{{ database_tls_dir }}/server.key"
+          - -out
+          - "{{ database_tls_dir }}/server.csr"
+        creates: "{{ database_tls_dir }}/server.csr"
+      become_user: postgres
+      no_log: true
+
+    - name: Set the authenticated database address and server usage
+      copy:
+        dest: "{{ database_tls_dir }}/server.ext"
+        owner: postgres
+        group: postgres
+        mode: "0600"
+        content: |
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=serverAuth
+          subjectAltName=IP:{{ network.postgres }}
+      register: database_tls_extensions
+
+    - name: Check whether the server certificate needs renewal
+      command:
+        argv:
+          [
+            openssl,
+            x509,
+            -checkend,
+            "2592000",
+            -noout,
+            -in,
+            "{{ database_tls_dir }}/server.crt",
+          ]
+      register: database_tls_expiry
+      changed_when: false
+      failed_when: false
+
+    - name: Sign the database certificate with its private-address SAN
+      command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - "{{ database_tls_dir }}/server.csr"
+          - -CA
+          - "{{ database_tls_dir }}/ca.crt"
+          - -CAkey
+          - "{{ database_tls_dir }}/ca.key"
+          - -CAcreateserial
+          - -days
+          - "825"
+          - -sha256
+          - -extfile
+          - "{{ database_tls_dir }}/server.ext"
+          - -out
+          - "{{ database_tls_dir }}/server.crt"
+      become_user: postgres
+      when: database_tls_extensions.changed or database_tls_expiry.rc != 0
+      notify: Restart PostgreSQL for verified TLS
+
+    - name: Verify the certificate chain and actual database IP before changing services
+      command:
+        argv:
+          [
+            openssl,
+            verify,
+            -CAfile,
+            "{{ database_tls_dir }}/ca.crt",
+            -verify_ip,
+            "{{ network.postgres }}",
+            "{{ database_tls_dir }}/server.crt",
+          ]
+      changed_when: false
+
+    - name: Read the certificate public key for the key-pair check
+      command:
+        argv:
+          [
+            openssl,
+            x509,
+            -in,
+            "{{ database_tls_dir }}/server.crt",
+            -pubkey,
+            -noout,
+          ]
+      register: database_tls_certificate_public
+      changed_when: false
+      no_log: true
+
+    - name: Derive only the public portion of the PostgreSQL private key
+      command:
+        argv: [openssl, pkey, -in, "{{ database_tls_dir }}/server.key", -pubout]
+      register: database_tls_key_public
+      changed_when: false
+      no_log: true
+
+    - name: Require a matching certificate and private key before changing services
+      assert:
+        that: database_tls_certificate_public.stdout == database_tls_key_public.stdout
+        fail_msg: PostgreSQL certificate and private key differ; restore the matching pair before deployment
+      no_log: true
+
+    - name: Restrict certificate private keys
+      file:
+        path: "{{ database_tls_dir }}/{{ item }}"
+        owner: postgres
+        group: postgres
+        mode: "0600"
+      loop: [ca.key, server.key]
+
+    - name: Locate the installed PostgreSQL configuration
+      shell: ls -1 /etc/postgresql/ | grep -E '^[0-9]+$' | sort -rn | head -1
+      register: database_tls_pg_version
+      changed_when: false
+      failed_when: database_tls_pg_version.stdout | length == 0
+
+    - name: Enable PostgreSQL TLS with the authenticated certificate
+      blockinfile:
+        path: "/etc/postgresql/{{ database_tls_pg_version.stdout }}/main/postgresql.conf"
+        marker: "# {mark} P2PARTY VERIFIED TLS"
+        block: |
+          ssl = on
+          ssl_cert_file = '{{ database_tls_dir }}/server.crt'
+          ssl_key_file = '{{ database_tls_dir }}/server.key'
+          ssl_min_protocol_version = 'TLSv1.2'
+      notify: Restart PostgreSQL for verified TLS
+
+    - name: Require TLS for private-network PostgreSQL clients
+      blockinfile:
+        path: "/etc/postgresql/{{ database_tls_pg_version.stdout }}/main/pg_hba.conf"
+        marker: "# {mark} P2PARTY REQUIRED TLS ACCESS"
+        # First-match rules must precede old cloud-init and previous setup rules.
+        insertbefore: BOF
+        block: |
+          hostnossl all all {{ network.range }} reject
+          hostssl all all {{ network.range }} scram-sha-256
+      notify: Restart PostgreSQL for verified TLS
+
+    - name: Read only the public database CA for distribution over SSH
+      slurp:
+        src: "{{ database_tls_dir }}/ca.crt"
+      register: p2party_database_ca
+
+  handlers:
+    - name: Restart PostgreSQL for verified TLS
+      systemd:
+        name: postgresql
+        state: restarted
+
+- name: Install the database trust anchor on signaling hosts
+  hosts: signaling_production
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
+  tasks:
+    - name: Require exactly one configured database host
+      assert:
+        that: groups['databases_production'] | length == 1
+
+    - name: Create the public trust directory
+      file:
+        path: /etc/p2party
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the public PostgreSQL CA
+      copy:
+        content: "{{ hostvars[groups['databases_production'][0]].p2party_database_ca.content | b64decode }}"
+        dest: "{{ database.ssl_root_cert }}"
+        owner: root
+        group: root
+        mode: "0644"

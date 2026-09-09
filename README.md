@@ -25,8 +25,8 @@ bun run start
 ```
 
 `db:migrate` runs `prisma migrate deploy`, which applies only the migrations
-that have not run yet and never resets anything, so it is safe against a live
-database. Environment files and compiled server binaries are gitignored and
+that have not run yet and does not reset the database. Use a disposable local
+database for development; production migrations belong to a reviewed deploy. Environment files and compiled server binaries are gitignored and
 must never be committed.
 
 Postgres rather than SQLite keeps routing state out of any one process. The
@@ -64,6 +64,78 @@ plus `db:migrate` against a real PostgreSQL
 
 There is no built-in TURN secret and no development authentication bypass.
 
+## Admission and database security
+
+Release 0.1.4 preserves protocol v4 and the mesh-repair behavior of 0.1.3.
+Unproved sockets perform a bounded identity lookup but cannot create durable
+peer records. A successful signature is followed by a serializable database
+transaction before routing activation. Existing identity IDs do not change;
+a concurrent old-server bootstrap that assigned another ID fails retryably.
+
+The following positive-integer environment variables tune the defaults. Restart
+the process after changing them. Limits apply per process except the durable
+identity ceiling, which is checked in a serializable database transaction.
+Supported production runs one worker; experimental multiple workers do not
+provide a global room/member or address-rate guarantee.
+
+| Variable                                 | Default | Bound                                                                           |
+| ---------------------------------------- | ------: | ------------------------------------------------------------------------------- |
+| `MAX_CONNECTIONS`                        |    2048 | Concurrent WebSockets                                                           |
+| `MAX_CONNECTIONS_PER_IP`                 |      32 | Concurrent sockets per address                                                  |
+| `CONNECTION_ATTEMPTS_PER_IP_PER_MINUTE`  |      60 | Upgrade attempts per address                                                    |
+| `MAX_CONNECTIONS_PER_IDENTITY`           |       4 | Concurrent sockets that proved the same key (minimum 2 for replacement overlap) |
+| `MESSAGES_PER_IDENTITY_PER_MINUTE`       |    2400 | Frames per proved identity; before proof, per address                           |
+| `ROOM_MUTATIONS_PER_IDENTITY_PER_MINUTE` |      60 | Join/leave requests per proved identity                                         |
+| `NEW_IDENTITIES_PER_MINUTE`              |     120 | New proved identities admitted                                                  |
+| `NEW_MEMBERSHIPS_PER_MINUTE`             |     600 | New room memberships admitted                                                   |
+| `MAX_PERSISTENT_IDENTITIES`              |  100000 | Durable peer rows; existing identities can reconnect at capacity                |
+| `MAX_ROOMS_PER_IDENTITY`                 |      64 | Room memberships per identity                                                   |
+| `MAX_PEERS_PER_ROOM`                     |     128 | Members including offline peers                                                 |
+| `MAX_TRACKED_ADDRESSES`                  |   10000 | Entries in each address/identity accounting table                               |
+| `AUTHENTICATION_TIMEOUT_MS`              |   15000 | Deadline for proof and routing activation                                       |
+
+A rejected upgrade returns HTTP 429 with `Retry-After: 60`. Socket rate and
+authentication-deadline refusals use retryable close code 1013. Room capacity
+refusals return a request error and leave the authenticated socket open.
+Address-table cleanup inspects at most 16 entries per admission attempt;
+message and connection accounting does not scan the peer population. A new
+proved identity requires a database count for the durable ceiling. These are
+resource limits, not proof of unique humans or a complete Sybil defense.
+
+`TRUST_LOCAL_PROXY=true` accepts Caddy's overwritten `X-Real-IP` only when the
+TCP peer is loopback. It is enabled by the reference deployment and disabled
+by default. Do not enable it behind an untrusted local proxy. With a different
+proxy topology, configure a corresponding trusted ingress before exposing the
+service; never accept arbitrary forwarded-address headers. Shared NATs share
+an address budget, so operators may need higher limits for their audience.
+
+Every encrypted PostgreSQL mode verifies the server certificate; unknown
+`sslmode` values fail at startup. Supply `sslmode=verify-full` and
+`sslrootcert=/absolute/path/to/ca.crt` for a private CA. Conflicting driver URL
+knobs cannot disable this check. The example `.env` uses explicit
+`sslmode=disable` for a disposable local database only.
+
+The Ansible `postgres-tls.yml` playbook creates a dedicated database CA and a
+server certificate whose SAN contains the private database IP. Only the public
+CA is distributed to signaling hosts, over authenticated SSH. Private-network
+PostgreSQL access requires TLS before older HBA rules are considered. Deploy,
+initial setup and PostgreSQL setup all use this playbook. The server certificate
+is renewed when fewer than 30 days remain or its SAN changes; run provisioning
+at least monthly. CA expiry stops the playbook and requires explicit trust-anchor
+rotation. Keep the database CA key in protected operational backups, never Git.
+
+## Dependency policy
+
+The server retains `@ondemos/core` for Ed25519 proof verification and the
+PostgreSQL/Prisma libraries for persistence. UUID and hexadecimal checks are
+small local functions with boundary tests; `class-validator` is no longer a
+runtime dependency. Exact security overrides patch Prisma CLI transitive
+packages. The `deepmerge-ts` 8 override is covered by plain-object configuration,
+recursive-input and actual Prisma configuration-loader tests; its changed Map
+and custom-merger behavior is not used by this repository. Run `bun audit`
+alongside the release checks and revisit overrides when Prisma updates its pins.
+The TLS handshake regressions also require the `openssl` command.
+
 ## Health and version
 
 Every path except `/health` requires a WebSocket upgrade and answers `426
@@ -78,7 +150,7 @@ curl -s https://signaling.p2party.com/health | jq
 {
   "status": "ok",
   "protocolVersion": 4,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
 ```
@@ -430,11 +502,16 @@ of them except `Challenge`.
 
 - **`Peer`** — one row per Ed25519 identity public key, holding that key, a
   stable peer id, `lastPing`, and `serverId`: which process currently holds the
-  socket, or null. Created on connect (`handleConnection.ts`) and never deleted.
+  socket, or null. Created only after a valid socket-bound signature and before
+  routing activation. Existing peer IDs are preserved; previously unseen keys
+  receive a domain-separated deterministic UUID candidate without an initial
+  database write. Verified identity rows are retained to preserve stable IDs.
 - **`Room`** — one row per room, keyed by `identifier`, the SHA-512 of the
   64-hex room token ([`src/utils/roomIdentifier.ts`](src/utils/roomIdentifier.ts)).
   The token itself is not stored, though the operator sees it on the wire when a
-  client joins. Rooms are never deleted, including when the last member leaves.
+  client joins. Empty room records not updated for 24 hours are removed in batches of at
+  most 1,000 per minute, rechecking emptiness at deletion. Occupied rooms and
+  offline membership are retained.
 - **`Peer`↔`Room` membership** — added by a `room` request, removed only by a
   `leaveRoom` request. A socket close clears `Peer.serverId` and nothing else,
   so membership outlives the connection.
@@ -449,7 +526,7 @@ of them except `Challenge`.
 
 ## Deployment
 
-`deploy/` provisions and updates the reference deployment. None of it is
+[`deploy/`](deploy/README.md) provisions and updates the reference deployment. None of it is
 required to run the server; a self-hoster needs only Bun, Postgres, and a TLS
 terminator in front.
 
@@ -465,7 +542,8 @@ and the DNS records for the signaling, TURN and STUN names. Run it through
 `deploy/deploy.sh`). A deploy builds `p2party_linux_x64` from this repo with
 `bun run build:linux` and refuses to continue if the binary is missing; copies
 it with a rendered environment file and one systemd unit per entry in
-`signaling_ports`; runs `prisma migrate deploy` on the host and fails the play
+`signaling_ports`; installs the audited manifest and frozen lockfile into isolated
+migration tooling; runs its Prisma CLI on the host and fails the play
 if it errors, so a binary is never restarted against a schema it does not match;
 narrows the Caddy upstream list before restarting; verifies the version,
 protocol version and per-process `serverId` on every instance directly; retires
@@ -475,9 +553,22 @@ pins that ordering.
 
 Production sets `signaling_ports: [3001]` — one process — for the fencing
 reasons above. Caddy terminates TLS, proxies the WebSocket, sets HSTS and a
-content-security policy, and logs with client IPs masked to /24 and /48. coturn
+content-security policy, and logs with client IPs masked to /24 and /48.
+Request URIs, headers and the duplicate raw `client_ip` field are removed from
+access logs so the public-key query parameter is not retained there. coturn
 is configured by `playbooks/setup-coturn.yml`; this server only issues
 credentials for it.
+
+The coturn template sets `coturn_bps_capacity` to 30,000,000 bytes/second and
+`coturn_max_bps` to 3,000,000 bytes/second per allocation. Input and output are
+counted separately. These Ansible variables are operator-overridable and must
+remain positive. Ordinary clients without a bandwidth request reserve the
+per-allocation maximum, so the defaults permit about ten simultaneous such
+allocations; raise aggregate capacity for larger relay-heavy rooms. Allocation
+quotas remain 1,200 total and 12 per credential username. This bounds bandwidth
+allocation; it does not establish unique users or prevent every denial of
+service. The units and reservation semantics follow the [coturn configuration](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf)
+and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2projects).
 
 ## Privacy boundary
 

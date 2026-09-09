@@ -40,6 +40,9 @@
 		format filter {
 			wrap json
 			fields {
+				request>uri delete
+				request>headers delete
+				request>client_ip delete
 				request>remote_ip ip_mask {
 					ipv4 24
 					ipv6 48

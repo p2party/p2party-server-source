@@ -17,6 +17,9 @@
 #   ansible-playbook -i inventory/production.yml playbooks/deploy.yml
 #   ansible-playbook ... -e "skip_build=true"          # ship an existing binary
 # ============================================================================
+- name: Provision verified PostgreSQL TLS
+  import_playbook: postgres-tls.yml
+
 - name: Deploy p2party signaling server
   hosts: signaling_production
   become: true
@@ -32,10 +35,9 @@
     # artefact lives beside the playbook that ships it rather than loose in
     # the repository root.
     binary_name: deploy/ansible/builds/p2party_linux_x64
-    # The host has no node_modules, so bunx resolves prisma from the registry on
-    # every deploy. Pinned to the version this repo tests against: an unpinned
-    # fetch would silently adopt a new major and run migrations differently.
-    prisma_version: "7.9.0"
+    # Tooling is isolated from the compiled service and installed from the same
+    # manifest/lockfile that passed the release audit, including security overrides.
+    migration_tooling: "{{ app.home }}/server/migration-tooling"
     # Read the same package.json that bun build embeds through src/version.ts.
     # A skip-build deploy of an older binary therefore fails the health gate
     # instead of silently announcing a version different from the source tree.
@@ -147,6 +149,34 @@
     # the database does not have is exactly the failure this prevents.
     - name: Apply Postgres migrations
       block:
+        - name: Create an isolated directory for audited migration tooling
+          file:
+            path: "{{ migration_tooling }}"
+            state: directory
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0755"
+
+        - name: Copy the audited package manifest and frozen dependency lock
+          copy:
+            src: "{{ repo_path }}/{{ item }}"
+            dest: "{{ migration_tooling }}/{{ item }}"
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0644"
+          loop: [package.json, bun.lockb]
+
+        - name: Install exactly the audited migration dependencies
+          become_user: "{{ app.user }}"
+          command:
+            argv:
+              - "{{ app.home }}/.bun/bin/bun"
+              - install
+              - --frozen-lockfile
+            chdir: "{{ migration_tooling }}"
+          environment:
+            NODE_ENV: development
+
         - name: Ensure the prisma directory exists
           file:
             path: "{{ app.home }}/server/prisma"
@@ -186,15 +216,19 @@
 
         - name: Apply migrations against Postgres
           become_user: "{{ app.user }}"
-          shell:
-            cmd: bunx prisma@{{ prisma_version }} migrate deploy
+          command:
+            argv:
+              - "{{ app.home }}/.bun/bin/bun"
+              - "{{ migration_tooling }}/node_modules/prisma/build/index.js"
+              - migrate
+              - deploy
             chdir: "{{ app.home }}/server"
           environment:
-            # initial-setup.yml installs Bun to ~/.bun/bin, but the shell module
-            # runs a non-login /bin/sh that never reads the profile which adds it
-            # to PATH — so `bunx` is not found even though Bun is present.
+            # Prisma's subprocesses need the same installed Bun; no shell profile
+            # or globally installed Prisma package participates in this migration.
             PATH: "{{ app.home }}/.bun/bin:{{ ansible_facts['env'].PATH }}"
-            DATABASE_URL: "postgresql://{{ database.user }}:{{ database.password }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}"
+            DATABASE_URL: "postgresql://{{ database.user | urlencode }}:{{ database.password | urlencode }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}&sslrootcert={{ database.ssl_root_cert }}"
+          no_log: true
           register: migration_result
           # A failed migration must stop the deploy before the new binary is
           # restarted against a schema it does not match.
@@ -202,7 +236,7 @@
 
         - name: Show migration output
           debug:
-            var: migration_result.stdout_lines
+            msg: PostgreSQL migrations applied successfully
           when: migration_result is defined
 
     # ------------------------------------------------------------------

@@ -5,7 +5,7 @@ Contributions and adversarial review are welcome.
 ## Development setup
 
 Follow the fresh-clone instructions in [README.md](README.md). Use only a local,
-disposable SQLite database. Never point tests, Prisma migrations, or development
+disposable PostgreSQL database. Never point tests, Prisma migrations, or development
 commands at production data or a shared database service.
 
 Before the first public push, export a fresh or squashed history whose author
@@ -22,18 +22,18 @@ bun run check
 bun run format:check
 ```
 
-The migration regression creates and removes its own temporary SQLite database.
-No test or contributor workflow requires PostgreSQL.
+The unit suite uses database doubles and schema-contract checks. CI also applies
+the migrations to a fresh disposable PostgreSQL instance.
 
 ## Change guidelines
 
 1. Open an issue before a large protocol or persistence change.
-2. Keep protocol-v3 inputs bounded and bind all actions to the authenticated
+2. Keep protocol-v4 inputs bounded and bind all actions to the authenticated
    WebSocket identity.
 3. Add focused tests for success, malformed input, replay, and cross-room or
    cross-identity attempts.
 4. Commit both `prisma/schema.prisma` and a migration for schema changes, then
-   verify that the full migration chain bootstraps a fresh SQLite file.
+   verify that the full migration chain bootstraps a fresh PostgreSQL database.
 5. Do not commit `.env` files, databases, TURN secrets, generated binaries, or
    production logs.
 

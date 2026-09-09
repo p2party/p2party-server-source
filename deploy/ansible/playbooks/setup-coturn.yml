@@ -18,6 +18,13 @@
     - "{{ playbook_dir }}/../group_vars/all/vault.yml"
 
   tasks:
+    - name: Require finite TURN bandwidth budgets
+      assert:
+        that:
+          - coturn_max_bps | default(3000000) | int > 0
+          - coturn_bps_capacity | default(30000000) | int >= coturn_max_bps | default(3000000) | int
+        fail_msg: Set positive coturn_max_bps and coturn_bps_capacity; zero disables the bandwidth guard
+
     - name: Display setup info
       debug:
         msg: "Configuring Coturn on {{ inventory_hostname }} ({{ ansible_host }})"

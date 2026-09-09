@@ -1,6 +1,7 @@
 import { P2PartyWS } from "./wsServer";
 import { assertSecureTurnSecret } from "./utils/socketAuth";
 import { initPubSub, shutdownPubSub } from "./pubsub";
+import { startRoomRetention } from "./utils/roomRetention";
 
 import type {
   P2PartyWSMsg,
@@ -36,12 +37,14 @@ const events: P2PartyWSEvents = {
 // peer whose signals they silently drop. initPubSub throws rather than starting
 // degraded, because the degraded mode is invisible at runtime.
 await initPubSub();
+const roomRetention = startRoomRetention();
 
 new P2PartyWS(port, events);
 
 // Release this instance's peer claims and routing rows on the way out, so a
 // reconnecting peer is not routed to a process that no longer exists.
 const shutdown = (signal: NodeJS.Signals) => {
+  clearInterval(roomRetention);
   void shutdownPubSub()
     .catch((error: unknown) => {
       console.error("p2party: shutdown failed", error);

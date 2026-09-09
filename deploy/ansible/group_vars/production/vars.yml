@@ -28,16 +28,10 @@ database:
   name: "{{ vault_postgres_db_name }}"
   user: "{{ vault_postgres_user }}"
   password: "{{ vault_postgres_password }}"
-  # node-postgres does not implement libpq sslmode semantics, so this value is
-  # only a hint: src/db/ssl.ts makes the actual decision and passes an explicit
-  # ssl option. 'require' here means encrypt; verification needs sslrootcert
-  # pointing at the CA that signed the server certificate, which Debian's
-  # install-time self-signed certificate cannot satisfy (its SAN does not cover
-  # 10.231.0.2). Encrypted-but-unverified stops passive capture on the private
-  # network; it does not stop an active in-path attacker. Issuing a real
-  # certificate and adding sslrootcert is the remaining step and needs no code
-  # change.
-  ssl_mode: require
+  # postgres-tls.yml provisions a CA and a leaf with the private IP in its SAN,
+  # then distributes only the public CA certificate over authenticated SSH.
+  ssl_mode: verify-full
+  ssl_root_cert: /etc/p2party/postgres-ca.crt
   # Server-side ceiling, set by install-postgres.yml.
   max_connections: 100
   # Per-Prisma-instance pool. Keep (explicit signaling_ports x connection_limit)
