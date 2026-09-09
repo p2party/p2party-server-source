@@ -50,3 +50,70 @@ explicit and requires protected operational backups of the CA key.
 The first rollout changes database TLS configuration and may restart PostgreSQL.
 Schedule that rollout accordingly. Local development uses the explicit
 `sslmode=disable` URL in `.env.example`; production must retain verified TLS.
+
+## Frontend response headers
+
+[`terraform/p2party_frontend_headers.tf`](terraform/p2party_frontend_headers.tf)
+manages the five response headers documented by the frontend: CSP,
+Permissions-Policy, Referrer-Policy, HSTS and X-Content-Type-Options. The rule
+matches only `p2party.com`; signaling continues to set its own headers in Caddy.
+Both management and activation default to `false`, so an ordinary server deploy
+does not change the frontend edge policy. The apex DNS record must be proxied
+through Cloudflare for the rule to run.
+
+Terraform 1.2+ is required for the ownership precondition. With Terraform 1.7+,
+run `terraform -chdir=deploy/terraform test` for the offline provider-mock plans
+covering the default-off behavior, disabled initial rule, and existing-rule
+preservation.
+
+The CSP permits same-origin scripts and WebAssembly compilation, without
+allowing inline JavaScript. **Deploy and test a CSP-compatible frontend before
+activating it.** Earlier prerenders contained inline React hydration scripts
+that this policy blocks. Do not weaken `script-src` to make an older build pass.
+Inline styles remain permitted for the frontend's existing React style usage.
+
+Cloudflare has one zone entrypoint ruleset for
+`http_response_headers_transform`; this Terraform resource owns its complete
+rule list. Before enabling management:
+
+1. Give the existing zone-scoped token **Zone → Transform Rules → Edit** in
+   addition to its DNS permissions. The corresponding API permission is
+   `Zone Transform Rules Write`; read access is required to inspect the phase.
+   Keep the token in ignored `deploy/.env`, never a tracked Terraform file.
+2. Inspect the response-header phase in Cloudflare and every Terraform state
+   that might own it. The opt-in data source reads existing rules and refuses a
+   differently named ruleset or any additional rule references. A 403 is an
+   unresolved ownership check, not evidence that no rules exist.
+3. If the phase is absent, set `manage_frontend_response_headers = true` in
+   ignored `terraform.tfvars` while keeping `frontend_response_headers_enabled
+= false`. If it exists, preserve its rules and reconcile ownership first.
+   Importing a populated phase into this single-rule configuration and applying
+   would otherwise remove its other rules; the precondition refuses that case.
+   A phase already created from this exact configuration may be imported with
+   `./deploy/tf import 'cloudflare_ruleset.frontend_response_headers[0]'
+'zone/<zone-id>/<ruleset-id>'` after checking its contents.
+4. Run `./deploy/tf init -lockfile=readonly`, `./deploy/tf validate`, then
+   `./deploy/tf plan -out=tfplan`. Review the entire plan, including unrelated
+   infrastructure drift, before applying it. Plan files and JSON plan output can
+   contain credentials or infrastructure details; retain them only in ignored,
+   private local storage. A newly created rule is disabled until activation.
+5. Deploy the frontend build whose browser checks pass with these exact headers.
+   Then set `frontend_response_headers_enabled = true`, review a fresh plan, and
+   apply that reviewed plan. Verify all five headers on `/`, `/r`, and a blog
+   route, then test a room join, text/file delivery and reload recovery against
+   the public frontend.
+
+For rollback, set `frontend_response_headers_enabled = false` and review/apply
+the resulting rule update. Keep management enabled; `prevent_destroy` protects
+the entire phase ruleset against accidental removal. A browser that already
+received HSTS retains it until expiry, so disabling the rule does not undo that
+browser policy immediately.
+
+On 2026-09-09 the public apex CNAME was proxied and the local state owned only
+six Cloudflare DNS records, but the configured token returned HTTP 403 when
+listing rulesets. Existing phase ownership and a fully refreshed opt-in plan
+therefore require the permission change above. No edge rule was applied during
+that check.
+
+See Cloudflare's [response-transform API workflow](https://developers.cloudflare.com/rules/transform/response-header-modification/create-api/)
+and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.0/docs/resources/ruleset).

@@ -25,11 +25,19 @@ deploy_wireguard = true
 # ============================================================================
 # Get API token: https://dash.cloudflare.com/profile/api-tokens
 # Required permissions: Zone:Edit, DNS:Edit
+# Managing frontend headers also requires Zone Transform Rules:Edit for this zone.
 # Prefer environment variables instead:
 #   export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
 #   export TF_VAR_cloudflare_zone_id_p2party="your-zone-id-for-p2party.com"
 # cloudflare_api_token       = "your-cloudflare-api-token"
 # cloudflare_zone_id_p2party = "your-zone-id-for-p2party.com"
+
+# Frontend response headers are an explicit opt-in, separate from server deploys.
+# Inspect the existing response-transform phase before enabling management.
+# Keep the rule disabled until the CSP-compatible frontend is deployed and tested.
+# See ../README.md#frontend-response-headers for the rollout and ownership checks.
+# manage_frontend_response_headers = false
+# frontend_response_headers_enabled = false
 
 # ============================================================================
 # Optional Overrides (defaults shown)

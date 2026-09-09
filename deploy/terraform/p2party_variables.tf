@@ -35,7 +35,7 @@ variable "deploy_wireguard" {
 # ============================================================================
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token with Zone:Edit and DNS:Edit permissions"
+  description = "Cloudflare API token with Zone:Edit and DNS:Edit; frontend response headers also require Zone Transform Rules:Edit"
   type        = string
   sensitive   = true
 }
@@ -43,6 +43,18 @@ variable "cloudflare_api_token" {
 variable "cloudflare_zone_id_p2party" {
   description = "Cloudflare Zone ID for p2party.com"
   type        = string
+}
+
+variable "manage_frontend_response_headers" {
+  description = "Manage the frontend response-transform ruleset after checking existing phase ownership; see deploy/README.md"
+  type        = bool
+  default     = false
+}
+
+variable "frontend_response_headers_enabled" {
+  description = "Activate frontend headers only after the CSP-compatible frontend build is deployed and tested"
+  type        = bool
+  default     = false
 }
 
 # ============================================================================

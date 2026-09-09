@@ -1,0 +1,86 @@
+# Cloudflare owns the complete zone ruleset for this response-transform phase.
+# Opt in only after inspecting existing rules; do not import a populated phase
+# into this single-rule resource without first preserving its other rules.
+locals {
+  frontend_response_ruleset_name = "p2party frontend response headers"
+  frontend_response_rule_ref     = "p2party_frontend_security_headers"
+  frontend_response_headers = {
+    "Content-Security-Policy" = join("; ", [
+      "default-src 'self'",
+      "base-uri 'none'",
+      "object-src 'none'",
+      "form-action 'self'",
+      "script-src 'self' 'wasm-unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "media-src 'self' data: blob:",
+      "connect-src 'self' https: wss:",
+      "worker-src 'self' blob:",
+      "manifest-src 'self'",
+      "frame-ancestors 'none'",
+    ])
+    "Permissions-Policy"        = "camera=(), geolocation=(), payment=(), usb=(), microphone=(self)"
+    "Referrer-Policy"           = "no-referrer"
+    "Strict-Transport-Security" = "max-age=63072000; includeSubDomains; preload"
+    "X-Content-Type-Options"    = "nosniff"
+  }
+}
+
+# A permission failure stops an opted-in plan. Missing API access must never be
+# interpreted as an empty phase, and dashboard-added rules must not be removed
+# silently by a later Terraform update.
+data "cloudflare_rulesets" "frontend_response_headers" {
+  count = var.manage_frontend_response_headers ? 1 : 0
+
+  zone_id       = var.cloudflare_zone_id_p2party
+  include_rules = true
+
+  filter {
+    kind  = "zone"
+    phase = "http_response_headers_transform"
+  }
+}
+
+resource "cloudflare_ruleset" "frontend_response_headers" {
+  count = var.manage_frontend_response_headers ? 1 : 0
+
+  zone_id     = var.cloudflare_zone_id_p2party
+  name        = local.frontend_response_ruleset_name
+  description = "Security response headers for p2party.com only"
+  kind        = "zone"
+  phase       = "http_response_headers_transform"
+
+  rules {
+    ref         = local.frontend_response_rule_ref
+    description = "p2party.com frontend security headers"
+    expression  = "(http.host eq \"p2party.com\")"
+    action      = "rewrite"
+    enabled     = var.frontend_response_headers_enabled
+
+    action_parameters {
+      dynamic "headers" {
+        for_each = local.frontend_response_headers
+
+        content {
+          name      = headers.key
+          operation = "set"
+          value     = headers.value
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+
+    precondition {
+      condition = alltrue([
+        for ruleset in data.cloudflare_rulesets.frontend_response_headers[0].rulesets :
+        ruleset.name == local.frontend_response_ruleset_name && alltrue([
+          for rule in ruleset.rules : rule.ref == local.frontend_response_rule_ref
+        ])
+      ])
+      error_message = "The response-header phase contains an unmanaged ruleset or additional rules. Preserve that existing configuration and reconcile Terraform ownership before enabling this resource; do not replace the phase with only the frontend rule."
+    }
+  }
+}
