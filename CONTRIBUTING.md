@@ -8,9 +8,9 @@ Follow the fresh-clone instructions in [README.md](README.md). Use only a local,
 disposable PostgreSQL database. Never point tests, Prisma migrations, or development
 commands at production data or a shared database service.
 
-Before the first public push, export a fresh or squashed history whose author
-and committer email addresses all use `@p2party.com`. Do not rewrite this active
-protocol-development branch.
+`master` carries the public history. Publish from this repository root with
+`git push`; a separate export checkout is not needed. Start public changes
+from `master`, and keep any older private history out of public merges.
 
 Before opening a pull request, run:
 
