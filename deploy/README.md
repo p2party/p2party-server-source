@@ -109,11 +109,17 @@ the entire phase ruleset against accidental removal. A browser that already
 received HSTS retains it until expiry, so disabling the rule does not undo that
 browser policy immediately.
 
-On 2026-09-09 the public apex CNAME was proxied and the local state owned only
-six Cloudflare DNS records, but the configured token returned HTTP 403 when
-listing rulesets. Existing phase ownership and a fully refreshed opt-in plan
-therefore require the permission change above. No edge rule was applied during
-that check.
+On 2026-09-09, after updating the token permissions, the response-header phase
+was confirmed empty and frontend `deploy-2026-09-09.2` was verified live with
+CSP-compatible prerenders. The reviewed full plan created the enabled ruleset:
+one resource added, none changed or destroyed. Both flags are now enabled in
+the deployment's ignored `terraform.tfvars`; the full post-apply plan reported
+no changes and both checks passed.
+
+Public browser checks confirmed all five headers on 15 pages and their assets,
+with no CSP violations or uncaught page errors. Separate room checks passed
+WebRTC text and byte-exact file delivery, reload recovery with the received
+file retained, and same-identity tab replacement under the actual edge policy.
 
 See Cloudflare's [response-transform API workflow](https://developers.cloudflare.com/rules/transform/response-header-modification/create-api/)
 and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.0/docs/resources/ruleset).
