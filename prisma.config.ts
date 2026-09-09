@@ -14,10 +14,10 @@ import type { PrismaConfig } from "prisma/config";
  *
  * The import is `import type` and the default export is a plain object ON
  * PURPOSE, and this file must stay that way. The deploy host carries a single
- * compiled binary and no node_modules: it runs the CLI through
- * `bunx prisma@<pinned>`, which unpacks into a temporary tree of its own. A
+ * compiled binary with no adjacent node_modules: its audited CLI dependencies
+ * live in the separate migration-tooling/node_modules directory. A
  * runtime `import { defineConfig } from "prisma/config"` is resolved from THIS
- * file's directory upwards, never from that temporary tree, so it fails with
+ * file's directory upwards, never from that nested tooling tree, so it fails with
  * "Cannot find module 'prisma/config'" and no migration can run. Nothing is
  * lost by dropping it: the loader's parseDefaultExport() tries the plain
  * PrismaConfig shape first and applies defineConfig() itself.
