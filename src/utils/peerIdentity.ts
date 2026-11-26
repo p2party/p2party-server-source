@@ -44,18 +44,12 @@ export const createPersistVerifiedIdentity =
     if (!ws.data.isVerified || ws.readyState !== 1) return false;
     const { peerId, publicKey } = ws.data;
     const at = now();
-    // The ceiling counts identities seen ("updatedAt": authentication, claim,
-    // release) inside the retention period.
-    const seen = {
-      updatedAt: {
-        gte: new Date(at - admissionLimits.membershipTtlDays * DAY_MS),
-      },
-    };
+    // Offline identities in no room, created over a day ago. Any last-seen
+    // time qualifies, however old, except one inside the activation deadline:
+    // that row is persisted but its socket has not claimed it yet.
     const prunable = {
       createdAt: { lt: new Date(at - IDENTITY_PRUNE_MIN_AGE_MS) },
       updatedAt: {
-        ...seen.updatedAt,
-        // Persisted but not yet claimed: still inside its activation deadline.
         lt: new Date(at - admissionLimits.authenticationTimeoutMs),
       },
       serverId: null,
@@ -74,10 +68,14 @@ export const createPersistVerifiedIdentity =
         if (!existing) {
           if (provisionalPeerId(publicKey) !== peerId || !admitCreation(ws))
             throw new Error("Identity admission capacity reached");
-          let identities = await transaction.peer.count({ where: seen });
+          // A hard cap on every Peer row, whatever its age: nothing else
+          // deletes identities, so rows past any retention window still count.
+          let identities = await transaction.peer.count();
           if (identities >= maxIdentities - IDENTITY_PRUNE_BATCH) {
-            // Offline identities in no room, created over a day ago, go first.
-            // Rolled back with the transaction if the cap still refuses.
+            // Least recently seen first: rows past the retention window go
+            // before any recent one ("updatedAt" is bumped on authentication,
+            // claim and release). Rolled back with the transaction if the cap
+            // still refuses.
             const stale = await transaction.peer.findMany({
               where: prunable,
               select: { id: true },

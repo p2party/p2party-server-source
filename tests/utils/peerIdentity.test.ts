@@ -266,7 +266,12 @@ describe("proof-gated durable identity", () => {
     );
     const { database, rows } = peerTable([]);
     // Default admission: the socket's own lease, not a process-wide counter.
-    const persist = createPersistVerifiedIdentity(database, undefined, 1000);
+    const persist = createPersistVerifiedIdentity(
+      database,
+      undefined,
+      1000,
+      () => NOW,
+    );
     const attempt = (remote: string, publicKey: string) => {
       const lease = guard.reserve(
         admissionAddress(remote, null, false)!,
@@ -324,27 +329,65 @@ describe("proof-gated durable identity", () => {
     expect(rows).toHaveLength(5);
   });
 
-  test("the identity cap counts only identities seen inside the retention period", async () => {
-    const retentionMs = admissionLimits.membershipTtlDays * DAY;
-    const { database, rows } = peerTable([
-      existingRow("forgotten", retentionMs + 2 * DAY, retentionMs + DAY, {
-        rooms: 1,
+  test("total identity rows never exceed the hard cap", async () => {
+    // Well past any retention window (task X3 proposes 90 days).
+    const longAgo = 200 * DAY;
+
+    // Rows that cannot be pruned still count: the cap refuses, it never grows.
+    const full = peerTable([
+      existingRow("member", longAgo + DAY, longAgo, { rooms: 1 }),
+      existingRow("stale-claim", longAgo + DAY, longAgo, {
+        serverId: "server",
       }),
-      existingRow("recent", 10 * DAY, DAY, { rooms: 1 }),
+      existingRow("also-member", longAgo + DAY, longAgo, { rooms: 2 }),
     ]);
-    const persist = createPersistVerifiedIdentity(
-      database,
+    const persistFull = createPersistVerifiedIdentity(
+      full.database,
       () => true,
-      2,
+      3,
       () => NOW,
     );
-    expect(await outcome(persist(provedSocket("03".repeat(32))))).toBe(
+    for (const prefix of ["06", "07", "08"])
+      expect(await outcome(persistFull(provedSocket(prefix.repeat(32))))).toBe(
+        "Identity admission capacity reached",
+      );
+    expect(full.rows).toHaveLength(3);
+
+    // More prunable rows than one batch: least recently seen go first, so
+    // every row past the retention window goes before any recent one.
+    const recent = Array.from({ length: 1000 }, (_, i) =>
+      existingRow(`recent-${i}`, 10 * DAY, 2 * DAY - i * 1000),
+    );
+    const mixed = peerTable([
+      existingRow("member", longAgo + DAY, longAgo, { rooms: 1 }),
+      ...recent,
+      existingRow("forgotten-1", longAgo + DAY, longAgo),
+      existingRow("forgotten-2", longAgo + 2 * DAY, longAgo + DAY),
+    ]);
+    const cap = mixed.rows.length;
+    const persistMixed = createPersistVerifiedIdentity(
+      mixed.database,
+      () => true,
+      cap,
+      () => NOW,
+    );
+    expect(await outcome(persistMixed(provedSocket("09".repeat(32))))).toBe(
       "persisted",
     );
-    expect(await outcome(persist(provedSocket("04".repeat(32))))).toBe(
-      "Identity admission capacity reached",
-    );
-    expect(rows).toHaveLength(3);
+    const ids = mixed.rows.map(({ id }) => id);
+    expect(ids).not.toContain("forgotten-1");
+    expect(ids).not.toContain("forgotten-2");
+    expect(ids.filter((id) => id.startsWith("recent-"))).toEqual([
+      "recent-998",
+      "recent-999",
+    ]);
+    expect(ids).toEqual([
+      "member",
+      "recent-998",
+      "recent-999",
+      provisionalPeerId("09".repeat(32)),
+    ]);
+    expect(mixed.rows.length).toBeLessThanOrEqual(cap);
   });
 
   test("identities far below the cap are never pruned", async () => {
