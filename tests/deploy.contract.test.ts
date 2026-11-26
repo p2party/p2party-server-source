@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -937,6 +937,32 @@ const ansibleDir = join(repoRoot, "deploy", "ansible");
 const playbooksDir = join(ansibleDir, "playbooks");
 const readAnsible = (path: string) =>
   readFileSync(join(ansibleDir, path), "utf8");
+/**
+ * Tracked files under deploy/ansible/<prefix>, relative to deploy/ansible,
+ * from `git ls-files`. No test lists a directory under deploy/: an ignored
+ * vault, inventory or state file sits beside the tracked files in a working
+ * tree and must never be read. Fails when git is unavailable.
+ */
+const trackedAnsible = (prefix: string): string[] => {
+  const child = Bun.spawnSync(
+    ["git", "ls-files", "-z", "--", `deploy/ansible/${prefix}`],
+    { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+  );
+  if (child.exitCode !== 0)
+    throw new Error(
+      `git ls-files failed; these tests need a git work tree: ${child.stderr.toString()}`,
+    );
+  const files = child.stdout
+    .toString()
+    .split("\0")
+    .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+    .map((f) => f.slice("deploy/ansible/".length));
+  if (files.length === 0)
+    throw new Error(
+      `git ls-files lists no YAML under deploy/ansible/${prefix}`,
+    );
+  return files;
+};
 const localPreflight = () => readAnsible("playbooks/local-preflight.yml");
 const pinnedBunTasks = () => readAnsible("tasks/require-pinned-bun.yml");
 const allVars = Bun.YAML.parse(readAnsible("group_vars/all/vars.yml")) as {
@@ -967,6 +993,79 @@ const preflightTask = (name: string) => {
   return found;
 };
 
+type Raw = Record<string, unknown>;
+
+/**
+ * Tasks that, as root on a host, run a program or hand one an argument that
+ * lies under the app account's home, the staging directory or anything else
+ * the worker account can write. Every task of the given plays, blocks,
+ * rescues, always sections and handlers, with imported task files expanded.
+ * A remote task runs as root unless it, its block or its play clears
+ * ansible_become (the inventory's ansible_become outranks the `become`
+ * keyword) or names a non-root become_user; a templated become_user other
+ * than app.user counts as root. A task delegated to localhost runs here.
+ */
+const rootExecutions = (files: { file: string; plays: Raw[] }[]): string[] => {
+  const RUNS =
+    /^(ansible\.(builtin|legacy)\.)?(command|shell|raw|script|expect)$/;
+  const WORKER_WRITABLE =
+    /app\.home|bun\.install_dir|release_staging|release-staging|migration_tooling|migration-tooling|server\/p2party-server|binary_name|\/home\/|~[\w/]/;
+  const nonRoot = (user: unknown) =>
+    user === "{{ app.user }}" ||
+    (typeof user === "string" && !user.includes("{{") && user !== "root");
+  const offenders: string[] = [];
+  type Scope = { user?: unknown; local: boolean; noBecome: boolean };
+  const visit = (tasks: Raw[], inherited: Scope, where: string) => {
+    for (const t of tasks ?? []) {
+      const vars = (t.vars ?? {}) as Raw;
+      const scope: Scope = {
+        user: t.become_user ?? inherited.user,
+        local: inherited.local || t.delegate_to === "localhost",
+        noBecome: inherited.noBecome || vars.ansible_become === false,
+      };
+      for (const nested of ["block", "rescue", "always"])
+        if (Array.isArray(t[nested])) visit(t[nested] as Raw[], scope, where);
+      for (const key of [
+        "import_tasks",
+        "include_tasks",
+        "ansible.builtin.import_tasks",
+        "ansible.builtin.include_tasks",
+      ]) {
+        const path = t[key];
+        if (typeof path !== "string") continue;
+        const file = path.replace("{{ playbook_dir }}/../", "");
+        visit(Bun.YAML.parse(readAnsible(file)) as Raw[], scope, file);
+      }
+      const asRoot = !scope.local && !scope.noBecome && !nonRoot(scope.user);
+      if (!asRoot) continue;
+      for (const [key, args] of Object.entries(t)) {
+        // The program, its arguments and its directory, in any position, and
+        // any module's `validate` command.
+        const runs = RUNS.test(key)
+          ? JSON.stringify(args)
+          : typeof args === "object" && args !== null && "validate" in args
+            ? String((args as Raw).validate)
+            : "";
+        if (WORKER_WRITABLE.test(runs)) {
+          offenders.push(`${where}: ${String(t.name)}`);
+          break;
+        }
+      }
+    }
+  };
+  for (const { file, plays } of files)
+    for (const play of plays) {
+      const scope: Scope = {
+        user: play.become_user,
+        local: play.hosts === "localhost",
+        noBecome: ((play.vars ?? {}) as Raw).ansible_become === false,
+      };
+      for (const section of ["pre_tasks", "tasks", "post_tasks", "handlers"])
+        visit((play[section] ?? []) as Raw[], scope, file);
+    }
+  return offenders;
+};
+
 describe("toolchain pins", () => {
   test("the playbook reads the pin from package.json", () => {
     // One source: group_vars/all/vars.yml derives bun.version from
@@ -977,20 +1076,9 @@ describe("toolchain pins", () => {
     expect(allVars.bun.version).toContain(
       ".packageManager | regex_replace('^bun@', '')",
     );
-    // Only tracked Ansible files, named explicitly: the ignored vault and the
-    // real inventory sit beside them in a working tree and must never be read.
-    const ansibleYaml = [
-      ...readdirSync(playbooksDir)
-        .filter((f) => f.endsWith(".yml"))
-        .map((f) => `playbooks/${f}`),
-      ...readdirSync(join(ansibleDir, "tasks"))
-        .filter((f) => f.endsWith(".yml"))
-        .map((f) => `tasks/${f}`),
-      "group_vars/all/vars.yml",
-      "group_vars/production/vars.yml",
-      "group_vars/all/vault.yml.example",
-      "inventory/production.yml.example",
-    ];
+    // Tracked Ansible files only, from git: the ignored vault and the real
+    // inventory sit beside them in a working tree and must never be read.
+    const ansibleYaml = trackedAnsible("");
     for (const file of ansibleYaml)
       expect(
         file === "group_vars/all/vars.yml"
@@ -1148,100 +1236,147 @@ describe("toolchain pins", () => {
   });
 
   test("no task executes a staged artefact as root", () => {
-    // Every task of every playbook here, imported task files expanded. The
-    // inventory sets ansible_become, which outranks the `become` keyword, so a
-    // remote task runs as root unless it clears ansible_become or names a
-    // non-root become_user; a templated one other than app.user counts as root.
-    const COMMAND =
-      /^(ansible\.(builtin|legacy)\.)?(command|shell|raw|script)$/;
-    const STAGED =
-      /release_staging|release-staging|server\/p2party-server|binary_name/;
-    type Raw = Record<string, unknown>;
+    const plays = trackedAnsible("playbooks/").map((file) => ({
+      file,
+      plays: Bun.YAML.parse(readAnsible(file)) as Raw[],
+    }));
+    expect(plays.length).toBeGreaterThan(0);
+    expect(rootExecutions(plays)).toEqual([]);
+  });
+
+  test("the root-execution check catches every way a task can run a worker-writable path", () => {
+    // The five mutations the review showed passing the first version, each
+    // in a play that, like deploy.yml's, runs as root by default.
+    const mutation = (name: string, task: Raw) => ({
+      file: `mutation ${name}`,
+      plays: [
+        {
+          hosts: "signaling_production",
+          become: true,
+          tasks: [{ name, ...task }],
+        },
+      ],
+    });
+    const mutations = [
+      mutation("M1 env wrapper in the first position", {
+        command:
+          "env BUN_BE_BUN=1 {{ release_staging }}/p2party-server --version",
+      }),
+      mutation("M2 the host's Bun without become_user", {
+        command: { argv: ["{{ bun.install_dir }}/bin/bun", "--version"] },
+      }),
+      mutation("M3 a validate option", {
+        template: {
+          src: "x.j2",
+          dest: "/etc/x",
+          validate: "{{ release_staging }}/p2party-server %s",
+        },
+      }),
+      mutation("M4 an argument position", {
+        command: { argv: ["bun", "{{ release_staging }}/x.js"] },
+      }),
+      mutation("M5 the expect module", {
+        "ansible.builtin.expect": {
+          command: "{{ release_staging }}/p2party-server",
+          responses: {},
+        },
+      }),
+    ];
+    expect(rootExecutions(mutations)).toEqual(
+      mutations.map(
+        (m) => `${m.file}: ${String((m.plays[0]!.tasks[0] as Raw).name)}`,
+      ),
+    );
+    // The same program run as the app account, or on this machine, is fine.
+    expect(
+      rootExecutions([
+        mutation("as the app account", {
+          command: { argv: ["{{ bun.install_dir }}/bin/bun", "--version"] },
+          become_user: "{{ app.user }}",
+        }),
+        mutation("delegated to this machine", {
+          command: { argv: ["{{ bun.install_dir }}/bin/bun", "--version"] },
+          delegate_to: "localhost",
+          vars: { ansible_become: false },
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("no test enumerates deploy/ by walking directories", () => {
+    // A directory listing under deploy/ in a working tree includes ignored
+    // files (vault, inventory, state); tests take tracked files from git.
+    const list = Bun.spawnSync(["git", "ls-files", "-z", "--", "tests/"], {
+      cwd: repoRoot,
+      stdout: "pipe",
+    });
+    expect(list.exitCode).toBe(0);
+    const testFiles = list.stdout
+      .toString()
+      .split("\0")
+      .filter((f) => f.endsWith(".ts"));
+    expect(testFiles.length).toBeGreaterThan(0);
+    const WALK =
+      /\b(readdirSync|readdir|opendirSync|opendir|globSync|glob|Glob)\s*\(/g;
     const offenders: string[] = [];
-    const program = (module: string, args: unknown): string => {
-      if (!/command$/.test(module)) return JSON.stringify(args);
-      if (typeof args === "string") return args.trim().split(/\s+/)[0] ?? "";
-      const a = (args ?? {}) as { argv?: unknown[]; cmd?: string };
-      if (a.argv) return String(a.argv[0] ?? "");
-      return (
-        String(a.cmd ?? "")
-          .trim()
-          .split(/\s+/)[0] ?? ""
-      );
-    };
-    const nonRoot = (user: unknown) =>
-      user === "{{ app.user }}" ||
-      (typeof user === "string" && !user.includes("{{") && user !== "root");
-    const visit = (
-      tasks: Raw[],
-      inherited: { user?: unknown; local: boolean; noBecome: boolean },
-      where: string,
-    ) => {
-      for (const t of tasks ?? []) {
-        const vars = (t.vars ?? {}) as Raw;
-        const scope = {
-          user: t.become_user ?? inherited.user,
-          local: inherited.local || t.delegate_to === "localhost",
-          noBecome: inherited.noBecome || vars.ansible_become === false,
-        };
-        for (const nested of ["block", "rescue", "always"])
-          if (t[nested]) visit(t[nested] as Raw[], scope, where);
-        for (const key of [
-          "import_tasks",
-          "include_tasks",
-          "ansible.builtin.import_tasks",
-          "ansible.builtin.include_tasks",
-        ]) {
-          const path = t[key];
-          if (typeof path !== "string") continue;
-          const file = path.replace("{{ playbook_dir }}/../", "");
-          visit(Bun.YAML.parse(readAnsible(file)) as Raw[], scope, file);
-        }
-        for (const [key, args] of Object.entries(t)) {
-          if (!COMMAND.test(key)) continue;
-          const runsAsRoot =
-            !scope.local && !scope.noBecome && !nonRoot(scope.user);
-          if (runsAsRoot && STAGED.test(program(key, args)))
-            offenders.push(`${where}: ${String(t.name)}`);
-        }
+    for (const file of testFiles) {
+      const source = readFileSync(join(repoRoot, file), "utf8");
+      // Names bound, directly or through each other, to a path under deploy/.
+      const deployNames = new Set<string>();
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const [, name, value] of source.matchAll(
+          /\b(?:const|let|var)\s+(\w+)\s*=\s*([^;]*);/g,
+        ))
+          if (
+            !deployNames.has(name!) &&
+            (/["'`][^"'`]*\bdeploy\b/.test(value!) ||
+              [...deployNames].some((n) =>
+                new RegExp(`\\b${n}\\b`).test(value!),
+              ))
+          ) {
+            deployNames.add(name!);
+            grew = true;
+          }
       }
-    };
-    for (const file of readdirSync(playbooksDir).filter((f) =>
-      f.endsWith(".yml"),
-    )) {
-      const plays = Bun.YAML.parse(
-        readFileSync(join(playbooksDir, file), "utf8"),
-      ) as Raw[];
-      for (const play of plays) {
-        const scope = {
-          user: play.become_user,
-          local: play.hosts === "localhost",
-          noBecome: ((play.vars ?? {}) as Raw).ansible_become === false,
-        };
-        for (const section of ["pre_tasks", "tasks", "post_tasks", "handlers"])
-          visit((play[section] ?? []) as Raw[], scope, `playbooks/${file}`);
+      for (const call of source.matchAll(WALK)) {
+        let depth = 1;
+        let end = call.index! + call[0].length;
+        while (end < source.length && depth > 0) {
+          if (source[end] === "(") depth++;
+          if (source[end] === ")") depth--;
+          end++;
+        }
+        const argument = source.slice(call.index! + call[0].length, end - 1);
+        if (
+          /\bdeploy\b/.test(argument) ||
+          [...deployNames].some((n) => new RegExp(`\\b${n}\\b`).test(argument))
+        )
+          offenders.push(
+            `${file}:${source.slice(0, call.index!).split("\n").length}`,
+          );
       }
     }
     expect(offenders).toEqual([]);
   });
 
   test("every playbook starts with the local pre-flight before any host is contacted", () => {
-    const playbooks = readdirSync(playbooksDir).filter(
-      (f) => f.endsWith(".yml") && f !== "local-preflight.yml",
+    const playbooks = trackedAnsible("playbooks/").filter(
+      (f) => f !== "playbooks/local-preflight.yml",
     );
     expect(playbooks.sort()).toEqual([
-      "deploy.yml",
-      "initial-setup.yml",
-      "install-postgres.yml",
-      "postgres-tls.yml",
-      "setup-coturn.yml",
-      "setup-wireguard.yml",
-      "site.yml",
+      "playbooks/deploy.yml",
+      "playbooks/initial-setup.yml",
+      "playbooks/install-postgres.yml",
+      "playbooks/postgres-tls.yml",
+      "playbooks/setup-coturn.yml",
+      "playbooks/setup-wireguard.yml",
+      "playbooks/site.yml",
     ]);
     for (const file of playbooks) {
-      const [first] = Bun.YAML.parse(
-        readFileSync(join(playbooksDir, file), "utf8"),
-      ) as { import_playbook?: string }[];
+      const [first] = Bun.YAML.parse(readAnsible(file)) as {
+        import_playbook?: string;
+      }[];
       expect(first?.import_playbook, file).toBe("local-preflight.yml");
     }
     const [play] = Bun.YAML.parse(localPreflight()) as PreflightPlay[];
