@@ -287,7 +287,8 @@ describe("TURN REST credentials", () => {
   test("derives credentials only from the supplied secret", () => {
     // The URLs are not signed: username stays the sole input of the coturn
     // REST HMAC. Vectors computed with openssl, independently of node:crypto:
-    //   tag = base64url(HMAC-SHA256("s" x 32, key bytes || u64be(7200)))[0:22]
+    //   tag = base64url(HMAC-SHA256("s" x 32,
+    //           "p2party turn username tag v1" || key bytes || u64be(7200)))[0:22]
     //   credential = base64(HMAC-SHA1("s" x 32, username))
     expect(
       createTurnCredentials("ab".repeat(32), "s".repeat(32), 1_000, [
@@ -295,8 +296,8 @@ describe("TURN REST credentials", () => {
       ]),
     ).toEqual({
       urls: ["turns:turn.example.com:443?transport=tcp"],
-      username: "7200:7XvlIKYNsXU1Ctqdd0q2Hh",
-      credential: "wq06hB/x4pttbE9W9qBeRIkfuXQ=",
+      username: "7200:Eqh-edc36X2wXRJuKcwey1",
+      credential: "XcDT8QULfKfwSJMdbLu13+ZG0W4=",
       expiresAtUnixSeconds: 7200,
     });
   });
@@ -354,8 +355,9 @@ describe("TURN REST credentials", () => {
 
   test("an identity holds at most two distinct usernames in any lifetime-long interval", () => {
     // Sample every minute over three windows; any interval one lifetime long
-    // sees at most the current and the previous window's username, so the
-    // per-username coturn quota bounds one identity at twice its value.
+    // issues at most the current and the previous window's username. This
+    // bounds issuance only: coturn lets an allocation outlive its username
+    // while it is refreshed (see README).
     const start = 493_000 * LIFETIME - 2 * LIFETIME;
     const samples = Array.from({ length: (3 * LIFETIME) / 60 }, (_, i) => {
       const now = start + i * 60;
@@ -380,12 +382,13 @@ describe("TURN REST credentials", () => {
     const opaque = issueAt((k - 1) * LIFETIME + 5, publicKey);
 
     // Vectors computed with openssl, independently of node:crypto:
-    //   tag = base64url(HMAC-SHA256("s" x 32, key bytes || u64be(expiry)))[0:22]
+    //   tag = base64url(HMAC-SHA256("s" x 32,
+    //           "p2party turn username tag v1" || key bytes || u64be(expiry)))[0:22]
     //   credential = base64(HMAC-SHA1("s" x 32, username)), coturn's REST check
     expect(opaque).toEqual({
       urls: ["turns:turn.example.com:443?transport=tcp"],
-      username: `${String(expiry)}:WuuWHS_GdatoT92qQpcIDf`,
-      credential: "U2KOpRYsZ5Hb91epusdDf2o6/94=",
+      username: `${String(expiry)}:O6Fy-eub6tkyCGA6Uvq5oj`,
+      credential: "VRIJGe/maS+fYmKB1tWiRLp2+kc=",
       expiresAtUnixSeconds: expiry,
     });
     // coturn's REST scheme reads the expiry before the first colon.

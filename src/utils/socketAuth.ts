@@ -218,22 +218,38 @@ export const consumeSocketChallenge = (state: SocketAuthState): string => {
 
 /** Characters of the base64url HMAC kept in a username tag (132 bits). */
 const TURN_USERNAME_TAG_CHARS = 22;
+/**
+ * Prefixed to the tag's HMAC input. COTURN_SECRET also keys coturn's
+ * HMAC-SHA1 password over the username; the label keeps the two inputs from
+ * ever being the same bytes.
+ */
+const TURN_USERNAME_TAG_LABEL = new TextEncoder().encode(
+  "p2party turn username tag v1",
+);
 
 /**
  * The username's tag: the first 22 base64url characters of
- * HMAC-SHA256(secret, identity public key ‖ expiry), where the key is its 32
- * raw bytes and the expiry an unsigned 64-bit big-endian integer. Without the
- * secret the tag cannot be linked to the key, and a new expiry gives a new
- * tag, so usernames of different lifetimes cannot be linked either.
+ * HMAC-SHA256(COTURN_SECRET, label ‖ identity public key ‖ expiry), where the
+ * key is its 32 raw bytes and the expiry an unsigned 64-bit big-endian
+ * integer. Without the secret the tag cannot be linked to the key, and a new
+ * expiry gives a new tag, so usernames of different lifetimes cannot be
+ * linked either. The TURN host holds the same secret, so it could test a tag
+ * against public keys it already knows; no other secret is configured that
+ * every worker shares and the TURN host lacks.
  */
 const turnUsernameTag = (
   secret: string,
   publicKey: string,
   expiresAtUnixSeconds: number,
 ): string => {
-  const message = new Uint8Array(40);
-  message.set(Buffer.from(publicKey, "hex"));
-  new DataView(message.buffer).setBigUint64(32, BigInt(expiresAtUnixSeconds));
+  const label = TURN_USERNAME_TAG_LABEL.length;
+  const message = new Uint8Array(label + 40);
+  message.set(TURN_USERNAME_TAG_LABEL);
+  message.set(Buffer.from(publicKey, "hex"), label);
+  new DataView(message.buffer).setBigUint64(
+    label + 32,
+    BigInt(expiresAtUnixSeconds),
+  );
   return crypto
     .createHmac("sha256", secret)
     .update(message)
@@ -252,15 +268,17 @@ const turnUsernameTag = (
  * The expiry is `now + lifetime` rounded up to a whole multiple of the
  * lifetime, so it is the same for every issuance inside one lifetime window
  * and a credential stays valid for at least one lifetime and less than two.
- * coturn's `user-quota` counts allocations per username, so a stable username
- * makes that quota a per-identity bound: repeated joins inside one window
- * return the identical credential instead of a fresh username each second.
- * At any instant one identity holds at most two valid usernames, this
- * window's and the previous one's. The design's cap of at most 4 issuances
- * per identity per lifetime, a repeat returning the same credential, holds by
- * construction: the credential is a function of identity and window alone, so
- * a repeat in one window returns the identical credential and any
- * lifetime-long interval sees at most two distinct ones.
+ * Every issuance inside one window returns the identical credential. The
+ * design's cap of at most 4 issuances per identity per lifetime, a repeat
+ * returning the same credential, holds by construction: the credential is a
+ * function of identity and window alone, so any lifetime-long interval sees
+ * at most two distinct ones.
+ *
+ * coturn counts `user-quota` per username part after `<digits>:`, here the
+ * tag, so each window gives an identity a separate quota bucket. coturn checks
+ * the expiry only when a TURN session first authenticates, not on Refresh, so
+ * an allocation outlives its credential for as long as the client refreshes
+ * it. See the README for the relay bound this leaves.
  */
 export const createTurnCredentials = (
   publicKey: string,
