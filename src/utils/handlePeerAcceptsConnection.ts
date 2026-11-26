@@ -38,7 +38,7 @@ const handlePeerAcceptsConnectionWithClient = async (
     ws.data.peerId === fromPeerId && isCurrentVerifiedSocket(clients, ws);
 
   try {
-    const allGood = await findPeers(ws, roomId, fromPeerId, toPeerId, false);
+    const allGood = await findPeers(ws, roomId, fromPeerId, toPeerId);
 
     if (!isCurrentSource()) return;
     if (!allGood) {
@@ -149,12 +149,16 @@ const handlePeerAcceptsConnectionWithClient = async (
     // If a future edit adds a fallible call out here, it is silently
     // reviving the close-an-innocent-socket defect this file was fixed for
     // -- put new fallible calls inside the inner try/catch instead.
+    // If it is ever reached, only a fixed message goes to the client: the
+    // caught value can be anything thrown below, such as a database driver
+    // error with its codes and version.
+    console.error("handlePeerAcceptsConnection failed", error);
     if (!isCurrentSource()) return;
     ws.send(
       JSON.stringify({
         type: "error",
         fromAction: "requestPeers",
-        error,
+        error: { message: "Peers request could not be served" },
       } as WebSocketMessageError),
     );
 

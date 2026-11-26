@@ -2,134 +2,96 @@ import { prisma as sharedPrisma } from "../prismaClient";
 
 import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
-import type { WebSocketMessageError } from "./interfaces";
 import { wsClients } from "../wsServer";
 import { isCurrentVerifiedSocket } from "./socketAuth";
 
-type FindRoomPeersPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
+type FindRoomPeersPrisma = Pick<ProcessPrismaClient, "peer">;
 type SocketRegistry = Map<string, P2PartyWSClient>;
 
-const findRoomPeersWithClient = async (
+/** The target of a relayed frame, found as a member of the sender's room. */
+export interface RoomTarget {
+  /** The process holding the target's socket, or null when it holds none. */
+  serverId: string | null;
+}
+
+/**
+ * Find `toPeerId` as a member of `roomId`, for a frame `ws` relays to it.
+ *
+ * One query, through the primary keys of Peer and `_PeerRooms`: the target's
+ * row, returned only when the target is a member of the room and the sending
+ * socket's identity (its peer id and the key it proved) is a member too. It
+ * loads the target's routing claim and nothing of the room's membership.
+ *
+ * Every refusal is the same silent undefined: a sender cannot tell a missing
+ * room from a missing target, or either from a target in another room, so it
+ * cannot use a relay to test whether a key ever registered. A database fault
+ * is a server fault, so it refuses this one frame and leaves the socket up.
+ */
+const findRoomTargetWithClient = async (
   prisma: FindRoomPeersPrisma,
   clients: SocketRegistry,
   ws: P2PartyWSClient,
   roomId: string,
   fromPeerId: string,
   toPeerId: string,
-  isDescription: boolean,
-  fromPeerPublicKey?: string,
-): Promise<boolean> => {
+): Promise<RoomTarget | undefined> => {
   const isCurrentSource = () =>
     ws.data.peerId === fromPeerId &&
     ws.data.publicKey.length === 64 &&
     isCurrentVerifiedSocket(clients, ws);
 
   try {
-    if (!isCurrentSource()) return false;
+    if (!isCurrentSource()) return undefined;
 
-    const room = await prisma.room.findUnique({
-      where: { id: roomId },
-      include: {
-        peers: true,
+    const target = await prisma.peer.findFirst({
+      where: {
+        id: toPeerId,
+        rooms: {
+          some: {
+            id: roomId,
+            peers: { some: { id: fromPeerId, publicKey: ws.data.publicKey } },
+          },
+        },
       },
+      select: { serverId: true },
     });
 
-    if (!isCurrentSource()) return false;
-    if (!room) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          fromAction: "receiveCandidate",
-          error: {
-            message: "Peer mentioned a non-existing room",
-          },
-        } as WebSocketMessageError),
-      );
-
-      ws.terminate();
-
-      return false;
-    }
-
-    const fromPeer = await prisma.peer.findUnique({
-      where: { id: fromPeerId },
-    });
-    if (!isCurrentSource()) return false;
-    if (
-      !fromPeer ||
-      fromPeer.publicKey !== ws.data.publicKey ||
-      (isDescription && fromPeer.publicKey !== fromPeerPublicKey)
-    ) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          fromAction: "receiveDescription",
-          error: {
-            message: "Peer mentioned a non-existing sending client",
-          },
-        } as WebSocketMessageError),
-      );
-
-      ws.terminate();
-
-      return false;
-    }
-
-    const toPeer = await prisma.peer.findUnique({
-      where: { id: toPeerId },
-    });
-    if (!isCurrentSource()) return false;
-    if (!toPeer) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          fromAction: "receiveDescription",
-          error: {
-            message: "Peer mentioned a non-existing receiving client",
-          },
-        } as WebSocketMessageError),
-      );
-
-      ws.terminate();
-
-      return false;
-    }
-
-    // Check if both peers are in the specified room
-    const roomPeerIds = new Set(room.peers.map((peer) => peer.id));
-    const isInRoom = roomPeerIds.has(fromPeerId) && roomPeerIds.has(toPeerId);
-
-    return isInRoom && isCurrentSource();
+    return target && isCurrentSource() ? target : undefined;
   } catch (error) {
-    // A caught database error is a server fault. Terminating the caller's
-    // socket for it strands a live member with no signaling and no wake event
-    // (C4); returning false refuses this one request and leaves the socket up.
     console.error("findRoomPeers failed", error);
 
-    return false;
+    return undefined;
   }
 };
 
-export const createFindRoomPeers =
+export const createFindRoomTarget =
   (prisma: FindRoomPeersPrisma, clients?: SocketRegistry) =>
-  (
-    ws: P2PartyWSClient,
-    roomId: string,
-    fromPeerId: string,
-    toPeerId: string,
-    isDescription: boolean,
-    fromPeerPublicKey?: string,
-  ) =>
-    findRoomPeersWithClient(
+  (ws: P2PartyWSClient, roomId: string, fromPeerId: string, toPeerId: string) =>
+    findRoomTargetWithClient(
       prisma,
       clients ?? wsClients,
       ws,
       roomId,
       fromPeerId,
       toPeerId,
-      isDescription,
-      fromPeerPublicKey,
     );
+
+/** Whether the sender and `toPeerId` are both members of `roomId`. */
+export const createFindRoomPeers = (
+  prisma: FindRoomPeersPrisma,
+  clients?: SocketRegistry,
+) => {
+  const findTarget = createFindRoomTarget(prisma, clients);
+  return async (
+    ws: P2PartyWSClient,
+    roomId: string,
+    fromPeerId: string,
+    toPeerId: string,
+  ): Promise<boolean> =>
+    (await findTarget(ws, roomId, fromPeerId, toPeerId)) !== undefined;
+};
+
+export const findRoomTarget = createFindRoomTarget(sharedPrisma);
 
 const findRoomPeers = createFindRoomPeers(sharedPrisma);
 

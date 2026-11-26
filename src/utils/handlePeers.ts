@@ -219,12 +219,16 @@ const handlePeersWithClient = async (
       return;
     }
   } catch (error) {
+    // If it is ever reached, only a fixed message goes to the client: the
+    // caught value can be anything thrown below, such as a database driver
+    // error with its codes and version.
+    console.error("handlePeers failed", error);
     if (!isCurrentRequester()) return;
     ws.send(
       JSON.stringify({
         type: "error",
         fromAction: "requestPeers",
-        error,
+        error: { message: "Peers request could not be served" },
       } as WebSocketMessageError),
     );
 

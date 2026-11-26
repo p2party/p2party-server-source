@@ -44,19 +44,17 @@ const socket = () => {
 };
 
 describe("room peer validation source fencing", () => {
-  test("a displaced source receives no delayed room error", async () => {
+  test("a source displaced during the membership query relays nothing", async () => {
     const queryStarted = deferred();
     const queryGate = deferred();
     const database = {
-      room: {
-        findUnique: async () => {
+      peer: {
+        // The pair is in the room: only the displacement can refuse it.
+        findFirst: async () => {
           queryStarted.resolve();
           await queryGate.promise;
-          return null;
+          return { serverId: null };
         },
-      },
-      peer: {
-        findUnique: async () => null,
       },
     } as unknown as Parameters<typeof createFindRoomPeers>[0];
     const predecessor = socket();
@@ -71,7 +69,6 @@ describe("room peer validation source fencing", () => {
       ROOM_ID,
       SOURCE_ID,
       TARGET_ID,
-      false,
     );
     await queryStarted.promise;
     clients.set(SOURCE_ID, successor.ws);

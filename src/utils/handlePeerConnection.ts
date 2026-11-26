@@ -37,7 +37,6 @@ const handlePeerConnectionWithClient = async (
     msg.roomId,
     msg.fromPeerId,
     msg.toPeerId,
-    false,
   );
 
   if (infoChecksOut) {

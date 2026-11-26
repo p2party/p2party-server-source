@@ -146,8 +146,8 @@ describe("introduction delivery through the ping window", () => {
       await import("../../src/utils/findRoomPeers");
     const findRoomPeers = createFindRoomPeers(
       {
-        room: {
-          findUnique: async () => {
+        peer: {
+          findFirst: async () => {
             throw new Error("connection pool exhausted");
           },
         },
@@ -159,7 +159,6 @@ describe("introduction delivery through the ping window", () => {
       ROOM_ID,
       PEER_A_ID,
       PEER_B_ID,
-      false,
     );
     expect(allGood).toBe(false);
     expect(requester.terminates).toBe(0);
