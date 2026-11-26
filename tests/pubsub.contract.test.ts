@@ -121,6 +121,25 @@ describe("data ownership", () => {
     expect(shutdown).toContain("clearInterval(pendingSignalSweep)");
   });
 
+  test("startup logs how many server ids it cleared, and nothing else about them", () => {
+    // The behaviour of the clearing is covered in pubsub.routingRetention;
+    // initPubSub itself needs a live database, so its log line is read here.
+    const init = /export const initPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
+    const infos = [...init.matchAll(/console\.info\(([\s\S]*?)\);/g)].map(
+      ([, args]) => args!,
+    );
+    expect(infos).toHaveLength(1);
+    // One template literal whose only interpolation is the count: the array
+    // itself, or any id from it, never reaches the log.
+    const message = infos[0]!.trim();
+    expect(message).toMatch(/^`[^`]*`,?$/);
+    expect(message.match(/\$\{/g)).toHaveLength(1);
+    expect(message).toContain("${String(cleared.length)}");
+    expect(init.indexOf("console.info(")).toBeGreaterThan(
+      init.indexOf("clearDeadServerState(prisma"),
+    );
+  });
+
   test("shutdown deletes only this instance's rows", () => {
     const body =
       /export const shutdownPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";

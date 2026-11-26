@@ -300,8 +300,12 @@ export const initPubSub = async (): Promise<void> => {
   // then everything past the age limit; the periodic sweep keeps it there.
   const client = listenClient;
   try {
-    await clearDeadServerState(prisma, (serverIds) =>
+    const cleared = await clearDeadServerState(prisma, (serverIds) =>
       connectedServerIds(client, serverIds),
+    );
+    // The count only: server ids are routing state, not for the journal.
+    console.info(
+      `p2party: startup cleared the routing state of ${String(cleared.length)} stopped server id(s)`,
     );
   } catch (error) {
     console.error(
