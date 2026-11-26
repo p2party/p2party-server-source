@@ -120,12 +120,15 @@ export const claimStore = (initial: RoutingClaim | null = null) => {
       claim = commit.replaced;
       return true;
     },
+    /** Whether this release cleared the claim, as releasePeer reports it. */
     release: async (_peerId: string, socketGeneration: string) => {
       if (
-        claim?.serverId === HERE &&
-        claim.socketGeneration === socketGeneration
+        claim?.serverId !== HERE ||
+        claim.socketGeneration !== socketGeneration
       )
-        claim = null;
+        return false;
+      claim = null;
+      return true;
     },
     claimOf: (ws: P2PartyWSClient) => mine(ws),
     /** Another instance's commit for the same identity. */

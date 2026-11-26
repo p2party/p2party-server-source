@@ -14,11 +14,9 @@ import {
   type SocketMessage,
 } from "./utils/socketMessageQueue";
 import { handleSocketMessageIngress } from "./utils/socketMessageIngress";
-import {
-  isCurrentVerifiedSocket,
-  retireClosedSocket,
-} from "./utils/socketAuth";
-import { releasePeer, SERVER_ID } from "./pubsub";
+import { isCurrentVerifiedSocket } from "./utils/socketAuth";
+import { retireClosedSocketAndAnnounce } from "./utils/handlePeers";
+import { SERVER_ID } from "./pubsub";
 import { PROTOCOL_VERSION } from "./utils/protocolV4";
 import { SERVER_VERSION } from "./version";
 
@@ -98,8 +96,10 @@ export class P2PartyWS {
           // socket's close event runs, or be committing its own claim while it
           // does. Never evict that successor or clear its claim.
           // releasePeer is guarded on SERVER_ID for the same reason: it must not
-          // clear a claim another instance has already taken.
-          await retireClosedSocket(wsClients, ws, releasePeer);
+          // clear a claim another instance has already taken. Only a release
+          // that cleared the claim, so the identity's last socket closed,
+          // announces the identity offline to its rooms (handlePeers.ts).
+          await retireClosedSocketAndAnnounce(ws);
           ws.terminate();
           events.close(ws);
         },

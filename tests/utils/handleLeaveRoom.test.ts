@@ -11,7 +11,10 @@ const ROOM_TOKEN = "cd".repeat(32);
 const ROOM_LEAVE_ID = "00000000-0000-4000-8000-000000000003";
 const PUBLIC_KEY = "ab".repeat(32);
 
-type HandleLeaveRoomPrisma = Pick<ProcessPrismaClient, "peer">;
+type HandleLeaveRoomPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
+
+/** No other member is online, so a leave announces nothing. */
+const emptyRoom = { findUnique: async () => ({ peers: [] }) };
 
 const fakeSocket = () => {
   const sent: string[] = [];
@@ -68,6 +71,7 @@ describe("authenticated idempotent room leave", () => {
           return {};
         },
       },
+      room: emptyRoom,
     } as unknown as HandleLeaveRoomPrisma;
     const send = socket.ws.send.bind(socket.ws);
     socket.ws.send = ((message: string | ArrayBufferView) => {
@@ -107,6 +111,7 @@ describe("authenticated idempotent room leave", () => {
           return {};
         },
       },
+      room: emptyRoom,
     } as unknown as HandleLeaveRoomPrisma;
 
     await createHandleLeaveRoom(prisma, registryFor(socket.ws))(
@@ -135,6 +140,7 @@ describe("authenticated idempotent room leave", () => {
           throw { code: "P2017" };
         },
       },
+      room: emptyRoom,
     } as unknown as HandleLeaveRoomPrisma;
 
     await createHandleLeaveRoom(prisma, registryFor(socket.ws))(
@@ -163,6 +169,7 @@ describe("authenticated idempotent room leave", () => {
           findUnique: failure,
           update: async () => ({}),
         },
+        room: emptyRoom,
       } as unknown as HandleLeaveRoomPrisma;
       const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
@@ -198,6 +205,7 @@ describe("authenticated idempotent room leave", () => {
         }),
         update: async () => unlink,
       },
+      room: emptyRoom,
     } as unknown as HandleLeaveRoomPrisma;
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 

@@ -3,18 +3,21 @@ import { prisma as sharedPrisma } from "../prismaClient";
 import type { ProcessPrismaClient } from "../prismaClient";
 
 import { wsClients } from "../wsServer";
-import { sendToPeer } from "../pubsub";
+import { releasePeer, sendToPeer, sendToPeerOnServer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
 import { describeError } from "./logError";
 import {
   isCurrentVerifiedSocket,
   PERMANENT_CLOSE_CODE,
+  retireClosedSocket,
   wireSocketGeneration,
 } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
+  PeerDepartureReason,
   WebSocketMessageError,
+  WebSocketMessagePeerLeft,
   WebSocketMessagePeersResponse,
   WebSocketMessageConnectionRequest,
 } from "../utils/interfaces";
@@ -160,9 +163,15 @@ const handlePeersWithClient = async (
           const introduction = JSON.stringify({
             type: "peerConnection",
             roomId,
-            peer: { id: fromPeerId, publicKey: fromPeerPublicKey },
+            peer: {
+              id: fromPeerId,
+              publicKey: fromPeerPublicKey,
+              // Names the requesting socket, so a member that was told this
+              // identity departed can tell its return from a stale report.
+              socketGeneration: wireSocketGeneration(ws.data),
+            },
             protocolVersion: PROTOCOL_VERSION,
-          } as WebSocketMessageConnectionRequest);
+          } satisfies WebSocketMessageConnectionRequest);
           const peerWsClient = clients.get(peer.id);
 
           if (peerWsClient) {
@@ -264,3 +273,204 @@ export const createHandlePeers =
 const handlePeers = createHandlePeers(sharedPrisma);
 
 export default handlePeers;
+
+type SendToPeerOnServer = (
+  toPeerId: string,
+  serverId: string,
+  payload: string,
+) => Promise<boolean>;
+
+interface DepartureDependencies {
+  clients?: Map<string, P2PartyWSClient>;
+  sendToPeerOnServer?: SendToPeerOnServer;
+}
+
+/** A member a departure is announced to, with its routing claim. */
+interface DepartureRecipient {
+  id: string;
+  serverId: string | null;
+}
+
+/** What one `peerLeft` frame reports. */
+export interface PeerDeparture {
+  peerId: string;
+  /** Generation of the socket that left or closed; never empty. */
+  socketGeneration: string;
+  reason: PeerDepartureReason;
+}
+
+/**
+ * Send one `peerLeft` frame to each online member of one room, the way relayed
+ * frames travel: straight to a current socket here, through the owning
+ * instance's queue for a socket held elsewhere (the claim was read with the
+ * membership, so no second lookup). A member with neither is offline and gets
+ * nothing. Returns how many frames were handed on.
+ */
+const deliverPeerLeft = async (
+  clients: Map<string, P2PartyWSClient>,
+  send: SendToPeerOnServer,
+  roomId: string,
+  departure: PeerDeparture,
+  recipients: readonly DepartureRecipient[],
+): Promise<number> => {
+  const payload = JSON.stringify({
+    type: "peerLeft",
+    roomId,
+    peerId: departure.peerId,
+    reason: departure.reason,
+    socketGeneration: departure.socketGeneration,
+    protocolVersion: PROTOCOL_VERSION,
+  } satisfies WebSocketMessagePeerLeft);
+  let delivered = 0;
+  for (const member of recipients) {
+    if (member.id === departure.peerId) continue;
+    const local = clients.get(member.id);
+    if (local) {
+      if (isCurrentVerifiedSocket(clients, local)) {
+        local.send(payload);
+        delivered++;
+      }
+      continue;
+    }
+    if (member.serverId && (await send(member.id, member.serverId, payload)))
+      delivered++;
+  }
+  return delivered;
+};
+
+/**
+ * Tell the other online members of `roomId` that `peerId` left it. Called by
+ * the leave handler after the membership row is gone, inside that peer's
+ * membership lock, so a rejoin on the same process is announced after it.
+ * At most MAX_PEERS_PER_ROOM - 1 frames per leave.
+ */
+export const createAnnounceRoomLeave =
+  (
+    prisma: Pick<ProcessPrismaClient, "room">,
+    dependencies: DepartureDependencies = {},
+  ) =>
+  async (
+    roomId: string,
+    peerId: string,
+    socketGeneration: string,
+  ): Promise<number> => {
+    if (socketGeneration.length === 0) return 0;
+    // Online members only (a row with a routing claim), never the leaver.
+    const room = await prisma.room.findUnique({
+      where: { id: roomId },
+      select: {
+        peers: {
+          where: { id: { not: peerId }, serverId: { not: null } },
+          select: { id: true, serverId: true },
+        },
+      },
+    });
+    if (!room) return 0;
+    return deliverPeerLeft(
+      dependencies.clients ?? wsClients,
+      dependencies.sendToPeerOnServer ?? sendToPeerOnServer,
+      roomId,
+      { peerId, socketGeneration, reason: "left" },
+      room.peers,
+    );
+  };
+
+/**
+ * Tell the online members of every room `peerId` belongs to that it went
+ * offline: one frame per member per room, at most
+ * MAX_ROOMS_PER_IDENTITY * (MAX_PEERS_PER_ROOM - 1). The membership is read
+ * with the identity's routing claim, after the closing socket released it:
+ * a claim found here belongs to a successor socket that has already
+ * committed, on this instance or another, and nothing is announced.
+ */
+export const createAnnounceOffline =
+  (
+    prisma: Pick<ProcessPrismaClient, "peer">,
+    dependencies: DepartureDependencies = {},
+  ) =>
+  async (peerId: string, socketGeneration: string): Promise<number> => {
+    if (socketGeneration.length === 0) return 0;
+    const peer = await prisma.peer.findUnique({
+      where: { id: peerId },
+      select: {
+        serverId: true,
+        rooms: {
+          select: {
+            id: true,
+            peers: {
+              where: { id: { not: peerId }, serverId: { not: null } },
+              select: { id: true, serverId: true },
+            },
+          },
+        },
+      },
+    });
+    if (!peer || peer.serverId !== null) return 0;
+    const clients = dependencies.clients ?? wsClients;
+    const send = dependencies.sendToPeerOnServer ?? sendToPeerOnServer;
+    let delivered = 0;
+    for (const room of peer.rooms)
+      delivered += await deliverPeerLeft(
+        clients,
+        send,
+        room.id,
+        { peerId, socketGeneration, reason: "offline" },
+        room.peers,
+      );
+    return delivered;
+  };
+
+interface SocketCloseDependencies {
+  clients?: Map<string, P2PartyWSClient>;
+  /** Release the claim by owner token; whether it cleared it (pubsub.ts). */
+  release?: (peerId: string, socketGeneration: string) => Promise<boolean>;
+  announceOffline?: (
+    peerId: string,
+    socketGeneration: string,
+  ) => Promise<number>;
+}
+
+/**
+ * The close handler's departure step. Retire the closed socket, and when it
+ * was its identity's last socket (it was current here and its release
+ * cleared the claim), announce the identity offline to its rooms, within
+ * the identity's MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE.
+ *
+ * A socket that never authenticated, never became current, or was replaced
+ * by a newer session (here or on another instance) releases nothing and
+ * announces nothing. An identity in no room has no one to tell. Never
+ * throws: a failed announcement is logged without identifiers.
+ *
+ * Returns how many frames were handed on.
+ */
+export const createRetireClosedSocket =
+  (dependencies: SocketCloseDependencies = {}) =>
+  async (ws: P2PartyWSClient): Promise<number> => {
+    const clients = dependencies.clients ?? wsClients;
+    if (
+      !(await retireClosedSocket(
+        clients,
+        ws,
+        dependencies.release ?? releasePeer,
+      ))
+    )
+      return 0;
+    const socketGeneration = wireSocketGeneration(ws.data);
+    if (!socketGeneration) return 0;
+    if (ws.data.admission && !ws.data.admission.offlineAnnouncement()) return 0;
+    try {
+      return await (
+        dependencies.announceOffline ??
+        createAnnounceOffline(sharedPrisma, { clients })
+      )(ws.data.peerId, socketGeneration);
+    } catch (error) {
+      console.error(
+        "p2party: offline announcement failed",
+        describeError(error),
+      );
+      return 0;
+    }
+  };
+
+/** This process's close-handler departure step (wsServer.ts). */
+export const retireClosedSocketAndAnnounce = createRetireClosedSocket();

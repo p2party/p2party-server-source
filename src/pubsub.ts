@@ -594,25 +594,31 @@ export const startClaimReconciliation = (
  * process's id and the socket's generation. A claim another socket wrote
  * since, on this instance or another, does not match, so however late this
  * release lands it cannot clear a successor's claim.
+ *
+ * Returns whether this release cleared the claim: true means no other socket
+ * of the identity held it, on any instance, so this was the identity's last
+ * socket. A release that matched nothing, or that failed, returns false.
  */
 export const releasePeer = async (
   peerId: string,
   socketGeneration: string,
   store: Pick<RoutingStore, "peer"> = prisma,
   self: string = SERVER_ID,
-): Promise<void> => {
-  if (socketGeneration.length === 0) return;
+): Promise<boolean> => {
+  if (socketGeneration.length === 0) return false;
   try {
-    await store.peer.updateMany({
+    const { count } = await store.peer.updateMany({
       where: { id: peerId, serverId: self, socketGeneration },
       data: { serverId: null, socketGeneration: null },
     });
+    return count > 0;
   } catch (error) {
     console.error(
       "p2party: failed to release peer",
       peerLogTag(peerId),
       describeError(error),
     );
+    return false;
   }
 };
 

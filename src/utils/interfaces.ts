@@ -149,7 +149,39 @@ export interface WebSocketMessagePeersResponse {
 export interface WebSocketMessageConnectionRequest {
   type: "peerConnection";
   roomId: string;
-  peer: { id: string; publicKey: string };
+  /**
+   * The requester, with the generation of the socket that asked. A member
+   * that was told this identity left or went offline compares it with the
+   * generation that `peerLeft` named, so a departure frame that arrives after
+   * the identity's return is recognised as stale.
+   */
+  peer: RoomPeer;
+  protocolVersion: number;
+}
+
+/** Why `peerLeft` was sent. */
+export type PeerDepartureReason = "left" | "offline";
+
+/**
+ * Sent to every online member of a room when another member leaves it
+ * ("left": it sent `leaveRoom`) or when that member's last socket closes
+ * ("offline": one frame per room the identity is in). The server cannot
+ * authenticate this to the members' WebRTC edges and the SDK treats it as a
+ * hint: it never closes a connected edge on its word.
+ */
+export interface WebSocketMessagePeerLeft {
+  type: "peerLeft";
+  roomId: string;
+  peerId: string;
+  reason: PeerDepartureReason;
+  /**
+   * The generation of the socket that left or closed. A member uses it to
+   * order this frame against the identity's return: a return on a new socket
+   * reaches members in frames that name the new generation, so a departure
+   * naming another one is about an earlier session. A leave and a rejoin on
+   * the same socket are ordered by that socket's message queue instead.
+   */
+  socketGeneration: string;
   protocolVersion: number;
 }
 

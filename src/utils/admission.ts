@@ -53,6 +53,17 @@ export const MAX_CREATION_SHARE_PERCENT_PER_SOURCE = 5;
  * so without it twenty /64s at 5% each would exhaust a budget.
  */
 export const MAX_SHARE_PERCENT_PER_IPV6_48 = 10;
+/**
+ * How many times one identity's last socket closing is announced to its rooms
+ * (`peerLeft` with reason "offline") per minute, per process. One announcement
+ * sends one frame to every online member of every room the identity is in, at
+ * most roomsPerIdentity * (peersPerRoom - 1) frames (8,128 with the defaults).
+ * Connection attempts are limited per source address, not per identity, so
+ * without this a member reconnecting from many addresses could make the server
+ * send that many frames for each socket it opens and closes. A close past the
+ * limit is not announced; members then learn of it only from their own edge.
+ */
+export const MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE = 6;
 
 /** At least one unit, so a small configured budget stays usable. */
 const share = (budget: number, percent: number): number =>
@@ -114,6 +125,8 @@ interface Bucket {
   active: number;
   messages: number;
   rooms: number;
+  /** Offline announcements of this identity in the window. */
+  offline: number;
 }
 
 /**
@@ -147,13 +160,21 @@ class BucketTable {
         this.idle.delete(leastRecent.value);
         this.buckets.delete(leastRecent.value);
       }
-      bucket = { start: now, count: 0, active: 0, messages: 0, rooms: 0 };
+      bucket = {
+        start: now,
+        count: 0,
+        active: 0,
+        messages: 0,
+        rooms: 0,
+        offline: 0,
+      };
       this.buckets.set(key, bucket);
     } else if (now - bucket.start >= 60000) {
       bucket.start = now;
       bucket.count = 0;
       bucket.messages = 0;
       bucket.rooms = 0;
+      bucket.offline = 0;
     }
     if (bucket.active === 0) {
       // Re-inserting moves the key to the most recently used end.
@@ -186,6 +207,14 @@ export interface AdmissionLease {
   authenticate(): boolean;
   message(): boolean;
   roomMutation(): boolean;
+  /**
+   * Charge one offline announcement to this socket's identity; false past
+   * MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE. Valid after release(),
+   * since the close handler releases the lease before it learns whether the
+   * socket was its identity's last. A socket that never authenticated has no
+   * identity to charge and is refused.
+   */
+  offlineAnnouncement(): boolean;
   /** Charge one new durable identity to this socket's source key and /48, then the process. */
   newIdentity(): boolean;
   /**
@@ -275,6 +304,10 @@ export class AdmissionController {
         !!key &&
         ++this.identities.use(identity, this.now()).rooms <=
           this.limits.roomMutationsPerIdentityPerMinute,
+      offlineAnnouncement: () =>
+        !!key &&
+        ++this.identities.use(identity, this.now()).offline <=
+          MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE,
       // Creation needs a proved socket; unproved ones only read.
       newIdentity: () => {
         if (released || !key) return false;

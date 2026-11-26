@@ -295,6 +295,7 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 | `roomLeft`       | The requested membership is absent after an idempotent leave.        |
 | `peers`          | An acceptance delta, or an explicitly requested membership snapshot. |
 | `peerConnection` | Another peer asked to be introduced to you.                          |
+| `peerLeft`       | Another member left a room you are in, or its last socket closed.    |
 | `connection`     | A peer requested DataChannel signaling with you.                     |
 | `description`    | A relayed WebRTC session description.                                |
 | `candidate`      | A relayed ICE candidate.                                             |
@@ -330,8 +331,9 @@ the earlier introduction-and-acceptance flow.
    `rosterRequestId`, the server first answers with **`peers`** carrying
    `rosterKind: "snapshot"`, that request ID, the room UUID and every _other_
    member. It then sends **`peerConnection`** introductions naming the requester
-   — `{ id, publicKey }` — to the selected room members. Without the optional
-   request ID, the requester receives no direct snapshot reply.
+   — `{ id, publicKey, socketGeneration }` — to the selected room members.
+   Without the optional request ID, the requester receives no direct snapshot
+   reply.
 6. **`peerConnection`** (existing member → server) accepts the introduction; the
    server sends the joiner a **`peers`** frame with `rosterKind: "delta"` whose
    array holds exactly one entry, the accepting peer. One accepted peer per
@@ -392,13 +394,84 @@ globally ordered membership revision: it has no revision counter, lease or
 cross-process ordering guarantee. Clients must correlate responses and request
 a fresh snapshot to discover later membership changes.
 
-**The server never signals a departure.** Its close handler releases the peer's
-routing claim and logs (`src/wsServer.ts`, `src/index.ts`); it sends nothing to
-the room. There is no `peerLeft` frame in the protocol, and a `leaveRoom` is
-acknowledged only to the peer that sent it. The membership row survives the
-disconnect too — only an explicit `leaveRoom` removes one. Clients learn
-transport loss from their own edge state; a later correlated snapshot can
-discover an explicit membership departure. An offline member remains listed.
+### Departures
+
+The server tells a room's other members when a member leaves it or goes
+offline, in one frame per room:
+
+```json
+{
+  "type": "peerLeft",
+  "roomId": "<room UUID>",
+  "peerId": "<the departing member's peer UUID>",
+  "reason": "left",
+  "socketGeneration": "<UUIDv4 of the socket that left or closed>",
+  "protocolVersion": 4
+}
+```
+
+- **`reason: "left"`**: the member's `leaveRoom` removed its membership. Sent
+  after the membership row is gone and after the leaver's `roomLeft`, from
+  inside that peer's membership lock and its socket's message queue
+  (`src/utils/handleLeaveRoom.ts`). A leave of a room the peer is not in, and
+  the second of two concurrent identical leaves, send nothing.
+- **`reason: "offline"`**: the identity's last socket closed. The close
+  handler (`src/wsServer.ts`, `createRetireClosedSocket` in
+  `src/utils/handlePeers.ts`) announces only when the closing socket was the
+  identity's current one on this process and its routing-claim release cleared
+  the claim, so no other socket of the identity holds it on any process. One
+  identity has at most one current socket: a newer session replaces the older
+  one. The membership is then read together with the claim, and nothing is
+  sent if a successor socket has committed a claim by that read. Any close of
+  the current socket announces, whatever closed it (the client, a lost
+  connection, the heartbeat, a rate or queue limit, a malformed frame). A
+  socket that never authenticated, was refused admission, failed or lost its
+  activation, or was replaced by a newer session (`1008` "Replaced by a newer
+  session", on this process or by an eviction from another) announces nothing;
+  neither does an identity in no room, nor a shutdown, whose claims
+  `shutdownPubSub` clears first.
+
+Recipients are the room's other members whose rows hold a routing claim when
+the membership is read, which is how the server knows they are online. A
+recipient's socket on this process gets the frame directly; one on another
+process gets it through that process's `PendingSignal` queue, the path relayed
+`description` and `candidate` frames take. Offline members get nothing, then
+or later.
+
+Cost: a leave sends at most `MAX_PEERS_PER_ROOM` - 1 frames (127 at the
+default) and counts against `ROOM_MUTATIONS_PER_IDENTITY_PER_MINUTE`, so one
+identity causes at most 60 announced leaves, 7,620 frames, a minute per
+process at the defaults; a leave announces only a membership it removed, so
+after the first minute each one also costs a join. An offline announcement
+sends at most `MAX_ROOMS_PER_IDENTITY` × (`MAX_PEERS_PER_ROOM` - 1) frames
+(8,128 at the defaults). Connection
+attempts are limited per address, not per identity, so a member opening and
+closing sockets from many addresses could otherwise repeat that without bound;
+each process therefore announces at most
+`MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE` (6, in
+[`src/utils/admission.ts`](src/utils/admission.ts)) closes per identity per
+minute, and does not announce the rest.
+
+A `peerLeft` frame is a report from the signaling server, which clients cannot
+verify. The reference client never closes a connected WebRTC edge because of
+one: it removes a departed member it holds no connected edge to, keeps a
+connected edge, and stops asking for introductions to a departed member until
+the server names that member again (see the `p2party-js` protocol notes).
+
+**Ordering.** A departure and the member's quick return can reach a recipient
+in either order: the `offline` announcement is sent after the claim release
+and a membership read, while a new socket of the same identity, here or on
+another process, may already be introducing itself; and frames of different
+processes travel through different queues. `socketGeneration` orders them. A
+return on a new socket reaches members in frames that name the new socket's
+generation (`peerConnection` introductions, acceptance deltas, `connection`),
+so a departure that names an older generation is recognised as stale. A leave
+and a rejoin on the same socket carry the same generation; they are ordered
+because the leave's frames are handed on inside that socket's message queue,
+before the rejoin is processed.
+
+The membership row survives a disconnect — only an explicit `leaveRoom`
+removes one — so an offline member remains listed in snapshots.
 
 ### Heartbeat and timeouts
 
@@ -856,6 +929,23 @@ and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2
 The server sees each client's Ed25519 identity public key, the room token a
 client joins with, which peer ids share a room, the WebRTC descriptions and ICE
 candidates it relays — which carry IP addresses — and the timing of all of it.
+
+What room members learn from each other through the server: the membership
+(snapshots, which list offline members and give no online state), when a
+member asks for peers or accepts or dials (introductions, deltas,
+`connection`), and, through `peerLeft`, when a member leaves a room and when
+its last signaling socket closes. The last one is new in this release: every
+online member of every room an identity is in is told, within the server's
+delivery time, each time that identity goes offline (up to six times a minute
+per process; more frequent closes are not announced), whether or not it holds
+an edge to that identity and whether or not it would accept one. Together with
+the introductions a returning member sends, that gives room-mates the start
+and end of each of a member's signaling sessions. When the server notices a
+close depends on how the socket ended: a clean close at once, a lost
+connection when the heartbeat goes unanswered (within about 15 seconds) or at
+the 60-second idle timeout. The frame carries nothing a room-mate was not already shown: the room
+UUID, the member's peer id, and the socket generation that introductions and
+deltas already carry.
 
 Its operator logs name a peer only by an eight-hex-digit tag: an HMAC of the
 peer id under a key drawn at each process start and never stored. A tag links

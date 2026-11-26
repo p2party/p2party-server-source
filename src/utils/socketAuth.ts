@@ -437,14 +437,17 @@ export const unregisterSocketIfCurrent = <T extends SocketAuthClient>(
  * socket wrote. A successor's claim, on this or another instance, survives a
  * release that lands after it, however late. A replaced socket is no longer
  * registered and releases nothing.
+ *
+ * Returns whether the identity is now offline: this socket was current here
+ * and its release cleared the claim, so no successor holds one anywhere.
  */
 export const retireClosedSocket = async <T extends SocketAuthClient>(
   clients: Map<string, T>,
   ws: T,
-  releasePeer: (peerId: string, socketGeneration: string) => Promise<void>,
-): Promise<void> => {
-  if (unregisterSocketIfCurrent(clients, ws))
-    await releasePeer(ws.data.peerId, ws.data.socketGeneration);
+  releasePeer: (peerId: string, socketGeneration: string) => Promise<boolean>,
+): Promise<boolean> => {
+  if (!unregisterSocketIfCurrent(clients, ws)) return false;
+  return await releasePeer(ws.data.peerId, ws.data.socketGeneration);
 };
 
 /**
