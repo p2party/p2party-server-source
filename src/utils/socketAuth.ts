@@ -216,8 +216,38 @@ export const consumeSocketChallenge = (state: SocketAuthState): string => {
   return challengeId;
 };
 
+/** Characters of the base64url HMAC kept in a username tag (132 bits). */
+const TURN_USERNAME_TAG_CHARS = 22;
+
+/**
+ * The username's tag: the first 22 base64url characters of
+ * HMAC-SHA256(secret, identity public key ‖ expiry), where the key is its 32
+ * raw bytes and the expiry an unsigned 64-bit big-endian integer. Without the
+ * secret the tag cannot be linked to the key, and a new expiry gives a new
+ * tag, so usernames of different lifetimes cannot be linked either.
+ */
+const turnUsernameTag = (
+  secret: string,
+  publicKey: string,
+  expiresAtUnixSeconds: number,
+): string => {
+  const message = new Uint8Array(40);
+  message.set(Buffer.from(publicKey, "hex"));
+  new DataView(message.buffer).setBigUint64(32, BigInt(expiresAtUnixSeconds));
+  return crypto
+    .createHmac("sha256", secret)
+    .update(message)
+    .digest("base64url")
+    .slice(0, TURN_USERNAME_TAG_CHARS);
+};
+
 /**
  * coturn REST credentials for one identity.
+ *
+ * The username is `<expiry>:<tag>` (see turnUsernameTag): coturn's REST
+ * scheme reads the expiry before the colon, and the identity public key never
+ * appears, so neither coturn nor anyone on the path of a plain `turn:`
+ * allocation request can read it.
  *
  * The expiry is `now + lifetime` rounded up to a whole multiple of the
  * lifetime, so it is the same for every issuance inside one lifetime window
@@ -226,11 +256,11 @@ export const consumeSocketChallenge = (state: SocketAuthState): string => {
  * makes that quota a per-identity bound: repeated joins inside one window
  * return the identical credential instead of a fresh username each second.
  * At any instant one identity holds at most two valid usernames, this
- * window's and the previous one's.
- *
- * The username still ends in the identity public key. SDK 0.14.10 rejects the
- * whole `roomId` response unless the username is `<expiry>:<its own key>`, so
- * an opaque username needs a client release that accepts it first.
+ * window's and the previous one's. The design's cap of at most 4 issuances
+ * per identity per lifetime, a repeat returning the same credential, holds by
+ * construction: the credential is a function of identity and window alone, so
+ * a repeat in one window returns the identical credential and any
+ * lifetime-long interval sees at most two distinct ones.
  */
 export const createTurnCredentials = (
   publicKey: string,
@@ -260,7 +290,11 @@ export const createTurnCredentials = (
   )
     throw new Error("TURN credential timestamp is outside the wire contract");
 
-  const username = `${String(unixTimeStamp)}:${publicKey}`;
+  const username = `${String(unixTimeStamp)}:${turnUsernameTag(
+    secret,
+    publicKey,
+    unixTimeStamp,
+  )}`;
   const credential = crypto
     .createHmac("sha1", secret)
     .update(username)

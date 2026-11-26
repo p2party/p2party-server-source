@@ -285,17 +285,18 @@ describe("TURN REST credentials", () => {
   });
 
   test("derives credentials only from the supplied secret", () => {
-    // The HMAC is unchanged by carrying the URLs: username stays the sole
-    // signed input, so existing coturn deployments keep verifying. The vector
-    // is base64(HMAC-SHA1("s" x 32, username)) computed with openssl.
+    // The URLs are not signed: username stays the sole input of the coturn
+    // REST HMAC. Vectors computed with openssl, independently of node:crypto:
+    //   tag = base64url(HMAC-SHA256("s" x 32, key bytes || u64be(7200)))[0:22]
+    //   credential = base64(HMAC-SHA1("s" x 32, username))
     expect(
       createTurnCredentials("ab".repeat(32), "s".repeat(32), 1_000, [
         "turns:turn.example.com:443?transport=tcp",
       ]),
     ).toEqual({
       urls: ["turns:turn.example.com:443?transport=tcp"],
-      username: `7200:${"ab".repeat(32)}`,
-      credential: "cQMbwalXfQkx+olsBoQDRecL5yM=",
+      username: "7200:7XvlIKYNsXU1Ctqdd0q2Hh",
+      credential: "wq06hB/x4pttbE9W9qBeRIkfuXQ=",
       expiresAtUnixSeconds: 7200,
     });
   });
@@ -317,13 +318,12 @@ describe("TURN REST credentials", () => {
       k * LIFETIME,
     ];
     const usernames = new Set(window.map((now) => issueAt(now).username));
-    expect([...usernames]).toEqual([
-      `${String((k + 1) * LIFETIME)}:${"ab".repeat(32)}`,
-    ]);
+    expect(usernames.size).toBe(1);
+    expect([...usernames][0]).toStartWith(`${String((k + 1) * LIFETIME)}:`);
     // The next window rotates the username.
-    expect(issueAt(k * LIFETIME + 1).username).toBe(
-      `${String((k + 2) * LIFETIME)}:${"ab".repeat(32)}`,
-    );
+    const next = issueAt(k * LIFETIME + 1).username;
+    expect(next).toStartWith(`${String((k + 2) * LIFETIME)}:`);
+    expect(usernames.has(next)).toBe(false);
     // Rounding never shortens a credential below one lifetime, and stays
     // inside the SDK's accepted range (30 s to 24 h remaining).
     for (const now of [...window, k * LIFETIME + 1]) {
@@ -371,6 +371,51 @@ describe("TURN REST credentials", () => {
       widest = Math.max(widest, seen.size);
     }
     expect(widest).toBe(2);
+  });
+
+  test("turn username hides the identity key", () => {
+    const publicKey = "ab".repeat(32);
+    const k = 493_000;
+    const expiry = (k + 1) * LIFETIME;
+    const opaque = issueAt((k - 1) * LIFETIME + 5, publicKey);
+
+    // Vectors computed with openssl, independently of node:crypto:
+    //   tag = base64url(HMAC-SHA256("s" x 32, key bytes || u64be(expiry)))[0:22]
+    //   credential = base64(HMAC-SHA1("s" x 32, username)), coturn's REST check
+    expect(opaque).toEqual({
+      urls: ["turns:turn.example.com:443?transport=tcp"],
+      username: `${String(expiry)}:WuuWHS_GdatoT92qQpcIDf`,
+      credential: "U2KOpRYsZ5Hb91epusdDf2o6/94=",
+      expiresAtUnixSeconds: expiry,
+    });
+    // coturn's REST scheme reads the expiry before the first colon.
+    expect(opaque.username).toMatch(/^[1-9][0-9]{0,10}:[A-Za-z0-9_-]{22}$/);
+    // No encoding of the key, or of its first 16 bytes, appears.
+    const keyBytes = Buffer.from(publicKey, "hex");
+    for (const encoded of [
+      publicKey,
+      keyBytes.toString("base64"),
+      keyBytes.toString("base64url"),
+      keyBytes.subarray(0, 16).toString("hex"),
+      keyBytes.subarray(0, 16).toString("base64url"),
+    ])
+      expect(opaque.username.toLowerCase()).not.toContain(
+        encoded.slice(0, 16).toLowerCase(),
+      );
+    // Unlinkable across lifetimes: the next window's tag shares nothing.
+    const nextTag = issueAt(k * LIFETIME + 1, publicKey).username.split(
+      ":",
+    )[1]!;
+    expect(nextTag).not.toBe(opaque.username.split(":")[1]);
+    // The tag depends on the server secret.
+    expect(
+      createTurnCredentials(
+        publicKey,
+        "t".repeat(32),
+        ((k - 1) * LIFETIME + 5) * 1_000,
+        ["turns:turn.example.com:443?transport=tcp"],
+      )!.username,
+    ).not.toBe(opaque.username);
   });
 
   test("issues nothing when no relay endpoint is configured", () => {
@@ -457,9 +502,12 @@ describe("TURN REST credentials", () => {
           /^turns?:[^\s]+$/u.test(url),
       ),
     ).toBe(true);
-    expect(credentials!.username).toBe(
-      `${String(credentials!.expiresAtUnixSeconds)}:${publicKey}`,
+    expect(credentials!.username).toMatch(
+      new RegExp(
+        `^${String(credentials!.expiresAtUnixSeconds)}:[A-Za-z0-9_-]{22}$`,
+      ),
     );
+    expect(credentials!.username).not.toContain(publicKey);
     expect(credentials!.username.length).toBeLessThanOrEqual(
       TURN_CREDENTIAL_CONTRACT.maxCredentialChars,
     );

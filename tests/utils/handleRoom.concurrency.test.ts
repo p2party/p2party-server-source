@@ -315,7 +315,11 @@ describe("concurrent room joins", () => {
         "turns:turn.example.com:443?transport=tcp",
         "turn:turn.example.com:3478",
       ]);
-      expect(turnCredentials.username).toEndWith(`:${peer.publicKey}`);
+      // `<expiry>:<22-character tag>`: the identity key is not in it.
+      expect(turnCredentials.username).toMatch(
+        /^[1-9][0-9]{0,10}:[A-Za-z0-9_-]{22}$/,
+      );
+      expect(turnCredentials.username).not.toContain(peer.publicKey);
       expect(
         String(turnCredentials.username).startsWith(
           `${String(turnCredentials.expiresAtUnixSeconds)}:`,
