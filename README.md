@@ -708,29 +708,38 @@ and the DNS records for the signaling, TURN and STUN names. Run it through
 [`deploy/ansible`](deploy/ansible) configures those hosts
 (`playbooks/site.yml`) and ships releases (`playbooks/deploy.yml`, wrapped by
 `deploy/deploy.sh`). A deploy builds `p2party_linux_x64` from this repo with
-`bun run build:linux` and refuses to continue if the binary is missing; stops and
-disables every signaling worker; installs the audited manifest and frozen
-lockfile into isolated migration tooling and runs its Prisma CLI on the host,
-ending the play with the recovery steps if it errors (deploy/README.md, "A
-failed or interrupted migration") while the workers stay stopped and the
-previous binary stays in place; only then copies the new binary with a rendered
-environment file and one systemd unit per entry in `signaling_ports`; narrows the
-Caddy upstream list before enabling and starting the workers; verifies the version,
-protocol version and per-process `serverId` on every instance directly; retires
-obsolete units; and only then checks that public Caddy answers with one of those
-exact `serverId`s. [`tests/deploy.contract.test.ts`](tests/deploy.contract.test.ts)
-pins that ordering.
+`bun run build:linux` and refuses to continue if the binary is missing. While
+the old release keeps serving, it then installs the audited manifest and frozen
+lockfile into isolated migration tooling, copies the schema and migrations,
+stages the new binary, environment file and units, and validates a candidate
+Caddy configuration; a failure there leaves production untouched. Only then does
+it stop and disable every signaling worker, run the Prisma CLI on the host and,
+if that errors, end the play with the recovery steps (deploy/README.md, "A
+failed or interrupted migration"), Prisma's output in a root-only log, the
+workers stopped and the previous binary in place. After the migration it
+installs the staged files, narrows the Caddy upstream list, enables and starts
+the workers, verifies the version, protocol version and per-process `serverId`
+on every instance directly, retires obsolete units, and only then checks that
+public Caddy answers with one of those exact `serverId`s.
+[`tests/deploy.contract.test.ts`](tests/deploy.contract.test.ts) pins that
+ordering.
 
 Systemd therefore never starts a binary against a schema it was not built for
 during a deploy: the old binary is stopped and disabled before the schema
-changes, and the new one is installed only after. The binary also refuses by
-itself: before opening its listener it reads the migration history and exits
-with one `p2party: refusing to start` line, naming what it found and what to
-run, on an empty, older, newer or half-migrated database, so `Restart=always`
-only repeats that refusal. It then re-runs the identity re-key statement, which
-changes nothing unless an unsupported writer left a row with another id. A
-0.1.4 binary has no such check; never start one on a database past
-`20261127000000_rekey_peers_to_derived_ids`.
+changes, and the new one is installed only after. From the stop until the new
+binary is installed, and after a failure in between, a marker file makes
+`initial-setup.yml` refuse to start a unit. The binary also refuses by itself.
+Before opening its listener it reads the migration history on its own
+connection, within 8 seconds, and exits with one `p2party: refusing to start`
+line, naming what it found and what to run, when the database does not answer
+or cannot be reached, is empty, lacks a migration the build ships, has one it
+does not ship, or holds a failed migration; `Restart=always` only repeats that
+refusal. It then re-runs the identity re-key statement within its own 60-second
+bound; the statement changes nothing unless an unsupported writer left a row
+with another id, and one that runs past the bound is cancelled, changes nothing,
+and ends the start the same way. The Prisma pool that serves requests keeps no
+connect or statement timeout, as before. A 0.1.4 binary has no such check; never
+start one on a database past `20261127000000_rekey_peers_to_derived_ids`.
 
 Production sets `signaling_ports: [3001]` — one process — for the
 membership-ordering reason above. Where several workers share a database, stop every worker of an

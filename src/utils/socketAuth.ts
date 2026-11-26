@@ -478,10 +478,14 @@ export const evictSocket = <T extends ReplaceableSocketAuthClient>(
  *
  * Until `commit` succeeds the socket is not registered, so a failure at any
  * step leaves the existing socket for this identity working and untouched.
- * When two sockets of one identity activate at once, the one that began
- * activating later wins: if it is already current when the earlier one
- * commits, the earlier one closes as replaced. No await separates the final
- * checks from registration, so exactly one socket ends up current.
+ * When two sockets of one identity activate at once, exactly one ends up
+ * current: no await separates the final checks from registration. Here, a
+ * socket that began activating earlier closes as replaced if the later one is
+ * already current when it commits. But the order in which commits are
+ * processed decides too: an earlier socket whose (retried) commit is
+ * processed first registers, and the caller then closes the later socket
+ * whose claim it replaced (evictReplacedClaim), while that one is still
+ * committing.
  *
  * A socket that committed but does not become current hands what it wrote to
  * `undo`, which takes it back by owner token. Returns the commit's result for
