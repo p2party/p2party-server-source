@@ -7,6 +7,10 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "allowJs": true,
+    // TypeScript 6 and later load no @types package unless it is named here;
+    // without it the Bun globals and bun:test resolve only through a file
+    // that happens to import "bun".
+    "types": ["bun"],
 
     // Bundler mode
     "moduleResolution": "bundler",
