@@ -33,9 +33,11 @@ Postgres rather than SQLite keeps routing state out of any one process. The
 schema carries `Peer.serverId` and a durable `PendingSignal` table so an
 instance can hand a signal to the instance that currently claims the target
 peer's socket. `LISTEN`/`NOTIFY` is the low-latency wake-up, not the durable
-authority: the row remains authoritative if a notification is missed. This
-cross-instance delivery path does not by itself provide the distributed
-same-identity fencing required for supported multi-worker operation.
+authority: the row remains authoritative if a notification is missed. The same
+path carries session fencing between workers: a login on one worker closes the
+identity's older socket on another (see "Protocol-v4 authentication"). It does
+not order one identity's room mutations across workers, which supported
+multi-worker operation would also need.
 
 For an Internet-facing deployment, terminate TLS in front of this process and
 expose the WebSocket over `wss://`. The server does not configure TLS or launch
@@ -52,6 +54,28 @@ bun run format:check
 `check` is `db:generate`, `typecheck` and `bun test`. CI runs the same gates
 plus `db:migrate` against a real PostgreSQL
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
+### Testing against PostgreSQL
+
+The tests in `tests/db/*.throwaway.test.ts` need a real PostgreSQL: the
+one-time identity re-key migration, routing claims and their owner token,
+identity charges, the relay's membership query, and two workers fencing one
+identity. They are skipped unless `P2PARTY_TEST_POSTGRES_URL` names a
+throwaway server; `DATABASE_URL` is never used for them. The URL must name a
+loopback address and a port above 5000 other than 5432, or the tests refuse to
+run. Each test file creates its own `p2party_test_<random>` database there,
+applies the migrations with the Prisma CLI as a deploy does (no `.env` is read
+and the CLI's version check is off), and drops the database afterwards. The
+two-worker test also starts two server processes on that database. For
+example:
+
+```bash
+initdb -D "$PWD/.pg-test" -U test --auth=trust
+pg_ctl -D "$PWD/.pg-test" -l "$PWD/.pg-test.log" \
+  -o "-p 55434 -c listen_addresses=127.0.0.1 -c unix_socket_directories=''" start
+P2PARTY_TEST_POSTGRES_URL=postgresql://test@127.0.0.1:55434/postgres bun test ./tests
+pg_ctl -D "$PWD/.pg-test" stop
+```
 
 ## Configuration
 
@@ -71,9 +95,17 @@ Unproved sockets do no database work and cannot create durable peer records:
 the peer id a socket is bound to is derived from its public key alone, so the
 answer before the signature verdict is the same whether or not the key has an
 identity row. A successful signature is followed by a serializable database
-transaction before routing activation. A row that a server before 0.1.4
-created with a random id is re-keyed to the derived id in that transaction;
-its room memberships move with it.
+transaction before routing activation.
+
+Every stored row has that derived id. Servers before 0.1.4 stored random ids;
+migration `20261127000000_rekey_peers_to_derived_ids` re-keys every such row
+once, in one statement, before this release starts (`deploy.yml` applies
+migrations before it restarts the workers). **The peer id of an identity first
+stored by an older server therefore changes once, at this upgrade.** Its room
+memberships, challenges and queued signals move with it, and peers see it
+under the new id from then on, so a client must identify peers by public key,
+never by the server-assigned peer id. No code that runs per connection reads
+or rewrites a stored id.
 
 The following positive-integer environment variables tune the defaults. Restart
 the process after changing them. Limits apply per process except the durable
@@ -195,7 +227,7 @@ before succeeding.
 
 The cross-instance `LISTEN`/`NOTIFY` path remains available to self-hosters by
 explicitly configuring more than one `signaling_ports` entry. That mode is
-experimental until distributed same-identity fencing is implemented; the deploy
+experimental until same-identity room mutations are ordered across workers; the deploy
 still probes every configured process directly and rejects duplicate process
 ids before checking the public route.
 
@@ -515,26 +547,47 @@ socket deauthorizes and closes its predecessor with `1008` and the reason
 `Replaced by a newer session for this identity`, synchronously, once its own
 identity row and routing claim have committed. Until then the predecessor
 keeps working, and if the new socket fails at any step (signature, admission,
-identity row, routing claim, or its own close) the predecessor is not touched
-and the new socket closes bare, so its client may retry. While its commit is
-in flight a proved socket's `pong` keeps it alive, but it may send nothing
-else. If two new sockets of one identity commit around the same time, the one
-that began activating later becomes current and the other closes with the same
-`1008`. The routing claim is shared by every socket of one identity on one
-process, so it is released only when the last of them is gone, including one
-still committing. Every later
-frame must come from the exact socket currently held in that process's
-registry. This is deliberately a process-local guarantee: `Peer.serverId` is
-routing metadata, not a distributed session lease. Two sockets for the same
-identity on different workers are not yet mutually fenced, so shared
-cross-instance session fencing remains an explicit nonclaim. The bounded
-message FIFO is per socket, and same-process room mutations are additionally
-serialized by stable peer identity across socket replacement. That membership
-ordering is not distributed across workers: there is no database generation
-or advisory-lock fence yet, so cross-instance same-identity room mutation
-ordering is also an explicit nonclaim. Supported production therefore runs one
-worker. Multiple `signaling_ports` are an experimental operator opt-in until
-both distributed fences exist.
+identity row and claim, or its own close) the predecessor is not touched and
+the new socket closes bare, so its client may retry. While its commit is in
+flight a proved socket's `pong` keeps it alive, but it may send nothing else.
+If two new sockets of one identity commit around the same time, the one that
+began activating later becomes current and the other closes with the same
+`1008`.
+
+The identity row and the routing claim are written by one statement in one
+serializable transaction, and the claim names its owner: the process
+(`Peer.serverId`) and the socket (`Peer.socketGeneration`). A socket releases
+or restores only a claim that carries its own owner token, compared in the
+same statement, so a late release from a replaced socket cannot clear a
+successor's claim on any worker. A socket that committed but does not become
+current takes back what it wrote: a row it created is deleted and its creation
+charge refunded; otherwise the claim it replaced is put back. A new identity
+is charged once: two first-time sockets of one key both charge before they
+insert, the loser's insert conflicts, its retry finds the winner's row, and
+its charge is refunded.
+
+When a new socket's claim replaces one held by another worker, that worker is
+told through the same queue as relayed frames (a `PendingSignal` row of kind
+`evict` naming the replaced socket's generation, then `NOTIFY`) and closes the
+older socket with the same `1008` and reason, so one socket per identity is
+live across workers. If the `NOTIFY` is lost, the owner's 5-second safety poll
+reads the row. If the row is never read (it is swept after 120 seconds, or the
+owner could not reach PostgreSQL), every worker's claim reconciliation, run
+every 30 seconds, closes each current socket whose row another worker now
+claims. A replaced socket on a worker that can reach PostgreSQL therefore
+closes within about 30 seconds at most. A worker that cannot reach PostgreSQL
+closes nothing; its sockets cannot route to other workers either. A dead
+worker's sockets are gone with it, and the next startup clears its claims and
+rows.
+
+Every later frame must come from the exact socket currently held in that
+process's registry. The bounded message FIFO is per socket, and same-process
+room mutations are additionally serialized by stable peer identity across
+socket replacement. That membership ordering is not distributed across
+workers: there is no database generation or advisory-lock fence yet, so
+cross-instance same-identity room mutation ordering is an explicit nonclaim.
+Supported production therefore runs one worker. Multiple `signaling_ports`
+are an experimental operator opt-in until that fence exists.
 
 Each socket retains at most 64 queued signaling frames and at most 2 MiB of
 their serialized bytes; exceeding either bound closes it with overload code
@@ -589,14 +642,16 @@ models plus the implicit `PeerRooms` join table. The running server writes all
 of them except `Challenge`.
 
 - **`Peer`** — one row per Ed25519 identity public key, holding that key, a
-  stable peer id, `lastPing`, and `serverId`: which process currently holds the
-  socket, or null. A process that exits without shutting down leaves its
+  stable peer id, `lastPing`, and the routing claim: `serverId`, which process
+  currently holds the socket, and `socketGeneration`, which of its sockets
+  does, or both null. A process that exits without shutting down leaves its
   claims behind; the next process to start clears them (see `PendingSignal`). Created only after a valid socket-bound signature and before
   routing activation. The peer id is a domain-separated UUID derived from the
-  public key. A row a server before 0.1.4 created with a random id is re-keyed
-  to the derived id at that identity's next successful proof, keeping its room
-  memberships; peers in those rooms then see the identity under the new id.
-  Verified identity rows are retained to keep ids stable.
+  public key. Rows a server before 0.1.4 stored with random ids are re-keyed to
+  the derived id once, by a migration, at the upgrade (see "Admission and
+  database security"); a row whose key is not 64 lowercase hex characters,
+  which no client can present, is deleted there. Verified identity rows are
+  retained to keep ids stable.
 - **`Room`** — one row per room, keyed by `identifier`, the SHA-512 of the
   64-hex room token ([`src/utils/roomIdentifier.ts`](src/utils/roomIdentifier.ts)).
   The token itself is not stored, though the operator sees it on the wire when a
@@ -607,7 +662,8 @@ of them except `Challenge`.
   `leaveRoom` request. A socket close clears `Peer.serverId` and nothing else,
   so membership outlives the connection.
 - **`PendingSignal`** — a serialized frame written only when the target peer's
-  socket belongs to another instance. Deleted on delivery, when the target is no
+  socket belongs to another instance, or (kind `evict`) the generation of a
+  socket there that a newer session of its identity replaced. Deleted on delivery, when the target is no
   longer here, and at shutdown. Every 30 seconds, rows older than 120 seconds
   are deleted wherever they are addressed, oldest first through an index on
   `createdAt`, in statements of at most 1,000 rows and at most 10,000 rows per
@@ -651,8 +707,11 @@ obsolete units; and only then checks that public Caddy answers with one of those
 exact `serverId`s. [`tests/deploy.contract.test.ts`](tests/deploy.contract.test.ts)
 pins that ordering.
 
-Production sets `signaling_ports: [3001]` — one process — for the fencing
-reasons above. Where several workers share a database, stop every worker of an
+Production sets `signaling_ports: [3001]` — one process — for the
+membership-ordering reason above. The identity re-key migration runs while the
+older release still serves: until its workers restart, seconds later, a socket
+of a re-keyed identity on an older worker can have room requests refused, and
+it reconnects after the restart. Where several workers share a database, stop every worker of an
 older release before the first worker of this release starts, and run all
 workers under one database role: a worker counts as live only through its named
 PostgreSQL session, which older releases do not open, so a new worker would
@@ -751,7 +810,11 @@ candidates it relays — which carry IP addresses — and the timing of all of i
 
 Its operator logs name a peer only by an eight-hex-digit tag: an HMAC of the
 peer id under a key drawn at each process start and never stored. A tag links
-log lines within one process lifetime; it is not the peer id or public key.
+log lines within one process lifetime; it is not the peer id or public key. A
+caught error is logged by its class and, for a database error, its code, never
+its message or fields: a Prisma error's message can quote the query's
+arguments, peer and room ids included. Refusals the server raises itself log
+their fixed sentence.
 
 It does not see application message or file content. No frame type carries an
 application payload and no handler forwards one: messages and files travel over

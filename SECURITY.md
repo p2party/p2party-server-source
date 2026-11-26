@@ -45,7 +45,8 @@ records are written only after proof of key possession. These limits reduce
 resource abuse but do not prove that identities represent distinct people.
 Proof of work and passkeys are not part of the production signaling protocol.
 
-Use one signaling worker for supported session and membership fencing. Every
+Use one signaling worker: sessions of one identity are fenced across workers,
+but its room mutations are ordered only within one worker. Every
 encrypted PostgreSQL connection verifies its certificate. The supplied
 deployment provisions and distributes a database CA over authenticated SSH.
 Use `sslmode=disable` only for a disposable local database.
