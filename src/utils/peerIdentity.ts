@@ -4,6 +4,15 @@ import { admission, admissionLimits } from "./admission";
 import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A memberless identity younger than this is never pruned for capacity. */
+const IDENTITY_PRUNE_MIN_AGE_MS = DAY_MS;
+/**
+ * At most this many identities are pruned per admission. "Near the cap" means
+ * within one batch of it, so a single prune can restore the headroom.
+ */
+const IDENTITY_PRUNE_BATCH = 1000;
+
 /** A stable candidate for identities that have never proved ownership. */
 export const provisionalPeerId = (publicKey: string): string => {
   if (!/^[0-9a-f]{64}$/.test(publicKey))
@@ -19,16 +28,39 @@ export const provisionalPeerId = (publicKey: string): string => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 
+/** Charge the socket's source key first; a socket without a lease has none. */
+const admitIdentityCreation = (ws: P2PartyWSClient): boolean =>
+  ws.data.admission ? ws.data.admission.newIdentity() : admission.newIdentity();
+
 /** Persist only after signature verification, before the routing claim goes live. */
 export const createPersistVerifiedIdentity =
   (
     prisma: Pick<ProcessPrismaClient, "$transaction">,
-    admitCreation = () => admission.newIdentity(),
+    admitCreation: (ws: P2PartyWSClient) => boolean = admitIdentityCreation,
     maxIdentities = admissionLimits.persistentIdentities,
+    now: () => number = Date.now,
   ) =>
   async (ws: P2PartyWSClient): Promise<boolean> => {
     if (!ws.data.isVerified || ws.readyState !== 1) return false;
     const { peerId, publicKey } = ws.data;
+    const at = now();
+    // The ceiling counts identities seen ("updatedAt": authentication, claim,
+    // release) inside the retention period.
+    const seen = {
+      updatedAt: {
+        gte: new Date(at - admissionLimits.membershipTtlDays * DAY_MS),
+      },
+    };
+    const prunable = {
+      createdAt: { lt: new Date(at - IDENTITY_PRUNE_MIN_AGE_MS) },
+      updatedAt: {
+        ...seen.updatedAt,
+        // Persisted but not yet claimed: still inside its activation deadline.
+        lt: new Date(at - admissionLimits.authenticationTimeoutMs),
+      },
+      serverId: null,
+      rooms: { none: {} },
+    };
     await prisma.$transaction(
       async (transaction) => {
         const existing = await transaction.peer.findUnique({
@@ -40,19 +72,34 @@ export const createPersistVerifiedIdentity =
             "Identity changed during authentication; reconnect required",
           );
         if (!existing) {
-          if (
-            provisionalPeerId(publicKey) !== peerId ||
-            !admitCreation() ||
-            (await transaction.peer.count()) >= maxIdentities
-          )
+          if (provisionalPeerId(publicKey) !== peerId || !admitCreation(ws))
+            throw new Error("Identity admission capacity reached");
+          let identities = await transaction.peer.count({ where: seen });
+          if (identities >= maxIdentities - IDENTITY_PRUNE_BATCH) {
+            // Offline identities in no room, created over a day ago, go first.
+            // Rolled back with the transaction if the cap still refuses.
+            const stale = await transaction.peer.findMany({
+              where: prunable,
+              select: { id: true },
+              orderBy: { updatedAt: "asc" },
+              take: IDENTITY_PRUNE_BATCH,
+            });
+            if (stale.length) {
+              const { count } = await transaction.peer.deleteMany({
+                where: { ...prunable, id: { in: stale.map(({ id }) => id) } },
+              });
+              identities -= count;
+            }
+          }
+          if (identities >= maxIdentities)
             throw new Error("Identity admission capacity reached");
         }
         if (!ws.data.isVerified || ws.readyState !== 1)
           throw new Error("Authentication socket closed");
         await transaction.peer.upsert({
           where: { publicKey },
-          update: { lastPing: Date.now() },
-          create: { id: peerId, publicKey, lastPing: Date.now() },
+          update: { lastPing: at },
+          create: { id: peerId, publicKey, lastPing: at },
         });
       },
       { isolationLevel: "Serializable" },
