@@ -1,5 +1,13 @@
 # These plans use provider mocks; they never read or modify infrastructure.
 # `terraform test` requires Terraform 1.7+ for provider mocks.
+#
+# Each opt-in run starts from the deployment's live baseline (header rule
+# managed and enabled) and asserts that the other frontend resources stay as
+# they were, so a flag wired to a second resource fails here.
+#
+# "Zone settings stay unmanaged" reads one attribute through try() instead of
+# length() over the resource: when that assertion fails, Terraform 1.15.5
+# panics while rendering the whole zone-settings object ("value has marks").
 mock_provider "cloudflare" {
   mock_data "cloudflare_rulesets" {
     defaults = {
@@ -22,7 +30,7 @@ run "existing_server_operation_does_not_manage_edge_tls_or_redirects" {
   command = plan
 
   assert {
-    condition     = length(cloudflare_zone_settings_override.frontend_tls) == 0
+    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
     error_message = "Default server operations must not take ownership of zone TLS settings."
   }
 
@@ -32,11 +40,13 @@ run "existing_server_operation_does_not_manage_edge_tls_or_redirects" {
   }
 }
 
-run "managed_tls_settings_enforce_https_tls12_and_hsts" {
+run "managed_tls_settings_enforce_https_and_tls12_only" {
   command = plan
 
   variables {
-    manage_frontend_tls_settings = true
+    manage_frontend_response_headers  = true
+    frontend_response_headers_enabled = true
+    manage_frontend_tls_settings      = true
   }
 
   assert {
@@ -50,38 +60,18 @@ run "managed_tls_settings_enforce_https_tls12_and_hsts" {
   }
 
   assert {
-    condition = alltrue([
-      cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].enabled,
-      cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].include_subdomains,
-      cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].max_age >= 31536000,
-    ])
-    error_message = "HSTS must be on for every proxied hostname, include subdomains and last at least one year."
+    condition     = length(cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header) == 0
+    error_message = "HSTS has one source, the response-header rule; the zone HSTS setting must stay unmanaged."
   }
 
   assert {
-    condition     = cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].nosniff == false
-    error_message = "The zone setting must not add nosniff to the SDK CDN; the header rule owns it for app hostnames."
-  }
-}
-
-run "zone_hsts_and_header_rule_hsts_are_the_same_policy" {
-  command = plan
-
-  variables {
-    manage_frontend_tls_settings     = true
-    manage_frontend_response_headers = true
+    condition     = length(cloudflare_ruleset.frontend_redirects) == 0
+    error_message = "The TLS opt-in must not also take over the redirect phase."
   }
 
   assert {
-    condition = one([
-      for header in cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters[0].headers :
-      header.value if header.name == "Strict-Transport-Security"
-      ]) == join("; ", compact([
-        "max-age=${cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].max_age}",
-        cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].include_subdomains ? "includeSubDomains" : "",
-        cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header[0].preload ? "preload" : "",
-    ]))
-    error_message = "Two Cloudflare features must not send different HSTS policies on the same response."
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].expression == "(http.host eq \"p2party.com\")"
+    error_message = "The TLS opt-in must not extend the live header rule to other hosts."
   }
 }
 
@@ -89,12 +79,24 @@ run "new_redirect_phase_starts_disabled" {
   command = plan
 
   variables {
-    manage_frontend_www_redirect = true
+    manage_frontend_response_headers  = true
+    frontend_response_headers_enabled = true
+    manage_frontend_www_redirect      = true
   }
 
   assert {
     condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].enabled == false
     error_message = "Provisioning the redirect ruleset must not activate the redirect before review."
+  }
+
+  assert {
+    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    error_message = "The redirect opt-in must not also change zone TLS settings."
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].expression == "(http.host eq \"p2party.com\")"
+    error_message = "The redirect opt-in must not extend the live header rule to other hosts."
   }
 }
 
@@ -102,8 +104,10 @@ run "www_redirects_to_https_apex_keeping_path_and_query" {
   command = plan
 
   variables {
-    manage_frontend_www_redirect  = true
-    frontend_www_redirect_enabled = true
+    manage_frontend_response_headers  = true
+    frontend_response_headers_enabled = true
+    manage_frontend_www_redirect      = true
+    frontend_www_redirect_enabled     = true
   }
 
   override_data {
@@ -146,6 +150,16 @@ run "www_redirects_to_https_apex_keeping_path_and_query" {
   assert {
     condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].enabled
     error_message = "The reviewed, previously managed redirect must remain updatable."
+  }
+
+  assert {
+    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    error_message = "Activating the redirect must not also change zone TLS settings."
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].expression == "(http.host eq \"p2party.com\")"
+    error_message = "Activating the redirect must not extend the live header rule to other hosts."
   }
 }
 

@@ -21,7 +21,7 @@ locals {
     ])
     "Permissions-Policy"        = "camera=(), geolocation=(), payment=(), usb=(), microphone=(self)"
     "Referrer-Policy"           = "no-referrer"
-    "Strict-Transport-Security" = local.frontend_hsts_header # p2party_frontend_tls.tf
+    "Strict-Transport-Security" = "max-age=63072000; includeSubDomains; preload" # only HSTS source; see p2party_frontend_tls.tf
     "X-Content-Type-Options"    = "nosniff"
   }
 

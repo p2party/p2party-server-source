@@ -7,20 +7,6 @@
 # None of this authenticates the hop from Cloudflare to the S3 website origin,
 # which speaks HTTP only; the README says what that requires.
 locals {
-  # One HSTS policy for the zone setting and the response-header rule, so the
-  # two Cloudflare features never send different values. It renders to the
-  # header the rule has served on the apex since 2026-09-09.
-  frontend_hsts = {
-    max_age            = 63072000
-    include_subdomains = true
-    preload            = true
-  }
-  frontend_hsts_header = join("; ", compact([
-    "max-age=${local.frontend_hsts.max_age}",
-    local.frontend_hsts.include_subdomains ? "includeSubDomains" : "",
-    local.frontend_hsts.preload ? "preload" : "",
-  ]))
-
   frontend_redirect_ruleset_name = "p2party frontend redirects"
   frontend_www_redirect_rule_ref = "p2party_frontend_www_to_https_apex"
   frontend_www_redirect_target   = "concat(\"https://p2party.com\", http.request.uri.path)"
@@ -28,6 +14,12 @@ locals {
 
 # Records the zone's current values in `initial_settings` when created and
 # changes only the settings named here. Removing it restores those values.
+#
+# HSTS is deliberately not managed here. Its only source is the response-header
+# rule in p2party_frontend_headers.tf. Cloudflare's public documentation gives
+# no accepted range for the zone setting's max_age, so the rule's 63072000 could
+# fail mid-apply. It also does not say what happens when a response already
+# carries Strict-Transport-Security, so two values could be sent.
 resource "cloudflare_zone_settings_override" "frontend_tls" {
   count = var.manage_frontend_tls_settings ? 1 : 0
 
@@ -36,16 +28,6 @@ resource "cloudflare_zone_settings_override" "frontend_tls" {
   settings {
     always_use_https = "on"
     min_tls_version  = "1.2"
-
-    security_header {
-      enabled            = true
-      max_age            = local.frontend_hsts.max_age
-      include_subdomains = local.frontend_hsts.include_subdomains
-      preload            = local.frontend_hsts.preload
-      # X-Content-Type-Options stays with the response-header rule, which sets it
-      # on app hostnames only; cdn serves SDK artifacts and keeps its behavior.
-      nosniff = false
-    }
   }
 }
 

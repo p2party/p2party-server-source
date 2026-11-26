@@ -64,7 +64,7 @@ variable "frontend_response_headers_all_app_hosts" {
 }
 
 variable "manage_frontend_tls_settings" {
-  description = "Enforce Always Use HTTPS, minimum TLS 1.2 and HSTS on the proxied frontend hostnames; see deploy/README.md"
+  description = "Enforce Always Use HTTPS and minimum TLS 1.2 on every proxied hostname in the zone; HSTS stays with the header rule; see deploy/README.md"
   type        = bool
   default     = false
 }
