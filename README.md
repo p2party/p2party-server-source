@@ -100,13 +100,19 @@ charged to its /48. Everyone behind one shared IPv4 address (carrier-grade NAT,
 a campus network) therefore shares 32 sockets, 60 upgrades, 6 new identities and
 30 new memberships per minute at the defaults. That is the accepted cost of
 keeping one source from spending a process-wide budget; raising the
-process-wide budgets raises the 5% and 10% shares with them.
+process-wide budgets raises the 5% and 10% shares with them. Everyone inside
+one IPv6 /48 likewise shares that /48's 204 sockets, 12 new identities and 60
+new memberships per minute at the defaults. Upgrade attempts are limited per
+/64 only, 60 per minute each, so one /48 can make many attempts.
 
-A rejected upgrade returns HTTP 429 with `Retry-After: 60`. Socket rate and
-authentication-deadline refusals use retryable close code 1013. Room capacity
-refusals return a request error and leave the authenticated socket open, as
-does a room request when 8 of the same peer's, or `MAX_PEERS_PER_ROOM` for the
-same room, are already waiting. When an accounting table is full, a newcomer
+A rejected upgrade returns HTTP 429 with `Retry-After: 60`, as does an upgrade
+whose client address cannot be parsed (for example an IPv6 zone id). Socket
+rate and authentication-deadline refusals use retryable close code 1013. Room
+capacity refusals return a request error and leave the authenticated socket
+open, as does a room request when 8 of the same peer's, or `MAX_PEERS_PER_ROOM`
+for the same room, are already waiting. A new membership is charged only once
+the room-full check has passed, so a join refused because the room is full
+spends none of the membership budget. When an accounting table is full, a newcomer
 evicts the least recently used entry without an open socket, which discards
 that entry's rate counts; entries with open sockets are never evicted. A full
 table therefore neither refuses newcomers nor stops counting them. Accounting
@@ -384,7 +390,7 @@ When TURN is configured, the `roomId` response includes:
 {
   "turnCredentials": {
     "urls": ["turns:turn.example.com:443?transport=tcp"],
-    "username": "<expiresAtUnixSeconds>:<socket Ed25519 public key>",
+    "username": "<expiresAtUnixSeconds>:<identity Ed25519 public key>",
     "credential": "<TURN REST HMAC>",
     "expiresAtUnixSeconds": 1785258000
   }
@@ -393,11 +399,20 @@ When TURN is configured, the `roomId` response includes:
 
 The expiry is bound to both the numeric username prefix and the authenticated
 socket public key suffix. `credential` is the base64 HMAC-SHA1 of `username`
-under `COTURN_SECRET` — the coturn REST convention — and the lifetime is one
-hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
-[`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)). A fresh bundle is minted
-on every successful room join, not once per socket. URL normalization follows
-the `COTURN_URLS` limits above.
+under `COTURN_SECRET` — the coturn REST convention. The expiry is the current
+time plus one hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
+[`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)), rounded up to a whole
+hour, so a credential is valid for at least one hour and less than two. A
+bundle comes with every successful room join, and every join by one identity
+within one such hour receives the identical bundle. coturn's per-username
+allocation quota therefore applies per identity, and one identity holds at most
+two valid usernames at a time. URL normalization follows the `COTURN_URLS`
+limits above.
+
+The username carries the identity public key because `p2party-js` 0.14.10
+rejects a `roomId` response whose username is not `<expiry>:<its own key>`.
+Over plain `turn:` (UDP), that username is readable by anyone on the network
+path; over `turns:` it is inside TLS.
 
 When `COTURN_SECRET` or `COTURN_URLS` is missing, or no URL survives
 normalization, `turnCredentials` is omitted from the `roomId` response entirely
@@ -519,7 +534,8 @@ of them except `Challenge`.
 
 - **`Peer`** — one row per Ed25519 identity public key, holding that key, a
   stable peer id, `lastPing`, and `serverId`: which process currently holds the
-  socket, or null. Created only after a valid socket-bound signature and before
+  socket, or null. A process that exits without shutting down leaves its
+  claims behind; the next process to start clears them (see `PendingSignal`). Created only after a valid socket-bound signature and before
   routing activation. Existing peer IDs are preserved; previously unseen keys
   receive a domain-separated deterministic UUID candidate without an initial
   database write. Verified identity rows are retained to preserve stable IDs.
@@ -534,8 +550,13 @@ of them except `Challenge`.
   so membership outlives the connection.
 - **`PendingSignal`** — a serialized frame written only when the target peer's
   socket belongs to another instance. Deleted on delivery, when the target is no
-  longer here, at shutdown, and by a startup sweep of rows addressed to server
-  ids no connected peer claims.
+  longer here, and at shutdown. Every 30 seconds, rows older than 120 seconds
+  are deleted wherever they are addressed, so no row lives longer than about
+  150 seconds. At startup a process also clears the rows and `Peer.serverId`
+  claims of every other server id whose PostgreSQL LISTEN session is gone. Each
+  process names that session `p2party-signaling:<serverId>` in
+  `pg_stat_activity` before it claims a peer, and sets TCP keepalives so
+  PostgreSQL ends the session of a vanished host within about a minute.
 - **`Challenge`** — declared in the schema, but the running server never writes
   it. Challenge nonces live on the socket
   ([`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)) and are discarded when
@@ -572,19 +593,26 @@ Production sets `signaling_ports: [3001]` — one process — for the fencing
 reasons above. Caddy terminates TLS, proxies the WebSocket, sets HSTS and a
 content-security policy, and logs with client IPs masked to /24 and /48.
 Request URIs, headers and the duplicate raw `client_ip` field are removed from
-access logs so the public-key query parameter is not retained there. coturn
-is configured by `playbooks/setup-coturn.yml`; this server only issues
-credentials for it.
+access logs and from Caddy's default logger, which records upstream errors, so
+the public-key query parameter is retained in neither. coturn is configured by
+`playbooks/setup-coturn.yml`; this server only issues credentials for it. coturn
+writes no log (`log-file=/dev/null`, nothing to stdout): its log lines would
+pair each username, and so each identity key, with a client address. The
+playbook deletes the log directory and rotation config of earlier
+provisioning.
 
 The coturn template sets `coturn_bps_capacity` to 30,000,000 bytes/second and
-`coturn_max_bps` to 3,000,000 bytes/second per allocation. Input and output are
+`coturn_max_bps` to 625,000 bytes/second per allocation. Input and output are
 counted separately. These Ansible variables are operator-overridable and must
 remain positive. Ordinary clients without a bandwidth request reserve the
-per-allocation maximum, so the defaults permit about ten simultaneous such
+per-allocation maximum, so the defaults permit 48 simultaneous such
 allocations; raise aggregate capacity for larger relay-heavy rooms. Allocation
-quotas remain 1,200 total and 12 per credential username. This bounds bandwidth
-allocation; it does not establish unique users or prevent every denial of
-service. The units and reservation semantics follow the [coturn configuration](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf)
+quotas remain 1,200 total and 12 per credential username. One identity holds at
+most two valid usernames, so it can reserve at most 2 × 12 × 625,000 =
+15,000,000 bytes/second, half the capacity; the playbook refuses overrides that
+break this bound. This bounds bandwidth allocation; it does not establish
+unique users or prevent every denial of service: a handful of identities can
+still reserve the whole capacity. The units and reservation semantics follow the [coturn configuration](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf)
 and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2projects).
 
 ## Privacy boundary
@@ -592,6 +620,10 @@ and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2
 The server sees each client's Ed25519 identity public key, the room token a
 client joins with, which peer ids share a room, the WebRTC descriptions and ICE
 candidates it relays — which carry IP addresses — and the timing of all of it.
+
+Its operator logs name a peer only by an eight-hex-digit tag: an HMAC of the
+peer id under a key drawn at each process start and never stored. A tag links
+log lines within one process lifetime; it is not the peer id or public key.
 
 It does not see application message or file content. No frame type carries an
 application payload and no handler forwards one: messages and files travel over
