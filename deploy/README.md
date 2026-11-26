@@ -15,13 +15,52 @@ bun run format:check
 ```
 
 The wrapper builds this repository's Linux binary, provisions verified database
-TLS, copies the binary and environment, installs migration tooling from this
-release's `package.json` and `bun.lockb`, applies pending migrations, restarts the
-desired worker, and verifies its version through Caddy. The migration CLI lives
-in a separate `migration-tooling` directory; it uses the same audited dependency
-overrides as the release rather than fetching an independent CLI dependency tree.
-Its working directory remains the server directory containing `prisma.config.ts`
-and `prisma/`. No schema migration is added by release 0.1.4.
+TLS, then on the signaling host:
+
+1. stops and disables every signaling worker (`p2party-signaling*.service`), so
+   neither `Restart=always` nor a reboot can start one while the schema changes;
+2. installs migration tooling from this release's `package.json` and
+   `bun.lockb` and applies pending migrations;
+3. only if they succeed, copies the new binary, its environment file and its
+   units, then enables and starts the desired workers and verifies their
+   version through Caddy.
+
+Clients are cut off from step 1 until the new workers start. The migration CLI
+lives in a separate `migration-tooling` directory; it uses the same audited
+dependency overrides as the release rather than fetching an independent CLI
+dependency tree. Its working directory remains the server directory containing
+`prisma.config.ts` and `prisma/`.
+
+The binary also checks the schema itself: before it opens its listener it reads
+Prisma's migration history and exits with one `p2party: refusing to start` line
+when the database is empty, older or newer than the build, or holds a failed
+migration. `Restart=always` then only repeats that refusal.
+
+## A failed or interrupted migration
+
+When `prisma migrate deploy` fails or is interrupted, the play ends with
+"Report the failed migration and how to recover". Every signaling worker is
+then stopped and disabled, and the previous binary is still in place, so nothing
+serves. Prisma does not run a migration in a transaction; each migration of this
+release can nevertheless run again after a failure (the re-key is a single
+statement, the claim-owner migration adds its columns only if missing).
+
+1. On the signaling host, from the server directory (`~p2party/server`), list
+   the migrations and find the failed one:
+   `~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js migrate status`,
+   with `DATABASE_URL` set as the play sets it.
+2. Fix what made it fail: a lock another session held, the database
+   unreachable, a full disk. The failed migration's error is in the play's
+   output and in `_prisma_migrations.logs`.
+3. Mark it rolled back, naming it exactly:
+   `... prisma/build/index.js migrate resolve --rolled-back <migration name>`.
+4. Run `./deploy/deploy.sh` again. It applies the migration and only then
+   installs and starts the new binary.
+
+Do not start the previous binary once
+`20261127000000_rekey_peers_to_derived_ids` is applied: rolling the binary back
+after the re-key is not supported. A new binary started on such a database
+refuses with the same instructions.
 
 ## Relay capacity
 
@@ -80,10 +119,12 @@ Two mitigations were considered and not built:
 
 ## Upgrading to 0.1.5
 
-Where several workers share a database, stop every 0.1.4 worker before the first
-0.1.5 worker starts and run all workers under one database role: a 0.1.5 worker
-counts another as live only through its named PostgreSQL session, which 0.1.4
-does not open, so it would clear a running 0.1.4 worker's routing claims.
+`deploy.yml` stops every 0.1.4 worker before it migrates, so no 0.1.4 worker
+serves after the identity re-key. Where workers are run by other means, do the
+same: stop every 0.1.4 worker before migrating and before the first 0.1.5 worker
+starts, and run all workers under one database role. A 0.1.5 worker counts
+another as live only through its named PostgreSQL session, which 0.1.4 does not
+open, so it would clear a running 0.1.4 worker's routing claims.
 
 ## Database trust
 

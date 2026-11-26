@@ -119,48 +119,38 @@
         group: "{{ app.group }}"
         mode: "0755"
 
-    - name: Copy the compiled binary
-      copy:
-        src: "{{ repo_path }}/{{ binary_name }}"
-        dest: "{{ app.home }}/server/p2party-server"
-        owner: "{{ app.user }}"
-        group: "{{ app.group }}"
-        mode: "0755"
+    # ------------------------------------------------------------------
+    # Stop every worker before the schema changes
+    # ------------------------------------------------------------------
+    # No worker of the release being replaced may serve while migrations run,
+    # and no new binary may exist on the host before they have succeeded, so
+    # that systemd can never start a binary against a schema it was not built
+    # for. Every installed signaling unit is stopped and disabled: Restart=
+    # always does not restart a stopped unit, and a disabled unit does not
+    # start at boot. Clients are cut off until the new workers start; this
+    # release accepts that downtime. The units are enabled again only by
+    # "Restart signaling services", after the new binary is in place.
+    - name: Discover the signaling units to stop before migrating
+      find:
+        paths: /etc/systemd/system
+        # The exact base name is the legacy cloud-init unit.
+        patterns:
+          - "p2party-signaling.service"
+          - "p2party-signaling-*.service"
+        file_type: file
+        recurse: false
+      register: signaling_units_before_migration
 
-    # The binary and its environment are a matched pair: this release requires
-    # COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary restarted
-    # against an older .env exits at startup. initial-setup.yml also writes this
-    # file, but a deploy must not depend on someone having re-run provisioning.
-    - name: Deploy the signaling environment file
-      template:
-        src: "{{ playbook_dir }}/../templates/signaling.env.j2"
-        dest: "{{ app.home }}/server/.env"
-        owner: "{{ app.user }}"
-        group: "{{ app.group }}"
-        mode: "0600"
-      # The rendered file contains both database and TURN credentials. Keep an
-      # operator's --diff from copying either secret into the Ansible log.
-      diff: false
-
-    # Same reasoning for the unit files. PORT is set here, per instance, and a
-    # deploy that ships a new binary against stale units cannot fix an ordering
-    # or environment bug in them — which is how every instance ended up binding
-    # 3001 and dying with EADDRINUSE.
-    - name: Deploy the systemd unit files
-      template:
-        src: "{{ playbook_dir }}/../templates/p2party-signaling.service.j2"
-        dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
-        owner: root
-        group: root
-        mode: "0644"
-      loop: "{{ signaling_instance_ports }}"
+    - name: Stop and disable every signaling worker before migrating
+      systemd:
+        name: "{{ item | basename }}"
+        state: stopped
+        enabled: false
+      loop: >-
+        {{ signaling_units_before_migration.files
+           | map(attribute='path') | list }}
       loop_control:
-        label: "{{ item }}"
-      vars:
-        signaling_port: "{{ item }}"
-      # No notify: the restart task below already passes daemon_reload, so a
-      # handler here would be a second way to do the same thing and a runtime
-      # error if it were ever renamed.
+        label: "{{ item | basename }}"
 
     # ------------------------------------------------------------------
     # Postgres schema — migrations are applied on every deploy
@@ -253,14 +243,82 @@
             DATABASE_URL: "postgresql://{{ database.user | urlencode }}:{{ database.password | urlencode }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}&sslrootcert={{ database.ssl_root_cert }}"
           no_log: true
           register: migration_result
-          # A failed migration must stop the deploy before the new binary is
-          # restarted against a schema it does not match.
+          # A failed migration stops the deploy in the rescue below, before
+          # the new binary is even copied to the host.
           failed_when: migration_result.rc != 0
 
         - name: Show migration output
           debug:
             msg: PostgreSQL migrations applied successfully
           when: migration_result is defined
+      rescue:
+        - name: Report the failed migration and how to recover
+          fail:
+            msg: |
+              The PostgreSQL migration failed or was interrupted. Every
+              signaling worker is stopped and disabled and the previous binary
+              is still in place, so nothing serves until this is resolved.
+
+              Recover (deploy/README.md, "A failed or interrupted migration"):
+              1. On the signaling host, in {{ app.home }}/server, find the failed
+                 migration: run the migration tooling's Prisma CLI with
+                 `migrate status` (DATABASE_URL as in this play).
+              2. Fix what made it fail (a lock held, the database unreachable,
+                 the disk full).
+              3. Mark it rolled back:
+                 `prisma migrate resolve --rolled-back <migration name>`.
+                 This release's migrations run again cleanly after a failure.
+              4. Run this playbook again. It applies the migration and only
+                 then installs and starts the new binary.
+              Do not start the previous binary on this database: rolling the
+              binary back after 20261127000000_rekey_peers_to_derived_ids is
+              not supported.
+
+    # ------------------------------------------------------------------
+    # Ship the binary, only once the schema matches it
+    # ------------------------------------------------------------------
+    - name: Copy the compiled binary
+      copy:
+        src: "{{ repo_path }}/{{ binary_name }}"
+        dest: "{{ app.home }}/server/p2party-server"
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: "0755"
+
+    # The binary and its environment are a matched pair: this release requires
+    # COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary restarted
+    # against an older .env exits at startup. initial-setup.yml also writes this
+    # file, but a deploy must not depend on someone having re-run provisioning.
+    - name: Deploy the signaling environment file
+      template:
+        src: "{{ playbook_dir }}/../templates/signaling.env.j2"
+        dest: "{{ app.home }}/server/.env"
+        owner: "{{ app.user }}"
+        group: "{{ app.group }}"
+        mode: "0600"
+      # The rendered file contains both database and TURN credentials. Keep an
+      # operator's --diff from copying either secret into the Ansible log.
+      diff: false
+
+    # Same reasoning for the unit files. PORT is set here, per instance, and a
+    # deploy that ships a new binary against stale units cannot fix an ordering
+    # or environment bug in them — which is how every instance ended up binding
+    # 3001 and dying with EADDRINUSE.
+    - name: Deploy the systemd unit files
+      template:
+        src: "{{ playbook_dir }}/../templates/p2party-signaling.service.j2"
+        dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ signaling_instance_ports }}"
+      loop_control:
+        label: "{{ item }}"
+      vars:
+        signaling_port: "{{ item }}"
+      # No notify: the restart task below already passes daemon_reload, so a
+      # handler here would be a second way to do the same thing and a runtime
+      # error if it were ever renamed.
 
     # ------------------------------------------------------------------
     # Cut public routing over, restart, and verify
@@ -378,9 +436,11 @@
             msg: |
               The signaling service did not start. Its own log follows.
 
-              Most likely: COTURN_SECRET missing or under 32 bytes, or
+              Most likely: COTURN_SECRET missing or under 32 bytes,
               DATABASE_URL unreachable (initPubSub aborts startup rather than
-              running without cross-instance routing).
+              running without cross-instance routing), or a database schema
+              this build was not made for (its "p2party: refusing to start"
+              line says what it found and what to run).
 
               {{ signaling_failure.stdout | default('no output captured') }}
 

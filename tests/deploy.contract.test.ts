@@ -74,6 +74,8 @@ interface PlaybookTask {
   diff?: boolean;
   no_log?: boolean;
   systemd?: Record<string, unknown>;
+  find?: { patterns?: string[] };
+  fail?: { msg?: string };
 }
 interface Play {
   tasks: PlaybookTask[];
@@ -123,6 +125,73 @@ const coturnDefault = (name: string): number => {
 };
 
 describe("production deployment contract", () => {
+  test("the deploy playbook stops every worker before it migrates and installs the binary only after", () => {
+    const play = playWithTask(deploy, "Apply migrations against Postgres");
+    const at = (name: string) => position(play, name);
+    const discover = "Discover the signaling units to stop before migrating";
+    const stop = "Stop and disable every signaling worker before migrating";
+    const migrate = "Apply migrations against Postgres";
+
+    // Every installed unit, the legacy cloud-init name included, is stopped
+    // and disabled: Restart=always does not restart a stopped unit and a
+    // disabled one does not start at boot.
+    expect(task(play, discover).find?.patterns).toEqual([
+      "p2party-signaling.service",
+      "p2party-signaling-*.service",
+    ]);
+    expect(task(play, stop).systemd).toEqual({
+      name: "{{ item | basename }}",
+      state: "stopped",
+      enabled: false,
+    });
+    expect(String(task(play, stop).loop)).toContain(
+      "signaling_units_before_migration.files",
+    );
+
+    expect(at(discover)).toBeLessThan(at(stop));
+    expect(at(stop)).toBeLessThan(at("Apply Postgres migrations"));
+    expect(at(migrate)).toBeLessThan(at("Copy the compiled binary"));
+    expect(at(migrate)).toBeLessThan(
+      at("Deploy the signaling environment file"),
+    );
+    expect(at(migrate)).toBeLessThan(at("Deploy the systemd unit files"));
+    expect(at("Copy the compiled binary")).toBeLessThan(
+      at("Restart signaling services"),
+    );
+
+    // Before the migrations nothing installs the binary or its units, and
+    // nothing but the stop touches a signaling unit.
+    for (const earlier of flatten(play.tasks).slice(0, at(migrate))) {
+      expect(String(earlier.copy?.dest ?? ""), earlier.name).not.toContain(
+        "p2party-server",
+      );
+      expect(String(earlier.template?.dest ?? ""), earlier.name).not.toMatch(
+        /p2party-signaling|server\/\.env/,
+      );
+      if (earlier.systemd && earlier.name !== stop)
+        expect(String(earlier.systemd.name ?? ""), earlier.name).not.toContain(
+          "p2party-signaling",
+        );
+    }
+
+    // A failed migration ends the play with the recovery, the service stopped
+    // and the old binary in place.
+    const report = task(play, "Apply Postgres migrations").rescue?.find(
+      ({ name }) => name === "Report the failed migration and how to recover",
+    );
+    expect(report?.fail?.msg).toContain(
+      "prisma migrate resolve --rolled-back <migration name>",
+    );
+    expect(report?.fail?.msg).toContain("previous binary\nis still in place");
+    expect(report?.fail?.msg).toContain("not supported");
+
+    // Only after the binary is in place are the units enabled and started.
+    expect(task(play, "Restart signaling services").systemd).toMatchObject({
+      state: "restarted",
+      enabled: true,
+    });
+  });
+
   test("every provisioning path installs verified PostgreSQL TLS ahead of client cutover", () => {
     expect(productionVars).toContain("ssl_mode: verify-full");
     expect(signalingEnvironment).toContain(
