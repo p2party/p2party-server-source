@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import handleConnection from "../../src/utils/handleConnection";
 import {
@@ -16,7 +19,12 @@ import type { P2PartyWSClient } from "../../src/wsServer";
 const key = "ab".repeat(32);
 const socket = (verified = false, id = provisionalPeerId(key)) =>
   ({
-    data: { peerId: id, publicKey: key, isVerified: verified },
+    data: {
+      peerId: id,
+      publicKey: key,
+      isVerified: verified,
+      socketGeneration: "00000000-0000-4000-8000-0000000000ee",
+    },
     readyState: 1,
     send: () => 1,
     close: () => {},
@@ -27,6 +35,7 @@ const DAY = 24 * HOUR;
 const NOW = 400 * DAY;
 
 interface PeerRow {
+  socketGeneration?: string | null;
   id: string;
   publicKey: string;
   createdAt: Date;
@@ -66,8 +75,23 @@ const peerTable = (rows: PeerRow[]) => {
       throw new Error(`unsupported Peer filter ${field}`);
     });
   const peer = {
-    findUnique: async ({ where }: { where: { publicKey: string } }) =>
-      rows.find(({ publicKey }) => publicKey === where.publicKey) ?? null,
+    findUnique: async ({
+      where,
+      select,
+    }: {
+      where: { publicKey: string };
+      select: Record<string, true>;
+    }) => {
+      // The commit reads the claim it replaces, never the row's id.
+      expect(select).toEqual({ serverId: true, socketGeneration: true });
+      const row = rows.find(({ publicKey }) => publicKey === where.publicKey);
+      return row
+        ? {
+            serverId: row.serverId,
+            socketGeneration: row.socketGeneration ?? null,
+          }
+        : null;
+    },
     count: async (query?: { where?: Record<string, unknown> }) =>
       rows.filter((row) => matches(row, query?.where)).length,
     findMany: async (query: {
@@ -94,16 +118,26 @@ const peerTable = (rows: PeerRow[]) => {
       create,
     }: {
       where: { publicKey: string };
-      update: { id?: string };
-      create: { id: string; publicKey: string };
+      update: Record<string, unknown>;
+      create: {
+        id: string;
+        publicKey: string;
+        serverId: string;
+        socketGeneration: string;
+      };
     }) => {
+      // An existing row keeps its id: nothing per connection rewrites it.
+      expect(Object.keys(update).sort()).toEqual([
+        "lastPing",
+        "serverId",
+        "socketGeneration",
+      ]);
       const existing = rows.find(
         ({ publicKey }) => publicKey === where.publicKey,
       );
       if (existing) {
-        // A new id keeps the row's memberships, as ON UPDATE CASCADE on
-        // _PeerRooms does.
-        if (update.id !== undefined) existing.id = update.id;
+        existing.serverId = update.serverId as string;
+        existing.socketGeneration = update.socketGeneration as string;
         existing.updatedAt = new Date(NOW);
         return existing;
       }
@@ -111,7 +145,6 @@ const peerTable = (rows: PeerRow[]) => {
         ...create,
         createdAt: new Date(NOW),
         updatedAt: new Date(NOW),
-        serverId: null,
         rooms: 0,
       };
       rows.push(row);
@@ -155,6 +188,7 @@ const provedSocket = (publicKey: string, admission?: AdmissionLease) =>
       peerId: provisionalPeerId(publicKey),
       publicKey,
       isVerified: true,
+      socketGeneration: "00000000-0000-4000-8000-0000000000ef",
       admission,
     },
     readyState: 1,
@@ -162,7 +196,7 @@ const provedSocket = (publicKey: string, admission?: AdmissionLease) =>
     close: () => {},
   }) as unknown as P2PartyWSClient;
 
-const outcome = (attempt: Promise<boolean>) =>
+const outcome = (attempt: Promise<unknown>) =>
   attempt.then(
     (persisted) => (persisted ? "persisted" : "inactive"),
     (error: Error) => error.message,
@@ -218,7 +252,10 @@ describe("proof-gated durable identity", () => {
       },
     } as never;
     const persist = createPersistVerifiedIdentity(database, () => true, 2);
-    expect(await persist(socket(true))).toBe(true);
+    expect(await persist(socket(true))).toEqual({
+      created: true,
+      replaced: null,
+    });
     expect(isolation).toBe("Serializable");
     expect(writes).toBe(1);
     count = 2;
@@ -237,34 +274,195 @@ describe("proof-gated durable identity", () => {
     ).rejects.toThrow("not derived from its key");
   });
 
-  test("a pre-0.1.4 random peer id is re-keyed to the key's derived id at its next proof", async () => {
-    // Servers before 0.1.4 gave every key a random id. Answering with that id
-    // before the signature would tell anyone holding the public key that it
-    // is known, so every socket is bound to the derived id and the old row
-    // takes it at the first proof, keeping its rooms.
-    const legacyId = "0b5e0f2a-7d0c-4c55-9a3e-1f0d2c3b4a59";
-    const table = peerTable([
-      {
-        ...existingRow(legacyId, 30 * DAY, 2 * DAY, { rooms: 3 }),
-        publicKey: key,
-      },
-    ]);
-    const persist = createPersistVerifiedIdentity(
-      table.database,
-      () => {
-        throw new Error("re-keying an identity is not a new identity");
-      },
-      10,
+  test("no connection-time path reads whether a row was re-keyed", async () => {
+    // The one-time migration re-keys every row. Per connection, a row with a
+    // pre-0.1.4 random id and a row with the derived id get the same queries
+    // and the same result: no query selects the id and no update writes it.
+    const recorded = async (storedId: string) => {
+      const queries: string[] = [];
+      const table = peerTable([
+        { ...existingRow(storedId, 30 * DAY, 2 * DAY), publicKey: key },
+      ]);
+      const recording = {
+        $transaction: (
+          run: (tx: unknown) => Promise<unknown>,
+          options: unknown,
+        ) =>
+          (table.database as { $transaction: Function }).$transaction(
+            (tx: { peer: Record<string, Function> }) =>
+              run({
+                peer: Object.fromEntries(
+                  Object.entries(tx.peer).map(([name, query]) => [
+                    name,
+                    (args: unknown) => {
+                      queries.push(`${name} ${JSON.stringify(args)}`);
+                      return query(args);
+                    },
+                  ]),
+                ),
+              }),
+            options,
+          ),
+      };
+      const persist = createPersistVerifiedIdentity(
+        recording as never,
+        () => {
+          throw new Error("an existing identity is not a new identity");
+        },
+        10,
+        () => NOW,
+        "00000000-0000-4000-8000-0000000000aa",
+      );
+      const commit = await persist(provedSocket(key));
+      return { commit, queries, id: table.rows[0]!.id };
+    };
+
+    const derived = await recorded(provisionalPeerId(key));
+    const old = await recorded("0b5e0f2a-7d0c-4c55-9a3e-1f0d2c3b4a59");
+    expect(old.commit).toEqual(derived.commit);
+    expect(old.queries).toEqual(derived.queries);
+    expect(old.id).toBe("0b5e0f2a-7d0c-4c55-9a3e-1f0d2c3b4a59");
+    for (const query of derived.queries) {
+      const args = JSON.parse(query.slice(query.indexOf(" ") + 1)) as {
+        select?: object;
+        update?: object;
+        where?: object;
+      };
+      for (const part of [args.select, args.update, args.where])
+        expect(Object.keys(part ?? {}), query).not.toContain("id");
+    }
+
+    // Structure: no module on the connection path updates a row's id. The
+    // re-key is the migration's job.
+    const src = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "src",
+    );
+    for (const file of [
+      "wsServer.ts",
+      "utils/handleConnection.ts",
+      "utils/handleChallenge.ts",
+      "utils/handleMessage.ts",
+      "utils/peerIdentity.ts",
+      "utils/socketAuth.ts",
+      "pubsub.ts",
+    ]) {
+      const source = readFileSync(join(src, file), "utf8");
+      expect(source, file).not.toMatch(/(?:update|data):\s*\{[^}]*\bid\s*:/);
+      expect(source, file).not.toMatch(/existing\??\.id\b/);
+    }
+  });
+
+  test("a failed routing claim leaves no identity row and no charge", async () => {
+    // The claim is written by the same statement that inserts the row, in the
+    // same transaction: when it fails, the row is rolled back and the charge
+    // given back.
+    const guard = new AdmissionController(
+      { ...admissionLimits, newIdentitiesPerMinute: 20 },
       () => NOW,
     );
+    const lease = () => {
+      const granted = guard.reserve(
+        admissionAddress("203.0.113.7", null, false)!,
+        key,
+      )!;
+      expect(granted.authenticate()).toBe(true);
+      return granted;
+    };
+    const table = peerTable([]);
+    const failingClaim = {
+      $transaction: (
+        run: (tx: unknown) => Promise<unknown>,
+        options: unknown,
+      ) =>
+        (table.database as { $transaction: Function }).$transaction(
+          (tx: { peer: Record<string, Function> }) =>
+            run({
+              peer: {
+                ...tx.peer,
+                upsert: async (args: unknown) => {
+                  await tx.peer.upsert!(args);
+                  throw Object.assign(new Error("claim write failed"), {
+                    code: "P1017",
+                  });
+                },
+              },
+            }),
+          options,
+        ),
+    };
+    const persist = createPersistVerifiedIdentity(failingClaim as never);
 
-    expect(await outcome(persist(provedSocket(key)))).toBe("persisted");
-    expect(table.rows).toHaveLength(1);
-    expect(table.rows[0]).toMatchObject({
-      id: provisionalPeerId(key),
-      publicKey: key,
-      rooms: 3,
+    await expect(persist(provedSocket(key, lease()))).rejects.toThrow(
+      "claim write failed",
+    );
+    expect(table.rows).toEqual([]);
+    // One creation per minute is this address's whole share (5% of 20): it
+    // is still unspent.
+    expect(lease().newIdentity()).toBe(true);
+    expect(lease().newIdentity()).toBe(false);
+  });
+
+  test("two racing first-time sockets of one key are charged once", async () => {
+    // Both see no row and both charge; the loser's insert conflicts, its
+    // retry finds the winner's row, and its charge is given back.
+    const guard = new AdmissionController(
+      { ...admissionLimits, newIdentitiesPerMinute: 2 },
+      () => NOW,
+    );
+    const lease = (address: string) => {
+      const granted = guard.reserve(
+        admissionAddress(address, null, false)!,
+        key,
+      )!;
+      expect(granted.authenticate()).toBe(true);
+      return granted;
+    };
+    const table = peerTable([]);
+    let loserAttempts = 0;
+    const winner = createPersistVerifiedIdentity(table.database);
+    // The winner charges and commits first.
+    expect(await winner(provedSocket(key, lease("198.51.100.1")))).toEqual({
+      created: true,
+      replaced: null,
     });
+    const loser = createPersistVerifiedIdentity({
+      $transaction: (
+        run: (tx: unknown) => Promise<unknown>,
+        options: unknown,
+      ) =>
+        (table.database as { $transaction: Function }).$transaction(
+          async (tx: { peer: Record<string, Function> }) => {
+            if (++loserAttempts > 1) return run(tx);
+            // The first attempt's snapshot predates the winner's insert.
+            return run({
+              peer: {
+                ...tx.peer,
+                findUnique: async () => null,
+                upsert: async () => {
+                  throw Object.assign(new Error("write conflict"), {
+                    code: "P2034",
+                  });
+                },
+              },
+            });
+          },
+          options,
+        ),
+    } as never);
+
+    // The loser commits as a second socket of the identity, replacing the
+    // winner's claim, and keeps no charge.
+    expect(await loser(provedSocket(key, lease("198.51.100.2")))).toMatchObject(
+      { created: false, replaced: { serverId: expect.any(String) } },
+    );
+    expect(loserAttempts).toBe(2);
+    expect(table.rows).toHaveLength(1);
+    // A budget of 2 with one creation spent admits exactly one more.
+    expect(lease("198.51.100.3").newIdentity()).toBe(true);
+    expect(lease("198.51.100.4").newIdentity()).toBe(false);
   });
 
   test("identity creation is charged to the socket's source key", async () => {

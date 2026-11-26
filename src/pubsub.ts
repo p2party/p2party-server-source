@@ -1,24 +1,27 @@
-import { randomUUID } from "node:crypto";
-
 import pg from "pg";
 
 import { postgresConnection } from "./db/ssl";
+import { SERVER_ID } from "./serverId";
 import { prisma } from "./prismaClient";
 import { wsClients } from "./wsServer";
 import { peerLogTag } from "./utils/logTag";
+import { describeError } from "./utils/logError";
 import {
+  evictSocket,
   hasPendingActivation,
   isCurrentVerifiedSocket,
 } from "./utils/socketAuth";
 
 import type { ProcessPrismaClient } from "./prismaClient";
 import type { P2PartyWSClient } from "./wsServer";
+import type { RoutingClaim } from "./utils/peerIdentity";
 
 /**
  * Cross-instance signal routing.
  *
- * Supported production currently runs one signaling process because
- * same-identity fencing is process-local. Operators can explicitly opt into
+ * Supported production currently runs one signaling process because one
+ * identity's room mutations are ordered only within a process (sessions are
+ * fenced across processes: evictReplacedClaim). Operators can explicitly opt into
  * multiple Caddy upstreams, and each process then holds its own in-memory
  * `wsClients` map. With N workers, a pair shares a process with probability
  * 1/N. Without the routing below, every other pair's offer, answer and ICE
@@ -30,8 +33,7 @@ import type { P2PartyWSClient } from "./wsServer";
  * drains its rows, and delivers locally.
  */
 
-/** Identifies this process for the lifetime of the process. */
-export const SERVER_ID = randomUUID();
+export { SERVER_ID };
 
 const CHANNEL = `server_${SERVER_ID}`;
 /** Catches anything a lost NOTIFY would otherwise strand. */
@@ -50,6 +52,14 @@ export const PENDING_SIGNAL_MAX_AGE_MS = 120_000;
  * age out per period, a row lives at most MAX_AGE plus this.
  */
 const PENDING_SIGNAL_SWEEP_MS = 30_000;
+/**
+ * How often each process checks that the claims of its current sockets are
+ * still its own. It bounds how long a socket replaced on another instance can
+ * stay live when the eviction row for it is lost.
+ */
+export const CLAIM_RECONCILIATION_MS = 30_000;
+/** Peer ids one reconciliation query names. */
+const CLAIM_RECONCILIATION_BATCH = 1_000;
 /** Rows one delete statement may remove, as in room retention. */
 export const PENDING_SIGNAL_SWEEP_BATCH = 1_000;
 /** Batches one sweep run may delete, so a run is bounded after an outage. */
@@ -73,6 +83,7 @@ const SESSION_KEEPALIVE = {
 let listenClient: pg.Client | undefined;
 let safetyPoll: ReturnType<typeof setInterval> | undefined;
 let pendingSignalSweep: ReturnType<typeof setInterval> | undefined;
+let claimReconciliation: ReturnType<typeof setInterval> | undefined;
 
 type RoutingStore = Pick<ProcessPrismaClient, "peer" | "pendingSignal">;
 type ActivityClient = Pick<pg.Client, "query">;
@@ -80,6 +91,8 @@ type ActivityClient = Pick<pg.Client, "query">;
 interface PendingSignalFrame {
   id: string;
   targetPeerId: string;
+  /** "frame" for a relayed frame, "evict" for an eviction (schema.prisma). */
+  kind?: string;
   payload: string;
 }
 
@@ -89,6 +102,14 @@ export const deliverPendingSignalsLocally = (
 ): string[] => {
   const settled: string[] = [];
   for (const signal of signals) {
+    if (signal.kind === "evict") {
+      // A newer session of this identity committed on another instance. The
+      // payload names the replaced socket's generation, so a socket of the
+      // same identity that is newer still is left alone. Done either way.
+      evictSocket(clients, signal.targetPeerId, signal.payload);
+      settled.push(signal.id);
+      continue;
+    }
     const target = clients.get(signal.targetPeerId);
     if (!target) {
       // A proved socket is registered only once its routing claim commits.
@@ -122,7 +143,10 @@ const drainPendingSignals = async (): Promise<void> => {
       where: { id: { in: delivered } },
     });
   } catch (error) {
-    console.error("p2party: failed to drain pending signals", error);
+    console.error(
+      "p2party: failed to drain pending signals",
+      describeError(error),
+    );
   }
 };
 
@@ -163,7 +187,10 @@ export const startPendingSignalSweep = (
 ): ReturnType<typeof setInterval> =>
   every(() => {
     sweepStalePendingSignals(store, now()).catch((error: unknown) => {
-      console.error("p2party: failed to sweep stale pending signals", error);
+      console.error(
+        "p2party: failed to sweep stale pending signals",
+        describeError(error),
+      );
     });
   }, PENDING_SIGNAL_SWEEP_MS);
 
@@ -233,7 +260,7 @@ export const clearDeadServerState = async (
 
   await store.peer.updateMany({
     where: { serverId: { in: dead } },
-    data: { serverId: null },
+    data: { serverId: null, socketGeneration: null },
   });
   await store.pendingSignal.deleteMany({
     where: { targetServerId: { in: dead } },
@@ -319,7 +346,10 @@ export const initPubSub = async (): Promise<void> => {
 
   // A dropped LISTEN connection would otherwise strand every later signal.
   listenClient.on("error", (error) => {
-    console.error("p2party: pubsub listen connection error", error);
+    console.error(
+      "p2party: pubsub listen connection error",
+      describeError(error),
+    );
   });
 
   safetyPoll = setInterval(() => void drainPendingSignals(), SAFETY_POLL_MS);
@@ -330,7 +360,10 @@ export const initPubSub = async (): Promise<void> => {
   try {
     await sweepStalePendingSignals();
   } catch (error) {
-    console.error("p2party: failed to sweep stale pending signals", error);
+    console.error(
+      "p2party: failed to sweep stale pending signals",
+      describeError(error),
+    );
   }
   const client = listenClient;
   try {
@@ -344,10 +377,11 @@ export const initPubSub = async (): Promise<void> => {
   } catch (error) {
     console.error(
       "p2party: failed to clear dead servers' routing state",
-      error,
+      describeError(error),
     );
   }
   pendingSignalSweep = startPendingSignalSweep();
+  claimReconciliation = startClaimReconciliation();
 };
 
 /**
@@ -395,13 +429,13 @@ export const sendToPeer = async (
     console.error(
       "p2party: failed to route signal to peer",
       peerLogTag(toPeerId),
-      error,
+      describeError(error),
     );
     return false;
   }
 };
 
-/** A server id as claimPeer writes it: SERVER_ID, a lowercase UUID. */
+/** A server id as an identity commit writes it: SERVER_ID, a lowercase UUID. */
 const SERVER_ID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -419,11 +453,17 @@ export const sendToPeerOnServer = async (
   payload: string,
   store: Pick<RoutingStore, "pendingSignal"> = prisma,
   notifier: ActivityClient | undefined = listenClient,
+  kind: "frame" | "evict" = "frame",
 ): Promise<boolean> => {
   if (!notifier || !SERVER_ID_SHAPE.test(serverId)) return false;
   try {
     await store.pendingSignal.create({
-      data: { targetServerId: serverId, targetPeerId: toPeerId, payload },
+      data: {
+        targetServerId: serverId,
+        targetPeerId: toPeerId,
+        kind,
+        payload,
+      },
     });
 
     // The NOTIFY carries no payload: the channel name alone tells the owner to
@@ -435,45 +475,144 @@ export const sendToPeerOnServer = async (
     console.error(
       "p2party: failed to route signal to peer",
       peerLogTag(toPeerId),
-      error,
+      describeError(error),
     );
     return false;
   }
 };
 
 /**
- * Record that this process now holds the socket for `peerId`.
+ * Close the socket whose claim a newer session of its identity replaced and
+ * did not give back: on this instance at once, on another one through its
+ * queue (the same row-plus-NOTIFY path as relayed frames).
  *
- * The caller must fail the socket closed when this returns false. Treating a
- * failed write as success would activate a socket that sibling instances
- * cannot route to.
+ * An eviction row carries no SDP or ICE, only the replaced socket's
+ * generation. A lost NOTIFY is caught by the owner's next safety poll (5 s); a
+ * row the owner never reads (it was swept after 120 s, or the owner's
+ * database access failed) is caught by the owner's claim reconciliation
+ * (CLAIM_RECONCILIATION_MS). If the owner is dead, its sockets are gone and
+ * the next startup clears its rows.
  */
-export const claimPeer = async (peerId: string): Promise<boolean> => {
-  try {
-    await prisma.peer.update({
-      where: { id: peerId },
-      data: { serverId: SERVER_ID },
-    });
-    return true;
-  } catch (error) {
-    console.error("p2party: failed to claim peer", peerLogTag(peerId), error);
-    return false;
-  }
+export const evictReplacedClaim = async (
+  peerId: string,
+  replaced: RoutingClaim | null,
+  clients: Map<string, P2PartyWSClient> = wsClients,
+  self: string = SERVER_ID,
+  store: Pick<RoutingStore, "pendingSignal"> = prisma,
+  notifier: ActivityClient | undefined = listenClient,
+): Promise<void> => {
+  if (!replaced?.socketGeneration) return;
+  if (replaced.serverId === self)
+    evictSocket(clients, peerId, replaced.socketGeneration);
+  else
+    await sendToPeerOnServer(
+      peerId,
+      replaced.serverId,
+      replaced.socketGeneration,
+      store,
+      notifier,
+      "evict",
+    );
 };
 
 /**
- * Release a peer this process no longer holds. Guarded on SERVER_ID so a
- * delayed close cannot clear a claim that another instance has already taken
- * after the peer reconnected there.
+ * Close every current socket here whose row another instance now claims.
+ *
+ * That instance committed a newer session for the identity, so this socket
+ * was replaced, and its eviction row did not arrive. Each socket's generation
+ * is recorded before the query and compared after it, so a socket that became
+ * current here meanwhile (with its own, newer claim) is left alone, as is a
+ * socket still activating. A cleared claim (null) is not a replacement.
+ * Returns how many sockets were closed.
  */
-export const releasePeer = async (peerId: string): Promise<void> => {
+export const closeSocketsClaimedElsewhere = async (
+  store: Pick<RoutingStore, "peer"> = prisma,
+  clients: Map<string, P2PartyWSClient> = wsClients,
+  self: string = SERVER_ID,
+): Promise<number> => {
+  const current = new Map<string, string>();
+  for (const [peerId, ws] of clients)
+    if (
+      isCurrentVerifiedSocket(clients, ws) &&
+      !hasPendingActivation(clients, peerId)
+    )
+      current.set(peerId, ws.data.socketGeneration);
+  const ids = [...current.keys()];
+  let closed = 0;
+  for (let start = 0; start < ids.length; start += CLAIM_RECONCILIATION_BATCH) {
+    const claimedElsewhere = await store.peer.findMany({
+      where: {
+        id: { in: ids.slice(start, start + CLAIM_RECONCILIATION_BATCH) },
+        AND: [{ serverId: { not: null } }, { serverId: { not: self } }],
+      },
+      select: { id: true },
+    });
+    for (const { id } of claimedElsewhere) {
+      const generation = current.get(id)!;
+      const ws = clients.get(id);
+      if (
+        ws?.data.socketGeneration === generation &&
+        !hasPendingActivation(clients, id) &&
+        evictSocket(clients, id, generation)
+      )
+        closed++;
+    }
+  }
+  return closed;
+};
+
+/** Run closeSocketsClaimedElsewhere every CLAIM_RECONCILIATION_MS. */
+export const startClaimReconciliation = (
+  store: Pick<RoutingStore, "peer"> = prisma,
+  every: (task: () => void, ms: number) => ReturnType<typeof setInterval> = (
+    task,
+    ms,
+  ) => setInterval(task, ms),
+): ReturnType<typeof setInterval> =>
+  every(() => {
+    closeSocketsClaimedElsewhere(store).then(
+      (closed) => {
+        // The count only, as for the startup clearing.
+        if (closed > 0)
+          console.warn(
+            `p2party: closed ${String(closed)} socket(s) replaced on another instance`,
+          );
+      },
+      (error: unknown) => {
+        console.error(
+          "p2party: failed to reconcile routing claims",
+          describeError(error),
+        );
+      },
+    );
+  }, CLAIM_RECONCILIATION_MS);
+
+/**
+ * Release the routing claim of one socket this process no longer holds.
+ *
+ * Compare-and-delete in one statement on the claim's owner token: this
+ * process's id and the socket's generation. A claim another socket wrote
+ * since, on this instance or another, does not match, so however late this
+ * release lands it cannot clear a successor's claim.
+ */
+export const releasePeer = async (
+  peerId: string,
+  socketGeneration: string,
+  store: Pick<RoutingStore, "peer"> = prisma,
+  self: string = SERVER_ID,
+): Promise<void> => {
+  if (socketGeneration.length === 0) return;
   try {
-    await prisma.peer.updateMany({
-      where: { id: peerId, serverId: SERVER_ID },
-      data: { serverId: null },
+    await store.peer.updateMany({
+      where: { id: peerId, serverId: self, socketGeneration },
+      data: { serverId: null, socketGeneration: null },
     });
   } catch (error) {
-    console.error("p2party: failed to release peer", peerLogTag(peerId), error);
+    console.error(
+      "p2party: failed to release peer",
+      peerLogTag(peerId),
+      describeError(error),
+    );
   }
 };
 
@@ -483,16 +622,21 @@ export const shutdownPubSub = async (): Promise<void> => {
   safetyPoll = undefined;
   if (pendingSignalSweep) clearInterval(pendingSignalSweep);
   pendingSignalSweep = undefined;
+  if (claimReconciliation) clearInterval(claimReconciliation);
+  claimReconciliation = undefined;
   try {
     await prisma.pendingSignal.deleteMany({
       where: { targetServerId: SERVER_ID },
     });
     await prisma.peer.updateMany({
       where: { serverId: SERVER_ID },
-      data: { serverId: null },
+      data: { serverId: null, socketGeneration: null },
     });
   } catch (error) {
-    console.error("p2party: error during pubsub shutdown", error);
+    console.error(
+      "p2party: error during pubsub shutdown",
+      describeError(error),
+    );
   } finally {
     await listenClient?.end().catch(() => undefined);
     listenClient = undefined;

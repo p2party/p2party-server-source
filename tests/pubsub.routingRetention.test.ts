@@ -79,11 +79,11 @@ const routingStore = (
         data,
       }: {
         where: { serverId: { in: string[] } };
-        data: { serverId: null };
+        data: { serverId: null; socketGeneration: null };
       }) => {
         keysOnly(where, ["serverId"]);
         keysOnly(where.serverId, ["in"]);
-        expect(data).toEqual({ serverId: null });
+        expect(data).toEqual({ serverId: null, socketGeneration: null });
         let count = 0;
         for (const peer of peers)
           if (

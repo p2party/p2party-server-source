@@ -2,15 +2,22 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { expect } from "bun:test";
 
 import handleChallenge from "../../src/utils/handleChallenge";
+import { activateProvedSocket } from "../../src/utils/handleMessage";
+import { evictReplacedClaim } from "../../src/pubsub";
 import {
-  activateVerifiedSocket,
   createFreshSocketChallenge,
   isCurrentVerifiedSocket,
 } from "../../src/utils/socketAuth";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
+import type {
+  IdentityCommit,
+  RoutingClaim,
+} from "../../src/utils/peerIdentity";
 
 export const PEER_ID = "00000000-0000-4000-8000-000000000001";
+/** The instance these sockets live on. */
+export const HERE = "11111111-1111-4111-8111-111111111111";
 const KEY = "ab".repeat(32);
 const SIGNATURE = "ef".repeat(64);
 /** The close an authenticated socket gets when a newer session replaces it. */
@@ -83,21 +90,76 @@ export const live = (
     .filter((ws) => ws.readyState === 1 && isCurrentVerifiedSocket(clients, ws))
     .map((ws) => ws.name);
 
+/**
+ * The identity row's routing claim, with the semantics of the real
+ * statements: a commit overwrites it and reports what it replaced; undo and
+ * release compare the owner token (instance and socket generation).
+ */
+export const claimStore = (initial: RoutingClaim | null = null) => {
+  let claim: RoutingClaim | null = initial;
+  const mine = (ws: P2PartyWSClient): RoutingClaim => ({
+    serverId: HERE,
+    socketGeneration: ws.data.socketGeneration,
+  });
+  const owns = (ws: P2PartyWSClient) =>
+    claim?.serverId === HERE &&
+    claim.socketGeneration === ws.data.socketGeneration;
+  return {
+    claim: () => claim,
+    /** A commit that waits for `gate`, then writes the claim when it is true. */
+    commit:
+      (gate: Promise<boolean> | boolean = true) =>
+      async (ws: P2PartyWSClient): Promise<IdentityCommit | false> => {
+        if (!(await gate)) return false;
+        const replaced = claim;
+        claim = mine(ws);
+        return { created: false, replaced };
+      },
+    undo: async (ws: P2PartyWSClient, commit: IdentityCommit) => {
+      if (!owns(ws)) return false;
+      claim = commit.replaced;
+      return true;
+    },
+    release: async (_peerId: string, socketGeneration: string) => {
+      if (
+        claim?.serverId === HERE &&
+        claim.socketGeneration === socketGeneration
+      )
+        claim = null;
+    },
+    claimOf: (ws: P2PartyWSClient) => mine(ws),
+    /** Another instance's commit for the same identity. */
+    takeOver: (other: RoutingClaim) => {
+      claim = other;
+    },
+  };
+};
+
+/** The real activation, over `clients` and a claim store, on instance HERE. */
+export const activate = (
+  clients: Map<string, P2PartyWSClient>,
+  store: ReturnType<typeof claimStore>,
+  ws: P2PartyWSClient,
+  gate: Promise<boolean> | boolean = true,
+  evicted: { peerId: string; replaced: RoutingClaim | null }[] = [],
+) =>
+  activateProvedSocket(ws, {
+    clients,
+    persist: store.commit(gate),
+    undo: store.undo,
+    evict: async (peerId, replaced) => {
+      evicted.push({ peerId, replaced });
+      await evictReplacedClaim(peerId, replaced, clients, HERE);
+    },
+  });
+
 /** An authenticated socket that already owns PEER_ID in `clients`. */
 export const establishedSocket = async (
   clients: Map<string, P2PartyWSClient>,
+  store: ReturnType<typeof claimStore>,
 ) => {
   const old = socket("old");
   expect(await prove(old)).toBeTruthy();
-  expect(
-    await activateVerifiedSocket(
-      clients,
-      old,
-      async () => true,
-      async () => {
-        throw new Error("a committed activation releases nothing");
-      },
-    ),
-  ).toBe(true);
+  expect(await activate(clients, store, old)).toBeTruthy();
   return old;
 };

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { BUILD_MISMATCH_CLOSE_CODE, PROTOCOL_VERSION } from "./protocolV4";
 
 export interface SocketAuthState {
   peerId: string;
@@ -81,7 +81,7 @@ export const REPLACED_SESSION_CLOSE_REASON =
  * Those keep closing with no code so the SDK's reconnect ladder keeps
  * retrying.
  */
-export const MALFORMED_PROTOCOL_CLOSE_CODE = 1003;
+export const MALFORMED_PROTOCOL_CLOSE_CODE = BUILD_MISMATCH_CLOSE_CODE;
 
 export interface TurnCredentials {
   urls: string[];
@@ -430,26 +430,46 @@ export const unregisterSocketIfCurrent = <T extends SocketAuthClient>(
 };
 
 /**
- * Remove a closed socket and release this process's routing claim when it was
- * the last socket of its identity here.
+ * Remove a closed socket and release its routing claim if it was current.
  *
- * Every socket of one identity in this process shares one claim
- * (Peer.serverId). A replaced socket is no longer registered and releases
- * nothing. A current socket whose successor is still activating releases
- * nothing either: the successor's claim write may already be in flight, and
- * a release landing after it would clear it. That successor releases the
- * claim itself if it then fails.
+ * The release compares the claim's owner token (this process and this
+ * socket's generation) in one statement, so it clears only a claim this
+ * socket wrote. A successor's claim, on this or another instance, survives a
+ * release that lands after it, however late. A replaced socket is no longer
+ * registered and releases nothing.
  */
 export const retireClosedSocket = async <T extends SocketAuthClient>(
   clients: Map<string, T>,
   ws: T,
-  releasePeer: (peerId: string) => Promise<void>,
+  releasePeer: (peerId: string, socketGeneration: string) => Promise<void>,
 ): Promise<void> => {
-  if (
-    unregisterSocketIfCurrent(clients, ws) &&
-    !hasPendingActivation(clients, ws.data.peerId)
-  )
-    await releasePeer(ws.data.peerId);
+  if (unregisterSocketIfCurrent(clients, ws))
+    await releasePeer(ws.data.peerId, ws.data.socketGeneration);
+};
+
+/**
+ * Close the socket of `peerId` whose generation is `socketGeneration`,
+ * because a newer session of its identity committed elsewhere: registered or
+ * still activating, it is deauthorized and closed with the contract's
+ * replacement close. Returns whether such a socket was here.
+ */
+export const evictSocket = <T extends ReplaceableSocketAuthClient>(
+  clients: Map<string, T>,
+  peerId: string,
+  socketGeneration: string,
+): boolean => {
+  if (socketGeneration.length === 0) return false;
+  const pending = pendingActivations.get(clients)?.get(peerId) ?? [];
+  const target = [clients.get(peerId), ...pending].find(
+    (ws): ws is T =>
+      ws !== undefined &&
+      (ws as T).data.socketGeneration === socketGeneration &&
+      (ws as T).data.isVerified,
+  );
+  if (!target) return false;
+  target.data.isVerified = false;
+  target.close(PERMANENT_CLOSE_CODE, REPLACED_SESSION_CLOSE_REASON);
+  return true;
 };
 
 /**
@@ -463,18 +483,19 @@ export const retireClosedSocket = async <T extends SocketAuthClient>(
  * commits, the earlier one closes as replaced. No await separates the final
  * checks from registration, so exactly one socket ends up current.
  *
- * On failure the socket is closed bare (retryable) and its routing claim is
- * released unless another socket of the identity holds or is activating it
- * here, since those share the same claim.
+ * A socket that committed but does not become current hands what it wrote to
+ * `undo`, which takes it back by owner token. Returns the commit's result for
+ * the socket that became current, false otherwise.
  */
 export const activateVerifiedSocket = async <
   T extends ReplaceableSocketAuthClient,
+  C extends object,
 >(
   clients: Map<string, T>,
   ws: T,
-  commit: (peerId: string) => Promise<boolean>,
-  releasePeer: (peerId: string) => Promise<void>,
-): Promise<boolean> => {
+  commit: (peerId: string) => Promise<C | false>,
+  undo: (committed: C) => Promise<void>,
+): Promise<C | false> => {
   const { peerId } = ws.data;
   if (
     ws.readyState !== 1 ||
@@ -499,7 +520,7 @@ export const activateVerifiedSocket = async <
   if (!pending) byPeer.set(peerId, (pending = new Set()));
   pending.add(ws);
 
-  let committed = false;
+  let committed: C | false = false;
   try {
     committed = await commit(peerId);
   } catch {
@@ -518,17 +539,26 @@ export const activateVerifiedSocket = async <
   if (committed && !replaced && ws.readyState === 1 && ws.data.isVerified) {
     registerVerifiedSocket(clients, ws);
     ws.data.isAuthenticating = false;
-    return true;
+    return committed;
   }
 
+  // A socket evicted while it committed was closed with the replacement code
+  // already (evictSocket).
+  const evicted = !ws.data.isVerified;
   ws.data.isVerified = false;
   ws.data.isAuthenticating = false;
   // A newer session took over while this one committed: final, like the
   // eviction it would otherwise have suffered. Any other failure may retry.
-  if (committed && replaced)
-    ws.close(PERMANENT_CLOSE_CODE, REPLACED_SESSION_CLOSE_REASON);
-  else ws.close();
-  if (!clients.has(peerId) && !hasPendingActivation(clients, peerId))
-    await releasePeer(peerId);
+  if (!evicted) {
+    if (committed && replaced)
+      ws.close(PERMANENT_CLOSE_CODE, REPLACED_SESSION_CLOSE_REASON);
+    else ws.close();
+  }
+  if (committed)
+    try {
+      await undo(committed);
+    } catch {
+      // The caller's undo logs its own failure; the socket is closed anyway.
+    }
   return false;
 };

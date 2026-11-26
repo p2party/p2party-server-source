@@ -1,14 +1,20 @@
 /** The one signaling protocol version this server speaks; there is no negotiation. */
 export const PROTOCOL_VERSION = 4;
 /**
- * The close for a frame whose `protocolVersion` is not PROTOCOL_VERSION, or
- * that has none (only `pong` carries no version). 1003 is the close-code
- * contract's build-mismatch code (MALFORMED_PROTOCOL_CLOSE_CODE in
- * socketAuth.ts): the same build sends the same version on every socket, so
- * the client's reconnect ladder must stop rather than retry. The reason names
- * only this server's version, never a value the client sent.
+ * The close-code contract's code for a build mismatch, which retrying on a
+ * new socket cannot fix: the SDK's 1003 ("unsupported data"), which its
+ * reconnect ladder treats as final. Defined here once; socketAuth.ts names it
+ * MALFORMED_PROTOCOL_CLOSE_CODE for frames of the right version and the
+ * wrong shape.
  */
-export const PROTOCOL_VERSION_MISMATCH_CLOSE_CODE = 1003;
+export const BUILD_MISMATCH_CLOSE_CODE = 1003;
+/**
+ * The close for a frame whose `protocolVersion` is not PROTOCOL_VERSION, or
+ * that has none (only `pong` carries no version): the same build sends the
+ * same version on every socket. The reason names only this server's version,
+ * never a value the client sent.
+ */
+export const PROTOCOL_VERSION_MISMATCH_CLOSE_CODE = BUILD_MISMATCH_CLOSE_CODE;
 export const PROTOCOL_VERSION_MISMATCH_REASON = `Unsupported signaling protocol version; this server speaks version ${String(PROTOCOL_VERSION)}`;
 export const MAX_SIGNALING_MESSAGE_CHARS = 512 * 1024;
 export const MAX_SDP_CHARS = 256 * 1024;

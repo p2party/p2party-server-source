@@ -1,5 +1,6 @@
 import { isUUID, isHexadecimal } from "./formats";
-import { persistVerifiedIdentity } from "./peerIdentity";
+import { persistVerifiedIdentity, undoIdentityCommit } from "./peerIdentity";
+import type { IdentityCommit, RoutingClaim } from "./peerIdentity";
 
 import handleChallenge from "./handleChallenge";
 import handleRoom from "./handleRoom";
@@ -24,7 +25,9 @@ import {
   MALFORMED_PROTOCOL_CLOSE_CODE,
 } from "./socketAuth";
 import { isExactPongMessage } from "./handlePong";
-import { claimPeer, releasePeer } from "../pubsub";
+import { evictReplacedClaim } from "../pubsub";
+import { describeError } from "./logError";
+import { peerLogTag } from "./logTag";
 
 import {
   wsClients,
@@ -60,6 +63,59 @@ class MalformedProtocolV4Message extends Error {}
  * contract's version-mismatch code and reason (protocolV4.ts).
  */
 class UnsupportedProtocolVersion extends Error {}
+
+export interface ProvedSocketActivation {
+  clients: Map<string, P2PartyWSClient>;
+  /** Persist the identity and write this socket's claim, in one transaction. */
+  persist: (ws: P2PartyWSClient) => Promise<IdentityCommit | false>;
+  /** Take back a commit by owner token; whether the replaced claim is back. */
+  undo: (ws: P2PartyWSClient, commit: IdentityCommit) => Promise<boolean>;
+  /** Close the socket that held a claim which stays replaced. */
+  evict: (peerId: string, replaced: RoutingClaim | null) => Promise<void>;
+}
+
+/** This process's registry, store and queue; built per call (wsServer imports this module). */
+const processActivation = (): ProvedSocketActivation => ({
+  clients: wsClients,
+  persist: (ws) => persistVerifiedIdentity(ws),
+  undo: (ws, commit) => undoIdentityCommit(ws, commit),
+  evict: (peerId, replaced) => evictReplacedClaim(peerId, replaced),
+});
+
+/**
+ * Commit a proved socket's identity and claim, then make it current.
+ *
+ * A socket that committed but does not become current (it closed meanwhile,
+ * or a newer session of its identity became current first) gives the claim it
+ * replaced back. If a successor holds the claim by then, the replaced socket
+ * stays replaced, so it is closed: no state of the failed socket is left, and
+ * exactly one socket of the identity stays live. Returns the commit for the
+ * socket that became current; its caller closes the replaced socket after
+ * activating it.
+ */
+export const activateProvedSocket = (
+  ws: P2PartyWSClient,
+  activation: ProvedSocketActivation = processActivation(),
+): Promise<IdentityCommit | false> =>
+  activateVerifiedSocket(
+    activation.clients,
+    ws,
+    () => activation.persist(ws),
+    async (commit) => {
+      try {
+        if (!(await activation.undo(ws, commit)))
+          await activation.evict(ws.data.peerId, commit.replaced);
+      } catch (error) {
+        // The claim keeps naming this instance, so frames for the identity
+        // still reach this instance; a row this socket created stays.
+        console.error(
+          "p2party: could not take back a failed activation's commit",
+          peerLogTag(ws.data.peerId),
+          describeError(error),
+        );
+      }
+    },
+  );
 
 const hasExactKeys = (value: object, allowed: readonly string[]): boolean => {
   const keys = Object.keys(value);
@@ -227,31 +283,26 @@ const handleMessage = async (
               ws.close(1013, "Identity admission limit reached");
               break;
             }
-            // Persist the identity and record which instance now owns this
-            // socket, so the other workers can route signals here instead of
-            // dropping them. Awaited: a peer that is routable before it is
-            // claimed is a lost signal. Only once both commit does this socket
-            // replace an older one for the same identity; until then that one
-            // keeps working.
-            if (
-              !(await activateVerifiedSocket(
-                wsClients,
-                ws,
-                async (peerId) =>
-                  (await persistVerifiedIdentity(ws)) &&
-                  (await claimPeer(peerId)),
-                releasePeer,
-              ))
-            )
-              break;
+            // Persist the identity and record which instance and socket now
+            // own it, in one transaction, so the other workers can route
+            // signals here instead of dropping them. Awaited: a peer that is
+            // routable before it is claimed is a lost signal. Only once that
+            // commits does this socket replace an older one for the same
+            // identity; until then that one keeps working.
+            const committed = await activateProvedSocket(ws);
+            if (!committed) break;
             // activateVerifiedSocket re-checks exact registry ownership after
-            // claimPeer's await. No await belongs between that fence and these
-            // activation side effects.
+            // the commit's await. No await belongs between that fence and
+            // these activation side effects.
             ws.send(JSON.stringify(authenticated));
             if (ws.data.authenticationTimeout)
               clearTimeout(ws.data.authenticationTimeout);
             ws.subscribe("global");
             events.open(ws);
+            // An older socket of this identity whose claim this commit took:
+            // on this instance registration closed it; on another one, that
+            // instance is told to.
+            await evictReplacedClaim(ws.data.peerId, committed.replaced);
           }
         } else {
           throw new MalformedProtocolV4Message(
@@ -381,7 +432,7 @@ const handleMessage = async (
       }
     }
   } catch (error) {
-    console.error(error);
+    console.error("p2party: signaling frame refused", describeError(error));
 
     // A version mismatch and the nine malformed-shape throws above are
     // provably a client-build mismatch that retrying can never fix; every

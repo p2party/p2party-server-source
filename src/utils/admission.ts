@@ -178,6 +178,8 @@ interface CreationWindow {
   count: number;
   /** Creations per source key and per /48 in this window; at most 2 * `count` entries. */
   bySource: Map<string, number>;
+  /** Creations in this window charged without a lease (process budget only). */
+  leaseless: number;
 }
 export interface AdmissionLease {
   release(): void;
@@ -186,6 +188,11 @@ export interface AdmissionLease {
   roomMutation(): boolean;
   /** Charge one new durable identity to this socket's source key and /48, then the process. */
   newIdentity(): boolean;
+  /**
+   * Give back this socket's identity charge: its insert did not win, or was
+   * undone. A no-op once the window it was charged to has ended.
+   */
+  refundIdentity(): void;
   /** Whether newMembership() would succeed now. Charges nothing. */
   canAddMembership(): boolean;
   /** Charge one new room membership to this socket's source key and /48, then the process. */
@@ -201,8 +208,8 @@ export class AdmissionController {
   private identities: BucketTable;
   private connections = 0;
   private created: Record<Creation, CreationWindow> = {
-    identity: { start: 0, count: 0, bySource: new Map() },
-    membership: { start: 0, count: 0, bySource: new Map() },
+    identity: { start: 0, count: 0, bySource: new Map(), leaseless: 0 },
+    membership: { start: 0, count: 0, bySource: new Map(), leaseless: 0 },
   };
   constructor(
     private readonly limits = admissionLimits,
@@ -233,6 +240,7 @@ export class AdmissionController {
     // A public key is public: unproved sockets must never reserve its identity
     // quota, otherwise anyone could lock a known user's key out of the service.
     let key: Bucket | undefined;
+    let identityCharge: CreationWindow | undefined;
     this.ips.open(sources.key, address);
     if (block) this.blocks.open(sources.block!, block);
     this.connections++;
@@ -268,7 +276,15 @@ export class AdmissionController {
         ++this.identities.use(identity, this.now()).rooms <=
           this.limits.roomMutationsPerIdentityPerMinute,
       // Creation needs a proved socket; unproved ones only read.
-      newIdentity: () => !released && !!key && this.create("identity", sources),
+      newIdentity: () => {
+        if (released || !key) return false;
+        identityCharge = this.charge("identity", sources);
+        return identityCharge !== undefined;
+      },
+      refundIdentity: () => {
+        if (identityCharge) this.refund("identity", identityCharge, sources);
+        identityCharge = undefined;
+      },
       canAddMembership: () =>
         !released && !!key && this.create("membership", sources, false),
       newMembership: () =>
@@ -282,21 +298,80 @@ export class AdmissionController {
     sources?: AdmissionSources,
     charge = true,
   ): boolean {
+    return charge
+      ? this.charge(kind, sources) !== undefined
+      : this.admits(kind, sources);
+  }
+
+  private admits(kind: Creation, sources?: AdmissionSources): boolean {
+    const window = this.window(kind);
+    const limits = this.charges(kind, sources);
+    return (
+      limits.every(
+        ([source, limit]) => (window.bySource.get(source) ?? 0) < limit,
+      ) && window.count < this.budget(kind)
+    );
+  }
+
+  /** Charge one creation; the window charged, or undefined when refused. */
+  private charge(
+    kind: Creation,
+    sources?: AdmissionSources,
+  ): CreationWindow | undefined {
+    if (!this.admits(kind, sources)) return undefined;
+    const window = this.window(kind);
+    for (const [source] of this.charges(kind, sources))
+      window.bySource.set(source, (window.bySource.get(source) ?? 0) + 1);
+    window.count++;
+    if (!sources) window.leaseless++;
+    return window;
+  }
+
+  /** Undo one charge, if the window it was made in is still the current one. */
+  private refund(
+    kind: Creation,
+    window: CreationWindow,
+    sources?: AdmissionSources,
+  ): void {
+    if (this.created[kind] !== window || window.count === 0) return;
+    window.count--;
+    if (!sources) window.leaseless = Math.max(0, window.leaseless - 1);
+    for (const [source] of this.charges(kind, sources)) {
+      const count = (window.bySource.get(source) ?? 0) - 1;
+      if (count > 0) window.bySource.set(source, count);
+      else window.bySource.delete(source);
+    }
+  }
+
+  private budget(kind: Creation): number {
+    return kind === "identity"
+      ? this.limits.newIdentitiesPerMinute
+      : this.limits.newMembershipsPerMinute;
+  }
+
+  /** The kind's current window, started afresh once a minute has passed. */
+  private window(kind: Creation): CreationWindow {
     const now = this.now();
-    const budget =
-      kind === "identity"
-        ? this.limits.newIdentitiesPerMinute
-        : this.limits.newMembershipsPerMinute;
-    let window = this.created[kind];
-    if (now - window.start >= 60000)
-      window = this.created[kind] = {
+    if (now - this.created[kind].start >= 60000)
+      this.created[kind] = {
         start: now,
         count: 0,
         bySource: new Map(),
+        leaseless: 0,
       };
-    // The source key and its /48 are checked before the process budget, and
-    // their counts belong to the process window, so neither can take more
-    // than its share of any one window. A refusal charges nothing.
+    return this.created[kind];
+  }
+
+  /**
+   * The source key and its /48, with each one's share of the budget. They are
+   * checked before the process budget, and their counts belong to the process
+   * window, so neither can take more than its share of any one window.
+   */
+  private charges(
+    kind: Creation,
+    sources?: AdmissionSources,
+  ): [string, number][] {
+    const budget = this.budget(kind);
     const charges: [string, number][] = [];
     if (sources) {
       charges.push([
@@ -309,19 +384,18 @@ export class AdmissionController {
           share(budget, MAX_SHARE_PERCENT_PER_IPV6_48),
         ]);
     }
-    for (const [source, limit] of charges)
-      if ((window.bySource.get(source) ?? 0) >= limit) return false;
-    if (window.count >= budget) return false;
-    if (!charge) return true;
-    for (const [source] of charges)
-      window.bySource.set(source, (window.bySource.get(source) ?? 0) + 1);
-    window.count++;
-    return true;
+    return charges;
   }
 
   /** Process-wide budget only, for callers that hold no socket lease. */
   newIdentity(): boolean {
     return this.create("identity");
+  }
+
+  /** Give back one leaseless identity charge of the current window. */
+  refundIdentity(): void {
+    const window = this.created.identity;
+    if (window.leaseless > 0) this.refund("identity", window);
   }
 
   /** Process-wide budget only, for callers that hold no socket lease. Charges nothing. */

@@ -159,21 +159,21 @@ describe("verified socket registry", () => {
     expect(successor.data.isVerified).toBe(true);
   });
 
-  test("a failed routing claim closes and removes the unrouteable socket", async () => {
+  test("a failed commit closes the socket, registers nothing and has nothing to undo", async () => {
     const clients = new Map<string, ReplaceableSocketAuthClient>();
     const socket = replaceableSocket();
     socket.data.peerId = PEER_ID;
     socket.data.publicKey = "ab".repeat(32);
     socket.data.isVerified = true;
-    const releases: string[] = [];
+    const undone: unknown[] = [];
 
     expect(
       await activateVerifiedSocket(
         clients,
         socket,
         async () => false,
-        async (peerId) => {
-          releases.push(peerId);
+        async (commit) => {
+          undone.push(commit);
         },
       ),
     ).toBe(false);
@@ -181,7 +181,7 @@ describe("verified socket registry", () => {
     expect(socket.data.isAuthenticating).toBe(false);
     expect(socket.closeCalls).toBe(1);
     expect(clients.has(PEER_ID)).toBe(false);
-    expect(releases).toEqual([PEER_ID]);
+    expect(undone).toEqual([]);
   });
 
   test("claim completion cannot activate a socket a later one replaced during the await", async () => {
@@ -193,18 +193,18 @@ describe("verified socket registry", () => {
       socket.data.publicKey = "ab".repeat(32);
       socket.data.isVerified = true;
     }
-    let resolveClaim!: (claimed: boolean) => void;
-    const claim = new Promise<boolean>((resolve) => {
-      resolveClaim = resolve;
+    let resolveCommit!: (commit: { by: string }) => void;
+    const displacedCommit = new Promise<{ by: string }>((resolve) => {
+      resolveCommit = resolve;
     });
-    const releases: string[] = [];
+    const undone: unknown[] = [];
 
     const activation = activateVerifiedSocket(
       clients,
       displaced,
-      async () => claim,
-      async (peerId) => {
-        releases.push(peerId);
+      () => displacedCommit,
+      async (commit) => {
+        undone.push(commit);
       },
     );
     // Proved and claiming: its pong is accepted, but it owns nothing yet.
@@ -218,13 +218,13 @@ describe("verified socket registry", () => {
       await activateVerifiedSocket(
         clients,
         replacement,
-        async () => true,
-        async (peerId) => {
-          releases.push(peerId);
+        async () => ({ by: "replacement" }),
+        async () => {
+          throw new Error("the current socket undoes nothing");
         },
       ),
-    ).toBe(true);
-    resolveClaim(true);
+    ).toEqual({ by: "replacement" });
+    resolveCommit({ by: "displaced" });
 
     expect(await activation).toBe(false);
     expect(displaced.data.isVerified).toBe(false);
@@ -233,12 +233,11 @@ describe("verified socket registry", () => {
     ]);
     expect(isCurrentVerifiedSocket(clients, replacement)).toBe(true);
     expect(replacement.closeCalls).toBe(0);
-    // The successor owns the same process claim; displaced cleanup must not
-    // release it.
-    expect(releases).toEqual([]);
+    // What the displaced socket wrote is handed back to be taken back.
+    expect(undone).toEqual([{ by: "displaced" }]);
   });
 
-  test("only a successful exact-owner claim completes activation", async () => {
+  test("only a successful exact-owner commit completes activation", async () => {
     const clients = new Map<string, ReplaceableSocketAuthClient>();
     const socket = replaceableSocket();
     socket.data.peerId = PEER_ID;
@@ -249,44 +248,43 @@ describe("verified socket registry", () => {
       await activateVerifiedSocket(
         clients,
         socket,
-        async () => true,
+        async () => ({ committed: true }),
         async () => {
-          throw new Error("successful activation must not release its claim");
+          throw new Error("successful activation must not undo its commit");
         },
       ),
-    ).toBe(true);
+    ).toEqual({ committed: true });
     expect(socket.data.isAuthenticating).toBe(false);
     expect(isCurrentVerifiedSocket(clients, socket)).toBe(true);
     expect(socket.closeCalls).toBe(0);
   });
 
-  test("a late successful claim is released when close cleanup already removed the socket", async () => {
+  test("a commit that lands after the socket closed is undone", async () => {
     const clients = new Map<string, ReplaceableSocketAuthClient>();
     const socket = replaceableSocket();
     socket.data.peerId = PEER_ID;
     socket.data.publicKey = "ab".repeat(32);
     socket.data.isVerified = true;
-    let resolveClaim!: (claimed: boolean) => void;
-    const claim = new Promise<boolean>((resolve) => {
-      resolveClaim = resolve;
+    let resolveCommit!: (commit: { late: true }) => void;
+    const commit = new Promise<{ late: true }>((resolve) => {
+      resolveCommit = resolve;
     });
-    const releases: string[] = [];
+    const undone: unknown[] = [];
 
     const activation = activateVerifiedSocket(
       clients,
       socket,
-      async () => claim,
-      async (peerId) => {
-        releases.push(peerId);
+      () => commit,
+      async (committed) => {
+        undone.push(committed);
       },
     );
-    // Models the WebSocket close callback winning the race with claimPeer.
-    clients.delete(PEER_ID);
+    // Models the WebSocket close winning the race with the commit.
     socket.readyState = 3;
-    resolveClaim(true);
+    resolveCommit({ late: true });
 
     expect(await activation).toBe(false);
-    expect(releases).toEqual([PEER_ID]);
+    expect(undone).toEqual([{ late: true }]);
     expect(clients.has(PEER_ID)).toBe(false);
   });
 });

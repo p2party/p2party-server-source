@@ -58,15 +58,14 @@ describe("cross-instance signal routing", () => {
       "utf8",
     );
     const authenticated = handleMessage.indexOf("if (authenticated)");
-    const activation = handleMessage.indexOf("activateVerifiedSocket(");
-    const claimed = handleMessage.indexOf("claimPeer(peerId)");
+    const activation = handleMessage.indexOf("activateProvedSocket(ws)");
     expect(authenticated).toBeGreaterThan(-1);
     expect(activation).toBeGreaterThan(authenticated);
-    expect(claimed).toBeGreaterThan(activation);
 
-    // activateVerifiedSocket refuses an unverified socket before it commits,
-    // and makes the socket routable here (and closes its predecessor) only
-    // after the commit. Behaviour: tests/utils/socketActivation.test.ts.
+    // activateVerifiedSocket refuses an unverified socket before it commits
+    // (the identity row and the claim, in one transaction), and makes the
+    // socket routable here, closing its predecessor, only after the commit.
+    // Behaviour: tests/utils/socketActivation.test.ts.
     const body =
       /export const activateVerifiedSocket[\s\S]*?\n\};/.exec(
         socketAuth,
@@ -79,12 +78,15 @@ describe("cross-instance signal routing", () => {
     expect(register).toBeGreaterThan(commit);
   });
 
-  test("release is guarded on this instance's id", () => {
-    // Otherwise a slow close on the old worker clears the claim that the new
-    // worker just took for a reconnecting peer, stranding it.
+  test("release compares the claim's owner token: this instance and the socket", () => {
+    // Otherwise a slow close clears the claim a successor just took, on this
+    // worker or another. Behaviour against PostgreSQL:
+    // tests/db/routingClaim.postgres.test.ts.
     const body =
       /export const releasePeer[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
-    expect(body).toContain("serverId: SERVER_ID");
+    expect(body).toContain(
+      "where: { id: peerId, serverId: self, socketGeneration }",
+    );
     expect(body).toContain("updateMany");
   });
 

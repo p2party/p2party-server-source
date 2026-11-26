@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { prisma as sharedPrisma } from "../prismaClient";
+import { SERVER_ID } from "../serverId";
 import { admission, admissionLimits } from "./admission";
 import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
@@ -36,10 +37,53 @@ export const provisionalPeerId = (publicKey: string): string => {
 const admitIdentityCreation = (ws: P2PartyWSClient): boolean =>
   ws.data.admission ? ws.data.admission.newIdentity() : admission.newIdentity();
 
+/** Give back the charge admitIdentityCreation took for this socket. */
+const refundIdentityCreation = (ws: P2PartyWSClient): void => {
+  if (ws.data.admission) ws.data.admission.refundIdentity();
+  else admission.refundIdentity();
+};
+
 /**
- * Persist only after signature verification, before the routing claim goes
- * live. A row that a server before 0.1.4 created with a random id is re-keyed
- * to the derived id here; ON UPDATE CASCADE on `_PeerRooms` keeps its rooms.
+ * A routing claim: the instance and the socket holding a peer's row. Both
+ * together are the claim's owner token; a socket may release or restore only
+ * the claim that carries its own.
+ */
+export interface RoutingClaim {
+  serverId: string;
+  socketGeneration: string | null;
+}
+
+/** What a committed authentication wrote. */
+export interface IdentityCommit {
+  /** This socket's insert created the identity row; its charge stands. */
+  created: boolean;
+  /** The claim this commit overwrote, held by another socket, if any. */
+  replaced: RoutingClaim | null;
+}
+
+/**
+ * Prisma's codes for a serializable conflict and a unique-key race. A first
+ * attempt that loses either way is retried once: the second attempt sees the
+ * winner's row and commits as a socket of an existing identity.
+ */
+const isWriteConflict = (error: unknown): boolean => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "P2034" || code === "P2002";
+};
+
+/**
+ * Persist the identity and write this socket's routing claim, in one
+ * serializable transaction, only after signature verification.
+ *
+ * Nothing about a stored row's id is read or written for an existing
+ * identity: the migration 20261127000000_rekey_peers_to_derived_ids gave every
+ * row the id derived from its key, so the row a socket finds is the row its
+ * peer id names.
+ *
+ * A new identity is charged once, inside the transaction, before the insert.
+ * The charge is refunded when the transaction fails or a retried attempt finds
+ * that a racing socket's insert won: one identity, one charge. Since the claim
+ * is part of the same transaction, a failed claim leaves no row and no charge.
  */
 export const createPersistVerifiedIdentity =
   (
@@ -47,12 +91,16 @@ export const createPersistVerifiedIdentity =
     admitCreation: (ws: P2PartyWSClient) => boolean = admitIdentityCreation,
     maxIdentities = admissionLimits.persistentIdentities,
     now: () => number = Date.now,
+    serverId: string = SERVER_ID,
+    refundCreation: (ws: P2PartyWSClient) => void = refundIdentityCreation,
   ) =>
-  async (ws: P2PartyWSClient): Promise<boolean> => {
+  async (ws: P2PartyWSClient): Promise<IdentityCommit | false> => {
     if (!ws.data.isVerified || ws.readyState !== 1) return false;
-    const { peerId, publicKey } = ws.data;
+    const { peerId, publicKey, socketGeneration } = ws.data;
     if (provisionalPeerId(publicKey) !== peerId)
       throw new Error("Socket peer id is not derived from its key");
+    if (socketGeneration.length === 0)
+      throw new Error("Socket has no generation to claim with");
     const at = now();
     // Offline identities in no room, created over a day ago. Any last-seen
     // time qualifies, however old, except one inside the activation deadline:
@@ -65,52 +113,133 @@ export const createPersistVerifiedIdentity =
       serverId: null,
       rooms: { none: {} },
     };
-    await prisma.$transaction(
-      async (transaction) => {
-        const existing = await transaction.peer.findUnique({
-          where: { publicKey },
-          select: { id: true },
-        });
-        if (!existing) {
-          if (!admitCreation(ws))
-            throw new Error("Identity admission capacity reached");
-          // A hard cap on every Peer row, whatever its age: nothing else
-          // deletes identities, so rows past any retention window still count.
-          let identities = await transaction.peer.count();
-          if (identities >= maxIdentities - IDENTITY_PRUNE_BATCH) {
-            // Least recently seen first: rows past the retention window go
-            // before any recent one ("updatedAt" is bumped on authentication,
-            // claim and release). Rolled back with the transaction if the cap
-            // still refuses.
-            const stale = await transaction.peer.findMany({
-              where: prunable,
-              select: { id: true },
-              orderBy: { updatedAt: "asc" },
-              take: IDENTITY_PRUNE_BATCH,
-            });
-            if (stale.length) {
-              const { count } = await transaction.peer.deleteMany({
-                where: { ...prunable, id: { in: stale.map(({ id }) => id) } },
-              });
-              identities -= count;
+    let charged = false;
+    const attempt = () =>
+      prisma.$transaction(
+        async (transaction): Promise<IdentityCommit> => {
+          // The claim this commit replaces, read in the transaction that
+          // replaces it.
+          const existing = await transaction.peer.findUnique({
+            where: { publicKey },
+            select: { serverId: true, socketGeneration: true },
+          });
+          if (!existing) {
+            if (!charged) {
+              if (!admitCreation(ws))
+                throw new Error("Identity admission capacity reached");
+              charged = true;
             }
+            // A hard cap on every Peer row, whatever its age: nothing else
+            // deletes identities, so rows past any retention window still
+            // count.
+            let identities = await transaction.peer.count();
+            if (identities >= maxIdentities - IDENTITY_PRUNE_BATCH) {
+              // Least recently seen first: rows past the retention window go
+              // before any recent one ("updatedAt" is bumped on
+              // authentication, claim and release). Rolled back with the
+              // transaction if the cap still refuses.
+              const stale = await transaction.peer.findMany({
+                where: prunable,
+                select: { id: true },
+                orderBy: { updatedAt: "asc" },
+                take: IDENTITY_PRUNE_BATCH,
+              });
+              if (stale.length) {
+                const { count } = await transaction.peer.deleteMany({
+                  where: {
+                    ...prunable,
+                    id: { in: stale.map(({ id }) => id) },
+                  },
+                });
+                identities -= count;
+              }
+            }
+            if (identities >= maxIdentities)
+              throw new Error("Identity admission capacity reached");
           }
-          if (identities >= maxIdentities)
-            throw new Error("Identity admission capacity reached");
-        }
-        if (!ws.data.isVerified || ws.readyState !== 1)
-          throw new Error("Authentication socket closed");
-        await transaction.peer.upsert({
-          where: { publicKey },
-          // `id` changes only on a row with a pre-0.1.4 random id.
-          update: { id: peerId, lastPing: at },
-          create: { id: peerId, publicKey, lastPing: at },
-        });
-      },
-      { isolationLevel: "Serializable" },
-    );
-    return ws.data.isVerified && ws.readyState === 1;
+          if (!ws.data.isVerified || ws.readyState !== 1)
+            throw new Error("Authentication socket closed");
+          await transaction.peer.upsert({
+            where: { publicKey },
+            update: { lastPing: at, serverId, socketGeneration },
+            create: {
+              id: peerId,
+              publicKey,
+              lastPing: at,
+              serverId,
+              socketGeneration,
+            },
+          });
+          return {
+            created: !existing,
+            replaced: existing?.serverId
+              ? {
+                  serverId: existing.serverId,
+                  socketGeneration: existing.socketGeneration,
+                }
+              : null,
+          };
+        },
+        { isolationLevel: "Serializable" },
+      );
+
+    try {
+      let commit: IdentityCommit;
+      try {
+        commit = await attempt();
+      } catch (error) {
+        if (!isWriteConflict(error)) throw error;
+        commit = await attempt();
+      }
+      if (charged && !commit.created) refundCreation(ws);
+      return commit;
+    } catch (error) {
+      if (charged) refundCreation(ws);
+      throw error;
+    }
   };
 
 export const persistVerifiedIdentity =
   createPersistVerifiedIdentity(sharedPrisma);
+
+/**
+ * Take back what a committed authentication wrote, for a socket that then
+ * failed to become current (it closed during the commit, or a newer session
+ * of its identity became current first).
+ *
+ * A row this socket created is deleted, and its charge refunded, while it
+ * still carries this socket's claim. Otherwise the claim this socket replaced
+ * is put back, while the row still carries this socket's claim. Both compare
+ * the owner token in the statement, so neither can touch a successor's claim.
+ *
+ * Returns whether the replaced claim (or its absence) is back in place. When
+ * it is not, a successor overwrote this socket's claim, and the replaced
+ * socket stays replaced.
+ */
+export const createUndoIdentityCommit =
+  (
+    prisma: Pick<ProcessPrismaClient, "peer">,
+    serverId: string = SERVER_ID,
+    refundCreation: (ws: P2PartyWSClient) => void = refundIdentityCreation,
+  ) =>
+  async (ws: P2PartyWSClient, commit: IdentityCommit): Promise<boolean> => {
+    const mine = {
+      id: ws.data.peerId,
+      serverId,
+      socketGeneration: ws.data.socketGeneration,
+    };
+    if (commit.created) {
+      const { count } = await prisma.peer.deleteMany({
+        where: { ...mine, rooms: { none: {} } },
+      });
+      if (count > 0) refundCreation(ws);
+      return count > 0;
+    }
+    const { count } = await prisma.peer.updateMany({
+      where: mine,
+      data: commit.replaced ?? { serverId: null, socketGeneration: null },
+    });
+    return count > 0;
+  };
+
+export const undoIdentityCommit = createUndoIdentityCommit(sharedPrisma);

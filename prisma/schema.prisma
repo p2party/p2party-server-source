@@ -32,7 +32,11 @@ model Peer {
 
   /// Which signaling instance currently holds this peer's socket. Null when the
   /// peer is not connected. Used to route a signal to the right process.
-  serverId String? @db.VarChar(36)
+  serverId         String? @db.VarChar(36)
+  /// Which socket of that instance holds the claim: its socket generation.
+  /// Together with serverId it is the claim's owner token, so a socket can
+  /// release or restore only a claim it wrote itself.
+  socketGeneration String? @db.VarChar(36)
 
   challenges Challenge[]
   rooms      Room[]      @relation("PeerRooms")
@@ -72,6 +76,10 @@ model PendingSignal {
   createdAt      DateTime @default(now())
   targetServerId String   @db.VarChar(36)
   targetPeerId   String   @db.Uuid
+  /// "frame": a serialized frame for the target's socket. "evict": an order
+  /// to close the target's socket whose generation is the payload, because a
+  /// newer session on another instance replaced it.
+  kind           String   @default("frame") @db.VarChar(16)
   payload        String
 
   @@index([targetServerId])
