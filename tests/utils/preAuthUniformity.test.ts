@@ -1,142 +1,73 @@
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
-import handleConnection from "../../src/utils/handleConnection";
-import handleChallenge from "../../src/utils/handleChallenge";
-import { provisionalPeerId } from "../../src/utils/peerIdentity";
-
-import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
-
 /**
  * Before the signature is checked, a socket must learn nothing about whether
- * its key has an identity row: the same frames, the same close, and the same
- * database work. Rows written by servers before 0.1.4 carry a random id, and
- * the server used to look the key up and send that id, which marked the key
- * as known to anyone holding it. The path now reads nothing before the
- * verdict (second test), so whatever the store holds for these keys cannot
- * shape the answer; the first test checks the answer itself.
+ * its key has an identity row: the same bytes, the same close, the same
+ * database work. Servers before 0.1.4 stored random ids, and the server used
+ * to look a key up and send the stored id, which marked the key as known to
+ * anyone holding it.
+ *
+ * The check runs in a fresh process (preAuthProbe.ts), so that the recording
+ * store replaces the shared Prisma client before any server module loads:
+ * a lookup reinstated anywhere, behind any helper, is recorded. The store
+ * holds a registered key, a key stored by an old server with a random id, and
+ * a key never seen; the probe drives the real server and real WebSocket
+ * clients through upgrade, challenge and a signature that does not verify.
  */
-const IDENTITIES = [
-  // Never seen.
-  "a1".repeat(32),
-  // Seen, stored under the key's derived id.
-  "b2".repeat(32),
-  // Seen by a server before 0.1.4, stored under a random id.
-  "c3".repeat(32),
-] as const;
+const probe = join(dirname(fileURLToPath(import.meta.url)), "preAuthProbe.ts");
 
-const socket = (publicKey: string) => {
-  const sent: string[] = [];
-  const closeArgs: { code?: number; reason?: string }[] = [];
-  const data: P2PartyWSData = {
-    peerId: "",
-    publicKey,
-    challengeNonce: "",
-    challengeId: "",
-    socketGeneration: "",
-    isVerified: false,
-    isAuthenticating: false,
-    isAlive: true,
-  };
-  const ws = {
-    data,
-    readyState: 1,
-    send: (message: string) => {
-      sent.push(message);
-      return message.length;
+const runProbe = async () => {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "run", probe], {
+    // Nothing from this process's environment, so no database URL: the
+    // placeholder cannot reach anything even if the mock were bypassed.
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      DATABASE_URL:
+        "postgresql://unset:unset@127.0.0.1:1/unset?sslmode=disable",
     },
-    close: (code?: number, reason?: string) => {
-      closeArgs.push({ code, reason });
-    },
-  } as unknown as P2PartyWSClient;
-  return { ws, sent, closeArgs };
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(exitCode, stderr).toBe(0);
+  return JSON.parse(stdout.trim().split("\n").at(-1)!) as Record<
+    "registered" | "oldStyle" | "unregistered",
+    {
+      frames: string[];
+      close: { code: number; reason: string };
+      queries: string[];
+    }
+  >;
 };
-
-/** A frame with the per-key peer id and the per-socket nonce blanked out. */
-const normalized = (raw: string, peerId: string) =>
-  JSON.parse(
-    raw.replaceAll(peerId, "<peer id>").replace(/[0-9a-f]{64}/, "<nonce>"),
-  ) as unknown;
 
 describe("pre-authentication responses", () => {
   test("unknown and known identities get the same pre-auth response", async () => {
-    const observed: {
-      peerIdIsTheKeysDerivedId: boolean;
-      frames: unknown[];
-      closes: { code?: number; reason?: string }[];
-    }[] = [];
-    for (const key of IDENTITIES) {
-      const { ws, sent, closeArgs } = socket(key);
+    const observed = await runProbe();
 
-      const peerId = await handleConnection(key, ws);
-      const hello = JSON.parse(sent[0]!) as {
-        peerId: string;
-        challenge: string;
-      };
-      // An answer whose signature does not verify: the last pre-auth step.
-      expect(
-        await handleChallenge(
-          hello.peerId,
-          ws,
-          hello.challenge,
-          "ef".repeat(64),
-          { verifySignature: async () => false },
-        ),
-      ).toBe(false);
-
-      observed.push({
-        peerIdIsTheKeysDerivedId:
-          peerId === provisionalPeerId(key) && hello.peerId === peerId,
-        frames: sent.map((raw) => normalized(raw, peerId)),
-        closes: closeArgs,
-      });
-    }
-
-    expect(observed).toEqual(IDENTITIES.map(() => observed[0]!));
-    expect(observed[0]).toEqual({
-      peerIdIsTheKeysDerivedId: true,
+    // No database work at all before the verdict, for any of the three.
+    expect(observed.registered.queries).toEqual([]);
+    expect(observed.oldStyle.queries).toEqual([]);
+    expect(observed.unregistered.queries).toEqual([]);
+    // Byte-identical frames, close code and reason.
+    expect(observed.oldStyle).toEqual(observed.registered);
+    expect(observed.unregistered).toEqual(observed.registered);
+    expect(observed.registered).toEqual({
       frames: [
-        {
-          type: "peerId",
-          peerId: "<peer id>",
-          challenge: "<nonce>",
-          protocolVersion: 4,
-          message: "Connected to WebSocket server. Your client id is <peer id>",
-        },
-        {
-          type: "error",
-          fromAction: "sendChallengeResponse",
-          error: { message: "Challenge response signature cannot be verified" },
-        },
+        '{"type":"peerId","peerId":"<derived peer id>","challenge":"<nonce>","protocolVersion":4,"message":"Connected to WebSocket server. Your client id is <derived peer id>"}',
+        '{"type":"error","fromAction":"sendChallengeResponse","error":{"message":"Challenge response signature cannot be verified"}}',
       ],
-      closes: [
-        {
-          code: 1008,
-          reason: "Challenge response signature cannot be verified",
-        },
-      ],
+      close: {
+        code: 1008,
+        reason: "Challenge response signature cannot be verified",
+      },
+      queries: [],
     });
-  });
-
-  test("the pre-authentication path has no database client to query", () => {
-    // Neither module of the path up to the signature verdict imports the
-    // Prisma client or calls one, so both kinds of key cost the same: no
-    // query at all. The upgrade handler in wsServer.ts reads no identity
-    // state either; its admission buckets are keyed by address.
-    const utils = join(
-      dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "..",
-      "src",
-      "utils",
-    );
-    for (const file of ["handleConnection.ts", "handleChallenge.ts"]) {
-      const source = readFileSync(join(utils, file), "utf8");
-      expect(source, file).not.toContain("prismaClient");
-      expect(source, file).not.toMatch(/\bprisma\b/);
-      expect(source, file).not.toContain("$transaction");
-    }
-  });
+  }, 30_000);
 });
