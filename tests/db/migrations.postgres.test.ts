@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -89,5 +90,26 @@ describe("prisma migrations", () => {
   test("no SQLite artefacts survive the switch", () => {
     expect(schema).not.toContain("sqlite");
     expect(migrationSql).not.toContain("PRAGMA");
+  });
+});
+
+describe("released migrations", () => {
+  test("the migrations released in 0.1.4 are unchanged, byte for byte", () => {
+    // Prisma records each applied migration's SHA-256. A change to one a
+    // production database has applied would make that record a lie.
+    const sha256 = (name: string) =>
+      createHash("sha256")
+        .update(
+          new Uint8Array(
+            readFileSync(join(migrationsDir, name, "migration.sql")),
+          ),
+        )
+        .digest("hex");
+    expect(sha256("20260224171205_init")).toBe(
+      "60f80b7c878d251b73356b810017a6c5b01db0b4d4c09bc58dee5f25e06d44a4",
+    );
+    expect(sha256("20260224172227_add_pubsub")).toBe(
+      "aff74f1c36c4b6e5afddb8658b4a455d5dd4273f2713e0dd5afffcb99210e792",
+    );
   });
 });
