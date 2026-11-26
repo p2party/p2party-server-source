@@ -24,11 +24,16 @@
           - coturn_max_bps | default(625000) | int > 0
           - coturn_user_quota | default(12) | int > 0
           - coturn_bps_capacity | default(30000000) | int >= coturn_max_bps | default(625000) | int
-          # One identity holds at most two valid usernames (the credential
-          # expiry is rounded to a whole lifetime), and user-quota counts per
-          # username: keep its reservation to half of the aggregate capacity.
-          - 4 * (coturn_user_quota | default(12) | int) * (coturn_max_bps | default(625000) | int) <= coturn_bps_capacity | default(30000000) | int
-        fail_msg: Set positive coturn_max_bps, coturn_user_quota and coturn_bps_capacity with 2 * user quota * max bps at most half the capacity; zero disables the bandwidth guard
+          - coturn_max_allocate_lifetime | default(600) | int > 0
+          - coturn_max_allocate_lifetime | default(600) | int <= 3600
+          # coturn counts user-quota per credential username, so this is what
+          # one username can reserve: keep it to half the aggregate capacity.
+          # It is not a per-identity bound: an identity gets a new username
+          # every credential lifetime and coturn does not re-check a username's
+          # expiry on Refresh (README, "Relay bound"). The same defaults as
+          # turnserver.conf.j2.
+          - 2 * (coturn_user_quota | default(12) | int) * (coturn_max_bps | default(625000) | int) <= coturn_bps_capacity | default(30000000) | int
+        fail_msg: Set positive coturn_max_bps, coturn_user_quota and coturn_bps_capacity with user quota * max bps at most half the capacity, and coturn_max_allocate_lifetime between 1 and 3600; zero disables the bandwidth guard
 
     - name: Display setup info
       debug:
@@ -109,61 +114,98 @@
         mode: "0600"
         remote_src: yes
 
-    # coturn has no configuration check mode, so the rendered file is checked
-    # here before it replaces the running one: a candidate that fails these
-    # checks fails the play and leaves /etc/turnserver.conf as it was.
-    - name: Render the candidate coturn configuration
-      template:
-        src: "{{ playbook_dir }}/../templates/turnserver.conf.j2"
-        dest: /etc/turnserver.conf.p2party-candidate
-        owner: turnserver
-        group: turnserver
-        mode: "0600"
-      # It holds the TURN shared secret; keep an operator's --diff from
-      # copying it into the Ansible log.
-      diff: false
+    # A command-line flag in the unit or in /etc/default/coturn overrides
+    # turnserver.conf: -l/--log-file or --syslog would restore a log of
+    # usernames and client addresses, and -n or a different -c would skip the
+    # template altogether. Both files belong to the coturn package, so they are
+    # checked rather than rewritten.
+    - name: Read the effective coturn unit
+      command:
+        argv: [systemctl, cat, coturn]
+      register: coturn_unit
+      changed_when: false
 
-    - name: Read the candidate coturn configuration
+    - name: Read /etc/default/coturn
       slurp:
-        src: /etc/turnserver.conf.p2party-candidate
-      register: coturn_candidate
-      no_log: true
+        src: /etc/default/coturn
+      register: coturn_defaults
 
-    # A failed assertion prints its expression, never the file's contents.
-    - name: Validate the candidate coturn configuration
+    - name: Refuse coturn command-line flags that override turnserver.conf
       assert:
         that:
-          - coturn_candidate_text is not search('[{][{]|[{]%')
-          - coturn_candidate_text is search('^use-auth-secret$', multiline=True)
-          - coturn_candidate_text is search('^static-auth-secret=\S{32,}$', multiline=True)
-          - coturn_candidate_text is search('^realm=\S+$', multiline=True)
-          - coturn_candidate_text is search('^log-file=/dev/null$', multiline=True)
-          - coturn_candidate_text is search('^no-stdout-log$', multiline=True)
-          - coturn_candidate_text is not search('^(syslog|verbose|Verbose|log-binding)$', multiline=True)
-          - coturn_candidate_text is search('^total-quota=[1-9][0-9]*$', multiline=True)
-          - coturn_candidate_text is search('^user-quota=[1-9][0-9]*$', multiline=True)
-          - coturn_candidate_text is search('^max-bps=[1-9][0-9]*$', multiline=True)
-          - coturn_candidate_text is search('^bps-capacity=[1-9][0-9]*$', multiline=True)
-        fail_msg: The rendered coturn configuration failed validation; /etc/turnserver.conf is unchanged
-        quiet: true
+          - coturn_command_text is not search('(^|[\s"\x27=])(-l|--log-file|--syslog|-n)(?=[\s"\x27=]|$)', multiline=True)
+          - coturn_command_text is not search('(^|[\s"\x27])-c(\s+|=)(?!/etc/turnserver\.conf(?=[\s"\x27]|$))', multiline=True)
+        fail_msg: >-
+          The coturn unit (systemctl cat coturn) or /etc/default/coturn passes
+          -l/--log-file, --syslog, -n or a -c other than /etc/turnserver.conf.
+          Those override turnserver.conf, which must log nowhere; remove the
+          flag on the host and run this playbook again.
       vars:
-        coturn_candidate_text: "{{ coturn_candidate.content | b64decode }}"
+        # Joined with spaces: Ansible keeps '\n' in a Jinja literal as two
+        # characters, and the patterns need only whitespace between tokens.
+        coturn_command_text: >-
+          {{ (coturn_unit.stdout_lines | select('match', '^\s*ExecStart') | list
+              + ((coturn_defaults.content | b64decode).splitlines()
+                 | reject('match', '^\s*(#|$)') | list)) | join(' ') }}
 
-    - name: Install the validated coturn configuration
-      copy:
-        src: /etc/turnserver.conf.p2party-candidate
-        dest: /etc/turnserver.conf
-        remote_src: true
-        owner: turnserver
-        group: turnserver
-        mode: "0600"
-      diff: false
-      notify: Restart Coturn
+    # coturn has no configuration check mode, so the rendered file is checked
+    # here before it replaces the running one: a candidate that fails these
+    # checks fails the play and leaves /etc/turnserver.conf as it was. The
+    # candidate holds the TURN shared secret and is removed whatever happens.
+    - name: Validate and install the coturn configuration
+      block:
+        - name: Render the candidate coturn configuration
+          template:
+            src: "{{ playbook_dir }}/../templates/turnserver.conf.j2"
+            dest: /etc/turnserver.conf.p2party-candidate
+            owner: turnserver
+            group: turnserver
+            mode: "0600"
+          # Keep an operator's --diff from copying the secret into the log.
+          diff: false
 
-    - name: Remove the coturn configuration candidate
-      file:
-        path: /etc/turnserver.conf.p2party-candidate
-        state: absent
+        - name: Read the candidate coturn configuration
+          slurp:
+            src: /etc/turnserver.conf.p2party-candidate
+          register: coturn_candidate
+          no_log: true
+
+        # A failed assertion prints its expression, never the file's contents.
+        - name: Validate the candidate coturn configuration
+          assert:
+            that:
+              - coturn_candidate_text is not search('[{][{]|[{]%')
+              - coturn_candidate_text is search('^use-auth-secret$', multiline=True)
+              - coturn_candidate_text is search('^static-auth-secret=\S{32,}$', multiline=True)
+              - coturn_candidate_text is search('^realm=\S+$', multiline=True)
+              - coturn_candidate_text is search('^log-file=/dev/null$', multiline=True)
+              - coturn_candidate_text is search('^no-stdout-log$', multiline=True)
+              - coturn_candidate_text is not search('^(syslog|verbose|Verbose|log-binding)$', multiline=True)
+              - coturn_candidate_text is search('^total-quota=[1-9][0-9]*$', multiline=True)
+              - coturn_candidate_text is search('^user-quota=[1-9][0-9]*$', multiline=True)
+              - coturn_candidate_text is search('^max-bps=[1-9][0-9]*$', multiline=True)
+              - coturn_candidate_text is search('^bps-capacity=[1-9][0-9]*$', multiline=True)
+              - coturn_candidate_text is search('^max-allocate-lifetime=[1-9][0-9]*$', multiline=True)
+            fail_msg: The rendered coturn configuration failed validation; /etc/turnserver.conf is unchanged
+            quiet: true
+          vars:
+            coturn_candidate_text: "{{ coturn_candidate.content | b64decode }}"
+
+        - name: Install the validated coturn configuration
+          copy:
+            src: /etc/turnserver.conf.p2party-candidate
+            dest: /etc/turnserver.conf
+            remote_src: true
+            owner: turnserver
+            group: turnserver
+            mode: "0600"
+          diff: false
+          notify: Restart Coturn
+      always:
+        - name: Remove the coturn configuration candidate
+          file:
+            path: /etc/turnserver.conf.p2party-candidate
+            state: absent
 
     # coturn now writes no log (turnserver.conf.j2). Hosts provisioned earlier
     # still hold up to 14 days of rotated files pairing TURN usernames, which

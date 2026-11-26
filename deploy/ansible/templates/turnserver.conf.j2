@@ -34,7 +34,9 @@ ec-curve-name=prime256v1
 # long-lived credential is ever handed to a browser. The tag is an HMAC of the
 # identity key and expiry under the same secret; the key itself never appears.
 # The expiry is rounded up to a whole credential lifetime (one hour), so one
-# identity has one username per lifetime and at most two valid at any instant.
+# identity gets one username per lifetime and at most two are valid for a new
+# allocation at any instant. coturn checks the expiry only when a session first
+# authenticates, not on Refresh, so a refreshed allocation outlives it.
 use-auth-secret
 static-auth-secret={{ vault_coturn_auth_secret }}
 realm={{ vault_coturn_realm }}
@@ -47,9 +49,13 @@ realm={{ vault_coturn_realm }}
 # Both bandwidth settings are bytes/sec, with input and output counted separately.
 # Clients without a BANDWIDTH request reserve max-bps per allocation: the default
 # aggregate budget admits 48 such allocations. Raise it for larger rooms.
-# One identity holds at most two valid usernames, so it can reserve at most
-# 2 * user-quota * max-bps; setup-coturn.yml requires that to be at most half
-# of bps-capacity (12 * 625000 * 2 = 15000000 of 30000000 at the defaults).
+# user-quota counts per username part after "<digits>:", the tag, which changes
+# every credential lifetime. One username can therefore reserve user-quota *
+# max-bps, which setup-coturn.yml requires to be at most half of bps-capacity
+# (12 * 625000 = 7500000 of 30000000 at the defaults). That is not a
+# per-identity bound: an identity that keeps refreshing its allocations can
+# hold them under a new username every hour, and only total-quota and
+# bps-capacity bound the relay as a whole.
 total-quota={{ coturn_total_quota | default(1200) }}
 user-quota={{ coturn_user_quota | default(12) }}
 max-bps={{ coturn_max_bps | default(625000) }}
@@ -104,6 +110,10 @@ denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
 denied-peer-ip=2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff
 
 # ---- Performance ----
+# An allocation that is not refreshed is released at most this many seconds
+# after its last Allocate or Refresh, instead of coturn's default 3600. WebRTC
+# clients normally take the 600 s default lifetime and refresh before it ends.
+max-allocate-lifetime={{ coturn_max_allocate_lifetime | default(600) }}
 stale-nonce=600
 channel-lifetime=600
 permission-lifetime=300

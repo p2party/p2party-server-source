@@ -102,6 +102,30 @@
         state: present
         update_cache: yes
 
+    # caddy validate runs as root and opens every log file the Caddyfile names,
+    # creating a missing one as root with mode 0600, which the caddy user then
+    # cannot open on reload. Every such file exists and belongs to caddy before
+    # validation, and again after it.
+    - name: Ensure Caddy's log directory belongs to caddy
+      file:
+        path: /var/log/caddy
+        state: directory
+        owner: caddy
+        group: caddy
+        mode: "0755"
+
+    - name: Ensure Caddy's log files exist and belong to caddy
+      file:
+        path: "{{ item }}"
+        state: touch
+        owner: caddy
+        group: caddy
+        mode: "0600"
+        modification_time: preserve
+        access_time: preserve
+      loop:
+        - "/var/log/caddy/{{ domains.signaling }}.log"
+
     # The rendered file is checked before it replaces the running one: a
     # Caddyfile that fails validation fails the play and leaves Caddy as it is.
     - name: Deploy Caddyfile
@@ -115,6 +139,18 @@
       vars:
         signaling_instance_ports: "{{ signaling_ports | default([app_port]) }}"
       notify: Reload Caddy
+
+    - name: Keep Caddy's log files owned by caddy after validation
+      file:
+        path: "{{ item }}"
+        state: touch
+        owner: caddy
+        group: caddy
+        mode: "0600"
+        modification_time: preserve
+        access_time: preserve
+      loop:
+        - "/var/log/caddy/{{ domains.signaling }}.log"
 
     - name: Enable Caddy
       systemd:

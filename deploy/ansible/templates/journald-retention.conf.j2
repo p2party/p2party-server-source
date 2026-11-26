@@ -3,10 +3,13 @@
 # ============================================================================
 # Managed by Ansible - do not edit manually
 #
-# Journal entries older than seven days are discarded. The signaling service
-# and Caddy log to the journal; their lines name peers only by per-boot tags
-# and mask client addresses, and this bounds how long even those are kept.
+# journald deletes only archived journal files, once their newest entry is more
+# than MaxRetentionSec old. MaxFileSec archives the active file at least daily,
+# so an entry is deleted within about eight days. This applies to every unit on
+# the host, not only the signaling workers and Caddy. Caddy's access log is a
+# file of its own (Caddyfile.j2) and is not affected.
 # ============================================================================
 
 [Journal]
 MaxRetentionSec=7day
+MaxFileSec=1day

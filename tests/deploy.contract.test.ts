@@ -59,6 +59,14 @@ const journaldRetention = () =>
 
 interface PlaybookTask {
   name: string;
+  block?: PlaybookTask[];
+  rescue?: PlaybookTask[];
+  always?: PlaybookTask[];
+  file?: Record<string, unknown>;
+  command?: { argv?: string[] };
+  slurp?: Record<string, unknown>;
+  loop?: string[];
+  vars?: Record<string, string>;
   template?: Record<string, unknown>;
   copy?: Record<string, unknown>;
   assert?: unknown;
@@ -72,18 +80,36 @@ interface Play {
   handlers?: PlaybookTask[];
 }
 
+/** Tasks in execution order, with block, rescue and always sections expanded. */
+const flatten = (tasks: PlaybookTask[]): PlaybookTask[] =>
+  tasks.flatMap((t) => [
+    t,
+    ...flatten(t.block ?? []),
+    ...flatten(t.rescue ?? []),
+    ...flatten(t.always ?? []),
+  ]);
+
 /** The play of a playbook that contains the task named `name`. */
 const playWithTask = (playbook: string, name: string): Play => {
   const plays = Bun.YAML.parse(playbook) as Partial<Play>[];
-  const play = plays.find((p) => p.tasks?.some((t) => t.name === name));
+  const play = plays.find((p) =>
+    flatten(p.tasks ?? []).some((t) => t.name === name),
+  );
   if (!play) throw new Error(`no play has a task named ${name}`);
   return play as Play;
 };
 
 const task = (play: Play, name: string): PlaybookTask => {
-  const found = play.tasks.find((t) => t.name === name);
+  const found = flatten(play.tasks).find((t) => t.name === name);
   if (!found) throw new Error(`no task named ${name}`);
   return found;
+};
+
+/** Index of the task named `name` in execution order. */
+const position = (play: Play, name: string): number => {
+  const index = flatten(play.tasks).findIndex((t) => t.name === name);
+  if (index < 0) throw new Error(`no task named ${name}`);
+  return index;
 };
 
 /** The Jinja default of a `name={{ var | default(N) }}` coturn line. */
@@ -234,23 +260,79 @@ describe("production deployment contract", () => {
     expect(setupCoturn).toContain("zero disables the bandwidth guard");
   });
 
-  test("one TURN identity can reserve at most half the relay bandwidth", () => {
-    const userQuota = coturnDefault("user-quota");
-    const maxBps = coturnDefault("max-bps");
-    const capacity = coturnDefault("bps-capacity");
-    // user-quota counts allocations per username. A username is stable per
-    // identity for one credential lifetime, and the previous lifetime's
-    // credential is still valid, so one identity holds at most two.
-    expect(userQuota * maxBps).toBeLessThanOrEqual(capacity / 2);
-    expect(2 * userQuota * maxBps).toBeLessThanOrEqual(capacity / 2);
-    // The same bound is enforced for operator overrides.
-    expect(setupCoturn).toContain(
-      "- 4 * (coturn_user_quota | default(12) | int) * (coturn_max_bps | default(625000) | int) <= coturn_bps_capacity | default(30000000) | int",
-    );
-    expect(setupCoturn).toContain("coturn_user_quota | default(12) | int > 0");
+  test("max-allocate-lifetime is set", () => {
+    // coturn's default is 3600 s; an allocation that is not refreshed holds
+    // its bandwidth reservation at most this long after its last request.
     expect(turnserverConfig).toContain(
-      "user-quota={{ coturn_user_quota | default(12) }}",
+      "max-allocate-lifetime={{ coturn_max_allocate_lifetime | default(600) }}",
     );
+    const lifetime = coturnDefault("max-allocate-lifetime");
+    expect(lifetime).toBeGreaterThan(0);
+    expect(lifetime).toBeLessThanOrEqual(3600);
+    const budgets = task(
+      playWithTask(setupCoturn, "Require finite TURN bandwidth budgets"),
+      "Require finite TURN bandwidth budgets",
+    ).assert as { that: string[] };
+    expect(budgets.that).toContain(
+      "coturn_max_allocate_lifetime | default(600) | int > 0",
+    );
+    expect(budgets.that).toContain(
+      "coturn_max_allocate_lifetime | default(600) | int <= 3600",
+    );
+  });
+
+  test("the relay bound asserted by the playbook is computed from the template values", () => {
+    const budgets = (
+      task(
+        playWithTask(setupCoturn, "Require finite TURN bandwidth budgets"),
+        "Require finite TURN bandwidth budgets",
+      ).assert as { that: string[] }
+    ).that;
+    const bound = budgets.filter((check) => check.includes("*"));
+    expect(bound).toHaveLength(1);
+    // Every Jinja expression in the bound is a template variable with the
+    // template's own default.
+    const used = [
+      ...bound[0]!.matchAll(/(coturn_\w+) \| default\(([0-9]+)\) \| int/g),
+    ].map(([, name, fallback]) => [name!, Number(fallback)] as const);
+    const fromTemplate = new Map(
+      [
+        ...turnserverConfig.matchAll(
+          /^[a-z-]+=\{\{ (coturn_\w+) \| default\(([0-9]+)\) \}\}$/gm,
+        ),
+      ].map(([, name, fallback]) => [name!, Number(fallback)]),
+    );
+    expect(used.map(([name]) => name).sort()).toEqual([
+      "coturn_bps_capacity",
+      "coturn_max_bps",
+      "coturn_user_quota",
+    ]);
+    for (const [name, fallback] of used)
+      expect(fromTemplate.get(name)).toBe(fallback);
+
+    // Evaluate the expression the way Jinja does, for the defaults and for an
+    // override that breaks it: one username's user-quota * max-bps reservation
+    // must stay within half the aggregate capacity.
+    const evaluate = (values: Record<string, number>) => {
+      const arithmetic = bound[0]!
+        .replace(
+          /\(?(coturn_\w+) \| default\([0-9]+\) \| int\)?/g,
+          (_, name: string) =>
+            `(${String(values[name] ?? fromTemplate.get(name))})`,
+        )
+        .trim();
+      expect(arithmetic).toMatch(/^[0-9\s*()<=]+$/);
+      return Function(`return ${arithmetic};`)() as boolean;
+    };
+    expect(evaluate({})).toBe(true);
+    expect(
+      2 * coturnDefault("user-quota") * coturnDefault("max-bps"),
+    ).toBeLessThanOrEqual(coturnDefault("bps-capacity"));
+    expect(evaluate({ coturn_max_bps: 3_000_000 })).toBe(false);
+    expect(evaluate({ coturn_user_quota: 25 })).toBe(false);
+    expect(
+      evaluate({ coturn_max_bps: 1_250_000, coturn_bps_capacity: 30_000_000 }),
+    ).toBe(true);
   });
 
   test("coturn keeps no log file of usernames and client addresses", () => {
@@ -292,6 +374,9 @@ describe("production deployment contract", () => {
   test("journald keeps at most seven days on the signaling host", () => {
     expect(journaldRetention()).toMatch(/^\[Journal\]$/m);
     expect(journaldRetention()).toMatch(/^MaxRetentionSec=7day$/m);
+    // journald vacuums archived files only; the active file is archived at
+    // least daily, so an entry is gone within about eight days.
+    expect(journaldRetention()).toMatch(/^MaxFileSec=1day$/m);
     // Both paths that provision the signaling host install it and restart
     // journald, which reads its configuration only at start.
     for (const [name, source] of [
@@ -343,18 +428,19 @@ describe("production deployment contract", () => {
       setupCoturn,
       "Validate the candidate coturn configuration",
     );
-    const names = play.tasks.map((t) => t.name);
     const order = [
+      "Read the effective coturn unit",
+      "Read /etc/default/coturn",
+      "Refuse coturn command-line flags that override turnserver.conf",
       "Render the candidate coturn configuration",
       "Read the candidate coturn configuration",
       "Validate the candidate coturn configuration",
       "Install the validated coturn configuration",
       "Remove the coturn configuration candidate",
-    ].map((name) => names.indexOf(name));
-    expect(order.every((index) => index > -1)).toBe(true);
+    ].map((name) => position(play, name));
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // Only the install step writes the live file, and only it restarts coturn.
-    const writers = play.tasks.filter(
+    const writers = flatten(play.tasks).filter(
       (t) =>
         t.template?.dest === "/etc/turnserver.conf" ||
         t.copy?.dest === "/etc/turnserver.conf",
@@ -383,8 +469,143 @@ describe("production deployment contract", () => {
       "^user-quota=[1-9][0-9]*$",
       "^max-bps=[1-9][0-9]*$",
       "^bps-capacity=[1-9][0-9]*$",
+      "^max-allocate-lifetime=[1-9][0-9]*$",
     ])
       expect(checks).toContain(required);
+    // The candidate holds the TURN secret: it is removed whatever happens.
+    const flow = task(play, "Validate and install the coturn configuration");
+    expect(flow.block?.map((t) => t.name)).toContain(
+      "Validate the candidate coturn configuration",
+    );
+    expect(flow.always?.map((t) => t.name)).toEqual([
+      "Remove the coturn configuration candidate",
+    ]);
+    expect(flow.always?.[0]?.file).toEqual({
+      path: "/etc/turnserver.conf.p2party-candidate",
+      state: "absent",
+    });
+  });
+
+  test("a coturn unit or default that overrides the logging is refused", () => {
+    const play = playWithTask(
+      setupCoturn,
+      "Refuse coturn command-line flags that override turnserver.conf",
+    );
+    expect(task(play, "Read the effective coturn unit").command?.argv).toEqual([
+      "systemctl",
+      "cat",
+      "coturn",
+    ]);
+    expect(task(play, "Read /etc/default/coturn").slurp).toEqual({
+      src: "/etc/default/coturn",
+    });
+    const refuse = task(
+      play,
+      "Refuse coturn command-line flags that override turnserver.conf",
+    );
+    // The checked text is the unit's ExecStart lines and the defaults file
+    // without comments.
+    expect(refuse.vars?.coturn_command_text).toContain(
+      "select('match', '^\\s*ExecStart')",
+    );
+    expect(refuse.vars?.coturn_command_text).toContain(
+      "reject('match', '^\\s*(#|$)')",
+    );
+    // Ansible keeps '\n' in a Jinja literal as two characters, which would
+    // glue a trailing flag to the next line; the lines are joined by spaces.
+    expect(refuse.vars?.coturn_command_text).toContain("| join(' ')");
+    // Run the playbook's own patterns (Python and JavaScript agree on these
+    // constructs) against unit and defaults lines.
+    const patterns = (refuse.assert as { that: string[] }).that.map((check) => {
+      const pattern = /search\('(.*)', multiline=True\)$/.exec(check)?.[1];
+      if (!pattern) throw new Error(`no pattern in ${check}`);
+      return new RegExp(pattern.replace(/\\x27/g, "'"), "m");
+    });
+    const refused = (text: string) => patterns.some((re) => re.test(text));
+    for (const accepted of [
+      "ExecStart=/usr/bin/turnserver -c /etc/turnserver.conf --pidfile=",
+      "TURNSERVER_ENABLED=1",
+      'DAEMON_ARGS="-c /etc/turnserver.conf -o -v"',
+      "ExecStart=/usr/bin/turnserver -c=/etc/turnserver.conf --no-stdout-log",
+    ])
+      expect(refused(accepted), accepted).toBe(false);
+    for (const overriding of [
+      "ExecStart=/usr/bin/turnserver -c /etc/turnserver.conf --log-file=/var/log/turn.log",
+      "ExecStart=/usr/bin/turnserver -c /etc/turnserver.conf -l /var/log/turn.log",
+      'DAEMON_ARGS="-c /etc/turnserver.conf --syslog"',
+      "ExecStart=/usr/bin/turnserver -n --listening-port=3478",
+      "ExecStart=/usr/bin/turnserver -c /etc/coturn/other.conf",
+      "EXTRA_OPTIONS='--log-file /tmp/t.log'",
+      // A unit line and a defaults line as the playbook joins them.
+      "ExecStart=/usr/bin/turnserver -c /etc/turnserver.conf --syslog TURNSERVER_ENABLED=1",
+    ])
+      expect(refused(overriding), overriding).toBe(true);
+    expect(
+      String(refuse.assert && (refuse.assert as { fail_msg: string }).fail_msg),
+    ).toContain("systemctl cat coturn");
+  });
+
+  test("Caddy's log files belong to caddy before and after caddy validate", () => {
+    // caddy validate opens (and creates) every log file the Caddyfile names.
+    const named = [...caddyfile.matchAll(/^\s*output file (.+?) \{$/gm)].map(
+      ([, path]) => path!,
+    );
+    expect(named).toEqual(["/var/log/caddy/{{ domains.signaling }}.log"]);
+    for (const [name, source, validation] of [
+      ["deploy.yml", deploy, "Validate the candidate Caddy configuration"],
+      ["initial-setup.yml", initialSetup, "Deploy Caddyfile"],
+    ] as const) {
+      const play = playWithTask(source, validation);
+      const directory = task(
+        play,
+        "Ensure Caddy's log directory belongs to caddy",
+      );
+      expect(directory.file, name).toEqual({
+        path: "/var/log/caddy",
+        state: "directory",
+        owner: "caddy",
+        group: "caddy",
+        mode: "0755",
+      });
+      for (const ownership of [
+        "Ensure Caddy's log files exist and belong to caddy",
+        "Keep Caddy's log files owned by caddy after validation",
+      ]) {
+        const files = task(play, ownership);
+        expect(files.loop, `${name}: ${ownership}`).toEqual(named);
+        expect(files.file, `${name}: ${ownership}`).toMatchObject({
+          path: "{{ item }}",
+          state: "touch",
+          owner: "caddy",
+          group: "caddy",
+          modification_time: "preserve",
+          access_time: "preserve",
+        });
+      }
+      const at = (task: string) => position(play, task);
+      expect(at("Ensure Caddy's log directory belongs to caddy")).toBeLessThan(
+        at(validation),
+      );
+      expect(
+        at("Ensure Caddy's log files exist and belong to caddy"),
+      ).toBeLessThan(at(validation));
+      expect(
+        at("Keep Caddy's log files owned by caddy after validation"),
+      ).toBeGreaterThan(at(validation));
+    }
+    // deploy.yml re-asserts ownership before the validated file goes live.
+    const deployPlay = playWithTask(
+      deploy,
+      "Validate the candidate Caddy configuration",
+    );
+    expect(
+      position(
+        deployPlay,
+        "Keep Caddy's log files owned by caddy after validation",
+      ),
+    ).toBeLessThan(
+      position(deployPlay, "Reload Caddy onto the desired signaling ports"),
+    );
   });
 
   test("deployed migrations use the audited lockfile and the server's schema/config", () => {
