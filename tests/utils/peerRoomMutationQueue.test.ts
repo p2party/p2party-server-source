@@ -1,24 +1,28 @@
 import { expect, test } from "bun:test";
 import { admissionLimits } from "../../src/utils/admission";
-import { runPeerRoomMutation } from "../../src/utils/peerRoomMutationQueue";
+import {
+  runMembershipMutation,
+  runPeerRoomMutation,
+} from "../../src/utils/peerRoomMutationQueue";
 
 test("room locks have their own bound and peer locks keep theirs", async () => {
   let open = () => {};
   const gate = new Promise<void>((resolve) => {
     open = resolve;
   });
-  const hold = (key: string) =>
-    runPeerRoomMutation(key, () => gate).then(
+  const settle = (mutation: Promise<unknown>) =>
+    mutation.then(
       () => "served",
       (error: Error) => error.message,
     );
 
+  // The same string as a peer key and as a room key: separate queues.
+  const key = "00000000-0000-4000-8000-000000000001";
   const peer = Array.from({ length: 9 }, () =>
-    hold("00000000-0000-4000-8000-000000000001"),
+    settle(runPeerRoomMutation(key, () => gate)),
   );
-  // handleRoom serializes room membership under `room:<identifier>`.
   const room = Array.from({ length: admissionLimits.peersPerRoom + 1 }, () =>
-    hold(`room:${"ab".repeat(64)}`),
+    settle(runMembershipMutation("room", key, () => gate)),
   );
   open();
 

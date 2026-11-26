@@ -1,7 +1,10 @@
 import { createTurnCredentials } from "./socketAuth";
 import { isCurrentVerifiedSocket } from "./socketAuth";
 import { deriveRoomIdentifier } from "./roomIdentifier";
-import { runPeerRoomMutation } from "./peerRoomMutationQueue";
+import {
+  runMembershipMutation,
+  runPeerRoomMutation,
+} from "./peerRoomMutationQueue";
 import { prisma as sharedPrisma } from "../prismaClient";
 import { wsClients } from "../wsServer";
 
@@ -64,14 +67,17 @@ const handleRoomWithClient = async (
       if (
         !wasMember &&
         ((peer._count?.rooms ?? 0) >= admissionLimits.roomsPerIdentity ||
-          !admission.newMembership())
+          // Charged to the socket's source key and /48 before the process.
+          !(ws.data.admission
+            ? ws.data.admission.newMembership()
+            : admission.newMembership()))
       )
         throw new Error("Room membership capacity reached");
 
       // Serialize different identities joining one room on the supported worker.
       // Keep the peer queue outside this lock so stale-socket compensation cannot
       // erase a successor's membership.
-      await runPeerRoomMutation(`room:${identifier}`, async () => {
+      await runMembershipMutation("room", identifier, async () => {
         // Keep unique room creation free of nested writes so Prisma emits one
         // atomic PostgreSQL upsert instead of a find-then-create race.
         const room = await prisma.room.upsert({

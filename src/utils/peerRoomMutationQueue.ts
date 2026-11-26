@@ -7,42 +7,41 @@ export const MAX_PENDING_ROOM_MUTATIONS_PER_PEER = 8;
  * lock, so each peer holds at most one entry in any room queue.
  */
 export const MAX_PENDING_ROOM_MUTATIONS_PER_ROOM = admissionLimits.peersPerRoom;
-/** handleRoom serializes one room's membership under `room:<identifier>`. */
-const ROOM_KEY_PREFIX = "room:";
 
-interface PeerMutationQueue {
+/** "peer" serializes one peer's mutations; "room" serializes one room's membership. */
+export type MembershipLock = "peer" | "room";
+
+interface MutationQueue {
   tail: Promise<void>;
   pending: number;
 }
 
-const peerMutationQueues = new Map<string, PeerMutationQueue>();
+const mutationQueues: Record<MembershipLock, Map<string, MutationQueue>> = {
+  peer: new Map(),
+  room: new Map(),
+};
+const pendingBounds: Record<MembershipLock, number> = {
+  peer: MAX_PENDING_ROOM_MUTATIONS_PER_PEER,
+  room: MAX_PENDING_ROOM_MUTATIONS_PER_ROOM,
+};
 
 /**
- * Serialize membership mutations for one peer across same-process socket
- * replacement. Per-socket FIFO orders one transport; this is the second,
- * process-local fence that stops an old in-flight join racing its successor.
- * A `room:`-prefixed key serializes one room's membership instead and has its
- * own bound.
+ * Serialize mutations under one lock: a peer id for "peer", a room identifier
+ * for "room". Each kind has its own queues and its own pending bound.
  */
-export const runPeerRoomMutation = async <Result>(
+export const runMembershipMutation = async <Result>(
+  lock: MembershipLock,
   key: string,
   mutation: () => Promise<Result>,
 ): Promise<Result> => {
-  const isRoom = key.startsWith(ROOM_KEY_PREFIX);
-  let queue = peerMutationQueues.get(key);
+  const queues = mutationQueues[lock];
+  let queue = queues.get(key);
   if (!queue) {
     queue = { tail: Promise.resolve(), pending: 0 };
-    peerMutationQueues.set(key, queue);
+    queues.set(key, queue);
   }
-  if (
-    queue.pending >=
-    (isRoom
-      ? MAX_PENDING_ROOM_MUTATIONS_PER_ROOM
-      : MAX_PENDING_ROOM_MUTATIONS_PER_PEER)
-  )
-    throw new Error(
-      `Too many pending room mutations for this ${isRoom ? "room" : "peer"}`,
-    );
+  if (queue.pending >= pendingBounds[lock])
+    throw new Error(`Too many pending room mutations for this ${lock}`);
 
   queue.pending += 1;
   const predecessor = queue.tail;
@@ -57,7 +56,16 @@ export const runPeerRoomMutation = async <Result>(
   } finally {
     queue.pending -= 1;
     release();
-    if (queue.pending === 0 && peerMutationQueues.get(key) === queue)
-      peerMutationQueues.delete(key);
+    if (queue.pending === 0 && queues.get(key) === queue) queues.delete(key);
   }
 };
+
+/**
+ * Serialize membership mutations for one peer across same-process socket
+ * replacement. Per-socket FIFO orders one transport; this is the second,
+ * process-local fence that stops an old in-flight join racing its successor.
+ */
+export const runPeerRoomMutation = <Result>(
+  peerId: string,
+  mutation: () => Promise<Result>,
+): Promise<Result> => runMembershipMutation("peer", peerId, mutation);
