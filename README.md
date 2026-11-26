@@ -53,7 +53,11 @@ bun run format:check
 
 `check` is `db:generate`, `typecheck` and `bun test`. CI runs the same gates
 plus `db:migrate` against a real PostgreSQL
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). `format` and
+`format:check` run Prettier on the files Git tracks and refuse to run outside a
+Git work tree. Prettier itself reads only the top-level `.gitignore`, so given
+`.` it would also read, and `format` would rewrite, the ignored Terraform state,
+Ansible vault and inventory under `deploy/` (`tests/formatScripts.test.ts`).
 
 ### Testing against PostgreSQL
 
