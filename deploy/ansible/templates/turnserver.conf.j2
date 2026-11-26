@@ -30,8 +30,10 @@ ec-curve-name=prime256v1
 
 # ---- Authentication ----
 # Time-limited REST credentials (RFC 7635 style): the signaling server derives
-# username=<expiry>:<peer> and password=HMAC-SHA1(secret, username), so no
-# long-lived credential is ever handed to a browser.
+# username=<expiry>:<identity public key> and password=HMAC-SHA1(secret,
+# username), so no long-lived credential is ever handed to a browser. The
+# expiry is rounded up to a whole credential lifetime (one hour), so one
+# identity has one username per lifetime and at most two valid at any instant.
 use-auth-secret
 static-auth-secret={{ vault_coturn_auth_secret }}
 realm={{ vault_coturn_realm }}
@@ -43,14 +45,22 @@ realm={{ vault_coturn_realm }}
 # total-quota is concurrent allocations server-wide, user-quota per username.
 # Both bandwidth settings are bytes/sec, with input and output counted separately.
 # Clients without a BANDWIDTH request reserve max-bps per allocation: the default
-# aggregate budget admits about ten such allocations. Raise it for larger rooms.
+# aggregate budget admits 48 such allocations. Raise it for larger rooms.
+# One identity holds at most two valid usernames, so it can reserve at most
+# 2 * user-quota * max-bps; setup-coturn.yml requires that to be at most half
+# of bps-capacity (12 * 625000 * 2 = 15000000 of 30000000 at the defaults).
 total-quota={{ coturn_total_quota | default(1200) }}
 user-quota={{ coturn_user_quota | default(12) }}
-max-bps={{ coturn_max_bps | default(3000000) }}
+max-bps={{ coturn_max_bps | default(625000) }}
 bps-capacity={{ coturn_bps_capacity | default(30000000) }}
 
 # ---- Logging ----
-log-file=/var/log/turnserver/turnserver.log
+# No log is kept. At its default verbosity coturn logs each session's username,
+# which carries the identity public key, beside the client address. Nothing
+# goes to stdout, so nothing reaches journald either. simple-log keeps coturn
+# from appending a date to the file name. For a one-off diagnosis, run
+# turnserver by hand with --log-file=stdout.
+log-file=/dev/null
 simple-log
 no-stdout-log
 

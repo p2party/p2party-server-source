@@ -21,9 +21,14 @@
     - name: Require finite TURN bandwidth budgets
       assert:
         that:
-          - coturn_max_bps | default(3000000) | int > 0
-          - coturn_bps_capacity | default(30000000) | int >= coturn_max_bps | default(3000000) | int
-        fail_msg: Set positive coturn_max_bps and coturn_bps_capacity; zero disables the bandwidth guard
+          - coturn_max_bps | default(625000) | int > 0
+          - coturn_user_quota | default(12) | int > 0
+          - coturn_bps_capacity | default(30000000) | int >= coturn_max_bps | default(625000) | int
+          # One identity holds at most two valid usernames (the credential
+          # expiry is rounded to a whole lifetime), and user-quota counts per
+          # username: keep its reservation to half of the aggregate capacity.
+          - 4 * (coturn_user_quota | default(12) | int) * (coturn_max_bps | default(625000) | int) <= coturn_bps_capacity | default(30000000) | int
+        fail_msg: Set positive coturn_max_bps, coturn_user_quota and coturn_bps_capacity with 2 * user quota * max bps at most half the capacity; zero disables the bandwidth guard
 
     - name: Display setup info
       debug:
@@ -104,14 +109,6 @@
         mode: "0600"
         remote_src: yes
 
-    - name: Create turnserver log directory
-      file:
-        path: /var/log/turnserver
-        state: directory
-        owner: turnserver
-        group: turnserver
-        mode: "0750"
-
     - name: Deploy coturn configuration
       template:
         src: "{{ playbook_dir }}/../templates/turnserver.conf.j2"
@@ -121,23 +118,17 @@
         mode: "0600"
       notify: Restart Coturn
 
-    # simple-log writes an unbounded file; without rotation the relay fills its
-    # own disk and stops relaying.
-    - name: Rotate the coturn log
-      copy:
-        dest: /etc/logrotate.d/coturn
-        mode: "0644"
-        content: |
-          /var/log/turnserver/turnserver.log {
-            daily
-            rotate 14
-            missingok
-            notifempty
-            compress
-            delaycompress
-            copytruncate
-            su turnserver turnserver
-          }
+    # coturn now writes no log (turnserver.conf.j2). Hosts provisioned earlier
+    # still hold up to 14 days of rotated files pairing TURN usernames, which
+    # carry identity keys, with client addresses; without their rotation
+    # config nothing would ever delete them.
+    - name: Remove the coturn file log and its rotation
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/logrotate.d/coturn
+        - /var/log/turnserver
 
     - name: Enable and start coturn
       systemd:

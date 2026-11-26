@@ -47,6 +47,25 @@ const signalingEnvironment = readFileSync(
   join(repoRoot, "deploy/ansible/templates/signaling.env.j2"),
   "utf8",
 );
+const caddyfile = readFileSync(
+  join(repoRoot, "deploy/ansible/templates/Caddyfile.j2"),
+  "utf8",
+);
+const journaldRetention = () =>
+  readFileSync(
+    join(repoRoot, "deploy/ansible/templates/journald-retention.conf.j2"),
+    "utf8",
+  );
+
+/** The Jinja default of a `name={{ var | default(N) }}` coturn line. */
+const coturnDefault = (name: string): number => {
+  const match = new RegExp(
+    `^${name}=\\{\\{ coturn_\\w+ \\| default\\(([0-9]+)\\) \\}\\}$`,
+    "m",
+  ).exec(turnserverConfig);
+  if (!match) throw new Error(`no default for ${name}`);
+  return Number(match[1]);
+};
 
 describe("production deployment contract", () => {
   test("every provisioning path installs verified PostgreSQL TLS ahead of client cutover", () => {
@@ -180,10 +199,70 @@ describe("production deployment contract", () => {
       "bps-capacity={{ coturn_bps_capacity | default(30000000) }}",
     );
     expect(turnserverConfig).toContain(
-      "max-bps={{ coturn_max_bps | default(3000000) }}",
+      "max-bps={{ coturn_max_bps | default(625000) }}",
     );
     expect(setupCoturn).toContain("Require finite TURN bandwidth budgets");
     expect(setupCoturn).toContain("zero disables the bandwidth guard");
+  });
+
+  test("one TURN identity can reserve at most half the relay bandwidth", () => {
+    const userQuota = coturnDefault("user-quota");
+    const maxBps = coturnDefault("max-bps");
+    const capacity = coturnDefault("bps-capacity");
+    // user-quota counts allocations per username. A username is stable per
+    // identity for one credential lifetime, and the previous lifetime's
+    // credential is still valid, so one identity holds at most two.
+    expect(userQuota * maxBps).toBeLessThanOrEqual(capacity / 2);
+    expect(2 * userQuota * maxBps).toBeLessThanOrEqual(capacity / 2);
+    // The same bound is enforced for operator overrides.
+    expect(setupCoturn).toContain(
+      "- 4 * (coturn_user_quota | default(12) | int) * (coturn_max_bps | default(625000) | int) <= coturn_bps_capacity | default(30000000) | int",
+    );
+    expect(setupCoturn).toContain("coturn_user_quota | default(12) | int > 0");
+    expect(turnserverConfig).toContain(
+      "user-quota={{ coturn_user_quota | default(12) }}",
+    );
+  });
+
+  test("coturn keeps no log file of usernames and client addresses", () => {
+    expect(turnserverConfig).toMatch(/^log-file=\/dev\/null$/m);
+    expect(turnserverConfig).toMatch(/^no-stdout-log$/m);
+    expect(turnserverConfig).toMatch(/^simple-log$/m);
+    for (const option of ["syslog", "verbose", "Verbose", "log-binding"])
+      expect(turnserverConfig).not.toMatch(new RegExp(`^${option}$`, "m"));
+    expect(turnserverConfig).not.toContain("/var/log/turnserver");
+    // Hosts provisioned before keep their rotated files until removed.
+    const removal = setupCoturn.slice(
+      setupCoturn.indexOf(
+        "- name: Remove the coturn file log and its rotation",
+      ),
+    );
+    expect(removal).toContain("/var/log/turnserver");
+    expect(removal).toContain("/etc/logrotate.d/coturn");
+    expect(removal).toContain("state: absent");
+    expect(setupCoturn).not.toContain("rotate 14");
+  });
+
+  test("Caddy's default logger records no request URI, headers or raw client IP", () => {
+    // Upstream failures are logged by Caddy's default logger, not the site's
+    // access log, with the request including the ?publickey= query.
+    const globalBlock = caddyfile.slice(
+      caddyfile.indexOf("\n{\n"),
+      caddyfile.indexOf("{{ domains.signaling }} {"),
+    );
+    expect(globalBlock).toContain("log default {");
+    for (const filter of [
+      "request>uri delete",
+      "request>headers delete",
+      "request>client_ip delete",
+      "request>remote_ip ip_mask {",
+    ])
+      expect(globalBlock).toContain(filter);
+  });
+
+  test("journald keeps at most seven days", () => {
+    expect(journaldRetention()).toMatch(/^\[Journal\]$/m);
+    expect(journaldRetention()).toMatch(/^MaxRetentionSec=7day$/m);
   });
 
   test("deployed migrations use the audited lockfile and the server's schema/config", () => {

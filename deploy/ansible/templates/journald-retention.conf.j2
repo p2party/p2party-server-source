@@ -1,0 +1,12 @@
+# ============================================================================
+# P2Party journald retention - /etc/systemd/journald.conf.d/p2party-retention.conf
+# ============================================================================
+# Managed by Ansible - do not edit manually
+#
+# Journal entries older than seven days are discarded. The signaling service
+# and Caddy log to the journal; their lines name peers only by per-boot tags
+# and mask client addresses, and this bounds how long even those are kept.
+# ============================================================================
+
+[Journal]
+MaxRetentionSec=7day

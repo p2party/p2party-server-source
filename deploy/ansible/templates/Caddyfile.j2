@@ -4,6 +4,27 @@
 # Managed by Ansible - do not edit manually
 # ============================================================================
 
+{
+	# Caddy's default logger records upstream failures (every restart answers
+	# 502 for a moment) with the full request: the ?publickey= query, headers
+	# and the unmasked client address. Filter it like the access log below.
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				request>client_ip delete
+				request>remote_ip ip_mask {
+					ipv4 24
+					ipv6 48
+				}
+			}
+		}
+	}
+}
+
 {{ domains.signaling }} {
 	# Reverse proxy to Bun signaling server instances
 	reverse_proxy {% for port in signaling_instance_ports | default([app_port]) %}127.0.0.1:{{ port }}{% if not loop.last %} {% endif %}{% endfor %} {
