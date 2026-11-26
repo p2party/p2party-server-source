@@ -23,8 +23,8 @@
     - name: Verify Ansible version
       assert:
         that:
-          - ansible_version.full is version('2.9', '>=')
-        fail_msg: "This playbook requires Ansible 2.9 or higher"
+          - ansible_version.full is version('2.22.0', '>=')
+        fail_msg: "This playbook requires ansible-core 2.22.0 or newer"
       run_once: true
       delegate_to: localhost
       connection: local
