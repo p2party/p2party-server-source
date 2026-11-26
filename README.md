@@ -78,29 +78,46 @@ identity ceiling, which is checked in a serializable database transaction.
 Supported production runs one worker; experimental multiple workers do not
 provide a global room/member or address-rate guarantee.
 
-| Variable                                 | Default | Bound                                                                           |
-| ---------------------------------------- | ------: | ------------------------------------------------------------------------------- |
-| `MAX_CONNECTIONS`                        |    2048 | Concurrent WebSockets                                                           |
-| `MAX_CONNECTIONS_PER_IP`                 |      32 | Concurrent sockets per address                                                  |
-| `CONNECTION_ATTEMPTS_PER_IP_PER_MINUTE`  |      60 | Upgrade attempts per address                                                    |
-| `MAX_CONNECTIONS_PER_IDENTITY`           |       4 | Concurrent sockets that proved the same key (minimum 2 for replacement overlap) |
-| `MESSAGES_PER_IDENTITY_PER_MINUTE`       |    2400 | Frames per proved identity; before proof, per address                           |
-| `ROOM_MUTATIONS_PER_IDENTITY_PER_MINUTE` |      60 | Join/leave requests per proved identity                                         |
-| `NEW_IDENTITIES_PER_MINUTE`              |     120 | New proved identities admitted                                                  |
-| `NEW_MEMBERSHIPS_PER_MINUTE`             |     600 | New room memberships admitted                                                   |
-| `MAX_PERSISTENT_IDENTITIES`              |  100000 | Durable peer rows; existing identities can reconnect at capacity                |
-| `MAX_ROOMS_PER_IDENTITY`                 |      64 | Room memberships per identity                                                   |
-| `MAX_PEERS_PER_ROOM`                     |     128 | Members including offline peers                                                 |
-| `MAX_TRACKED_ADDRESSES`                  |   10000 | Entries in each address/identity accounting table                               |
-| `AUTHENTICATION_TIMEOUT_MS`              |   15000 | Deadline for proof and routing activation                                       |
+| Variable                                 | Default | Bound                                                                                                        |
+| ---------------------------------------- | ------: | ------------------------------------------------------------------------------------------------------------ |
+| `MAX_CONNECTIONS`                        |    2048 | Concurrent WebSockets; one IPv6 /48 holds at most 10%                                                        |
+| `MAX_CONNECTIONS_PER_IP`                 |      32 | Concurrent sockets per address key                                                                           |
+| `CONNECTION_ATTEMPTS_PER_IP_PER_MINUTE`  |      60 | Upgrade attempts per address key                                                                             |
+| `MAX_CONNECTIONS_PER_IDENTITY`           |       4 | Concurrent sockets that proved the same key (minimum 2 for replacement overlap)                              |
+| `MESSAGES_PER_IDENTITY_PER_MINUTE`       |    2400 | Frames per proved identity; before proof, per address key                                                    |
+| `ROOM_MUTATIONS_PER_IDENTITY_PER_MINUTE` |      60 | Join/leave requests per proved identity                                                                      |
+| `NEW_IDENTITIES_PER_MINUTE`              |     120 | New proved identities admitted; one address key gets at most 5% (6 at the default), one IPv6 /48 at most 10% |
+| `NEW_MEMBERSHIPS_PER_MINUTE`             |     600 | New room memberships admitted; one address key gets at most 5% (30 at the default), one IPv6 /48 at most 10% |
+| `MAX_PERSISTENT_IDENTITIES`              |  100000 | Hard cap on durable peer rows of any age; existing identities can reconnect at capacity                      |
+| `MAX_ROOMS_PER_IDENTITY`                 |      64 | Room memberships per identity                                                                                |
+| `MAX_PEERS_PER_ROOM`                     |     128 | Members including offline peers; also the room requests that can wait for one room's membership lock         |
+| `MAX_TRACKED_ADDRESSES`                  |   10000 | Entries in each address-key, IPv6 /48 and identity accounting table                                          |
+| `AUTHENTICATION_TIMEOUT_MS`              |   15000 | Deadline for proof and routing activation                                                                    |
+
+The address key is the IPv4 address, or the /64 prefix of an IPv6 address; an
+IPv4-mapped IPv6 address counts as its IPv4 address. Every IPv6 request is also
+charged to its /48. Everyone behind one shared IPv4 address (carrier-grade NAT,
+a campus network) therefore shares 32 sockets, 60 upgrades, 6 new identities and
+30 new memberships per minute at the defaults. That is the accepted cost of
+keeping one source from spending a process-wide budget; raising the
+process-wide budgets raises the 5% and 10% shares with them.
 
 A rejected upgrade returns HTTP 429 with `Retry-After: 60`. Socket rate and
 authentication-deadline refusals use retryable close code 1013. Room capacity
-refusals return a request error and leave the authenticated socket open.
-Address-table cleanup inspects at most 16 entries per admission attempt;
-message and connection accounting does not scan the peer population. A new
-proved identity requires a database count for the durable ceiling. These are
-resource limits, not proof of unique humans or a complete Sybil defense.
+refusals return a request error and leave the authenticated socket open, as
+does a room request when 8 of the same peer's, or `MAX_PEERS_PER_ROOM` for the
+same room, are already waiting. When an accounting table is full, a newcomer
+evicts the least recently used entry without an open socket, which discards
+that entry's rate counts; entries with open sockets are never evicted. A full
+table therefore neither refuses newcomers nor stops counting them. Accounting
+does not scan the peer population.
+
+A new proved identity requires a database count of all peer rows. Within 1,000
+rows of `MAX_PERSISTENT_IDENTITIES`, the same transaction first deletes up to
+1,000 identities that are offline, belong to no room and were created more than
+24 hours ago, least recently seen first, and refuses the new identity only if
+the cap is still reached. These are resource limits, not proof of unique humans
+or a complete Sybil defense.
 
 `TRUST_LOCAL_PROXY=true` accepts Caddy's overwritten `X-Real-IP` only when the
 TCP peer is loopback. It is enabled by the reference deployment and disabled
