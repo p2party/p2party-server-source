@@ -71,11 +71,20 @@ changes:
    Bun only when it is absent and never upgrades it, so an existing host may
    fail here; the play then ends at "Report that preparing the release failed"
    with production untouched, and prints the install command below.
-3. **The staged binary.** Right after it is staged, still in the prepare block,
-   the binary is run with `BUN_BE_BUN=1 --version` (a compiled Bun binary then
-   acts as the Bun CLI and starts nothing) and must report the pin. That also
-   covers `--skip-build`, which ships whatever `builds/p2party_linux_x64`
-   already holds.
+3. **The binary.** The deploy's build step writes a build record beside it,
+   `builds/p2party_linux_x64.build.json`: the Bun that built it (the
+   pre-flight has just required the pin), the commit, whether the tree had
+   changes (`dirty`), and the binary's SHA-256. Every deploy, `--skip-build`
+   included, then requires on the control machine, before anything is staged,
+   that the record exists, matches the binary's SHA-256 and names the pin; a
+   binary built by hand, rebuilt after its record, or built with another Bun
+   is refused. After staging, the staged file's SHA-256 (read with `stat`,
+   symlinks not followed) must equal the built binary's. Nothing staged is
+   executed on the host: a worker's account owns the staging directory's
+   parent, so running it, as root above all, would run whatever was put
+   there. The record's commit and dirty flag are there to prove later that a
+   `--skip-build` binary is the build of the tree being deployed; nothing
+   compares them yet.
 
 To install the pinned Bun on the signaling host, download the release zip for
 its architecture and check it before unpacking. The SHA-256 values for
@@ -149,11 +158,14 @@ deploy time: the deploy checks it ([Which Bun, and where it is checked](#which-b
 These parts of this release could not be run on the hosts before the deploy,
 only locally as described:
 
-1. The host and staged-binary Bun checks
+1. The host's Bun check, the build record and the staged-binary hash
    ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
-   Locally they ran against a scratch home and staging directory, and the
-   pre-flight against this machine, each passing for 1.4.5 and refusing 1.4.4
-   and a missing Bun; on the signaling host they have not run.
+   Locally, the host check ran against a scratch home (passing for 1.4.5,
+   refusing 1.4.4 and a missing Bun), the pre-flight against this machine, and
+   the build-record and staged-hash tasks, taken verbatim from `deploy.yml`,
+   against a scratch repository and staging directory (refusing a missing
+   record, a binary changed after its record, a binary built with 1.4.4 and a
+   staged symlink); on the signaling host they have not run.
 2. The migration tooling install now includes TypeScript 7, a native compiler shipped as one
    package per platform (`@typescript/typescript-linux-x64` on the host), since
    the tooling installs development dependencies.
@@ -163,10 +175,11 @@ only locally as described:
    and `migrate resolve --applied` and `--rolled-back` behaved as described
    below; the host runs PostgreSQL 17.
 4. The `p2party_linux_x64` binary. The deploy builds it with the control
-   machine's Bun, which the pre-flight requires to be the pin, and checks the
-   staged binary's embedded Bun on the host. A linux-x64 build with the
-   `build:linux` flags was made locally with Bun 1.4.5 but not started; a macOS
-   build with the same flags passed its schema check and answered `/health`.
+   machine's Bun, which the pre-flight requires to be the pin, records that Bun
+   beside it and stages it only if the staged bytes are the built ones. A
+   linux-x64 build with the `build:linux` flags was made locally with Bun 1.4.5
+   but not started; a macOS build with the same flags passed its schema check
+   and answered `/health`.
 5. `caddy validate` and the reload on the host's own Caddy version.
 6. On the operator's machine: `prisma generate` inside `bun run build:linux`
    runs under the `node` on `PATH` when there is one (Prisma's command starts

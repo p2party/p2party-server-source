@@ -727,8 +727,8 @@ repo with `bun run build:linux` and refuses to continue if the binary is
 missing. While the old release keeps serving, it then requires the signaling
 host's Bun to be that pin, installs the audited manifest and frozen lockfile
 into isolated migration tooling, copies the schema and migrations, stages the
-new binary (whose embedded Bun must also be the pin), environment file and
-units, and validates a candidate
+new binary (only one whose build record names that pin, staged byte for byte),
+environment file and units, and validates a candidate
 Caddy configuration; a failure there leaves production untouched. Only then does
 it stop and disable every signaling worker, run the Prisma CLI on the host and,
 if that errors, end the play with the recovery steps (deploy/README.md, "A

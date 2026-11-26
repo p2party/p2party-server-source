@@ -1037,15 +1037,11 @@ describe("toolchain pins", () => {
     );
     const inBlock = (prepare.block ?? []).map((t) => t.name);
     const host = "Require the pinned Bun on the signaling host";
-    const binary = "Require the pinned Bun in the staged binary";
     // First in the block whose rescue reports that production is untouched,
     // so nothing on the host changes before it.
     expect(inBlock[0]).toBe(host);
     expect(inBlock.indexOf(host)).toBeLessThan(
       inBlock.indexOf("Install exactly the audited migration dependencies"),
-    );
-    expect(inBlock.indexOf(binary)).toBe(
-      inBlock.indexOf("Stage the compiled binary") + 1,
     );
     expect((prepare.rescue ?? []).map((t) => t.name)).toContain(
       "Report that preparing the release failed",
@@ -1053,33 +1049,171 @@ describe("toolchain pins", () => {
     for (const later of [
       "Stop and disable every signaling worker before migrating",
       "Apply migrations against Postgres",
-    ]) {
+    ])
       expect(position(play, host)).toBeLessThan(position(play, later));
-      expect(position(play, binary)).toBeLessThan(position(play, later));
-    }
-    for (const [name, check] of [
-      [host, "host"],
-      [binary, "binary"],
-    ] as const) {
-      const imported = task(play, name);
-      expect(imported.import_tasks).toBe(
-        "{{ playbook_dir }}/../tasks/require-pinned-bun.yml",
-      );
-      expect(imported.vars).toEqual({ pinned_bun_check: check });
-    }
-    // The imported tasks compare with the pin and report rather than crash.
+    expect(task(play, host).import_tasks).toBe(
+      "{{ playbook_dir }}/../tasks/require-pinned-bun.yml",
+    );
+    // The imported tasks run the host's own Bun as the app account, compare
+    // it with the pin, and report rather than crash.
     const [read, require] = Bun.YAML.parse(pinnedBunTasks()) as PlaybookTask[];
+    expect(read!.command).toEqual({
+      argv: ["{{ bun.install_dir }}/bin/bun", "--version"],
+    });
+    expect(read!.become_user).toBe("{{ app.user }}");
     expect(read!.failed_when).toBe(false);
-    expect(JSON.stringify(read!.command)).toContain(
-      "bun.install_dir ~ '/bin/bun'",
-    );
-    expect(JSON.stringify(read!.command)).toContain(
-      "release_staging ~ '/p2party-server'",
-    );
-    expect(String(read!.environment)).toContain("'BUN_BE_BUN': '1'");
     expect((require!.assert as { that: string[] }).that).toContain(
       "(pinned_bun_found.stdout | trim) == bun.version",
     );
+  });
+
+  test("a binary is deployed only with a build record naming the pinned Bun, and staged byte for byte", () => {
+    const play = playWithTask(deploy, "Apply migrations against Postgres");
+    const at = (name: string) => position(play, name);
+    const record = task(play, "Record how the binary was built");
+    expect(record.when).toBe("not (skip_build | default(false) | bool)");
+    expect(
+      (record.vars as Record<string, unknown> | undefined)?.ansible_become,
+    ).toBe(false);
+    const write = task(play, "Write the build record beside the binary");
+    expect(write.copy?.dest).toBe(
+      "{{ repo_path }}/{{ binary_name }}.build.json",
+    );
+    expect(
+      Object.keys(
+        (write.vars as unknown as { build_record: object }).build_record,
+      ),
+    ).toEqual(["artefact", "sha256", "bun", "commit", "dirty"]);
+    // The record check has no `when`: it also guards --skip-build, before
+    // anything is staged.
+    const check = task(
+      play,
+      "Require a build record that matches the binary and the pinned Bun",
+    );
+    expect(check.when).toBeUndefined();
+    expect((check.assert as { that: string[] }).that).toEqual([
+      "build_record.sha256 | default('') == built_binary.stat.checksum",
+      "build_record.bun | default('') == bun.version",
+    ]);
+    expect(at("Build the Linux binary from this repo")).toBeLessThan(
+      at("Write the build record beside the binary"),
+    );
+    expect(at("Write the build record beside the binary")).toBeLessThan(
+      at("Require a build record that matches the binary and the pinned Bun"),
+    );
+    expect(
+      at("Require a build record that matches the binary and the pinned Bun"),
+    ).toBeLessThan(
+      at("Prepare the release without touching the running workers"),
+    );
+    // After staging, inside the prepare block, before any worker stops: the
+    // staged file is read (not run) and must be the built one.
+    const prepare = task(
+      play,
+      "Prepare the release without touching the running workers",
+    );
+    const inBlock = (prepare.block ?? []).map((t) => t.name);
+    const stage = inBlock.indexOf("Stage the compiled binary");
+    expect(inBlock.slice(stage + 1, stage + 3)).toEqual([
+      "Read the staged binary's SHA-256",
+      "Require the staged binary to be the one built",
+    ]);
+    expect(task(play, "Read the staged binary's SHA-256").stat).toEqual({
+      path: "{{ release_staging }}/p2party-server",
+      follow: false,
+      checksum_algorithm: "sha256",
+    });
+    expect(
+      (
+        task(play, "Require the staged binary to be the one built").assert as {
+          that: string[];
+        }
+      ).that,
+    ).toEqual([
+      "staged_binary.stat.isreg | default(false)",
+      "staged_binary.stat.checksum | default('') == built_binary.stat.checksum",
+    ]);
+    expect(at("Require the staged binary to be the one built")).toBeLessThan(
+      at("Stop and disable every signaling worker before migrating"),
+    );
+  });
+
+  test("no task executes a staged artefact as root", () => {
+    // Every task of every playbook here, imported task files expanded. The
+    // inventory sets ansible_become, which outranks the `become` keyword, so a
+    // remote task runs as root unless it clears ansible_become or names a
+    // non-root become_user; a templated one other than app.user counts as root.
+    const COMMAND =
+      /^(ansible\.(builtin|legacy)\.)?(command|shell|raw|script)$/;
+    const STAGED =
+      /release_staging|release-staging|server\/p2party-server|binary_name/;
+    type Raw = Record<string, unknown>;
+    const offenders: string[] = [];
+    const program = (module: string, args: unknown): string => {
+      if (!/command$/.test(module)) return JSON.stringify(args);
+      if (typeof args === "string") return args.trim().split(/\s+/)[0] ?? "";
+      const a = (args ?? {}) as { argv?: unknown[]; cmd?: string };
+      if (a.argv) return String(a.argv[0] ?? "");
+      return (
+        String(a.cmd ?? "")
+          .trim()
+          .split(/\s+/)[0] ?? ""
+      );
+    };
+    const nonRoot = (user: unknown) =>
+      user === "{{ app.user }}" ||
+      (typeof user === "string" && !user.includes("{{") && user !== "root");
+    const visit = (
+      tasks: Raw[],
+      inherited: { user?: unknown; local: boolean; noBecome: boolean },
+      where: string,
+    ) => {
+      for (const t of tasks ?? []) {
+        const vars = (t.vars ?? {}) as Raw;
+        const scope = {
+          user: t.become_user ?? inherited.user,
+          local: inherited.local || t.delegate_to === "localhost",
+          noBecome: inherited.noBecome || vars.ansible_become === false,
+        };
+        for (const nested of ["block", "rescue", "always"])
+          if (t[nested]) visit(t[nested] as Raw[], scope, where);
+        for (const key of [
+          "import_tasks",
+          "include_tasks",
+          "ansible.builtin.import_tasks",
+          "ansible.builtin.include_tasks",
+        ]) {
+          const path = t[key];
+          if (typeof path !== "string") continue;
+          const file = path.replace("{{ playbook_dir }}/../", "");
+          visit(Bun.YAML.parse(readAnsible(file)) as Raw[], scope, file);
+        }
+        for (const [key, args] of Object.entries(t)) {
+          if (!COMMAND.test(key)) continue;
+          const runsAsRoot =
+            !scope.local && !scope.noBecome && !nonRoot(scope.user);
+          if (runsAsRoot && STAGED.test(program(key, args)))
+            offenders.push(`${where}: ${String(t.name)}`);
+        }
+      }
+    };
+    for (const file of readdirSync(playbooksDir).filter((f) =>
+      f.endsWith(".yml"),
+    )) {
+      const plays = Bun.YAML.parse(
+        readFileSync(join(playbooksDir, file), "utf8"),
+      ) as Raw[];
+      for (const play of plays) {
+        const scope = {
+          user: play.become_user,
+          local: play.hosts === "localhost",
+          noBecome: ((play.vars ?? {}) as Raw).ansible_become === false,
+        };
+        for (const section of ["pre_tasks", "tasks", "post_tasks", "handlers"])
+          visit((play[section] ?? []) as Raw[], scope, `playbooks/${file}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   test("every playbook starts with the local pre-flight before any host is contacted", () => {

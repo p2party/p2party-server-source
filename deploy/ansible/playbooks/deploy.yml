@@ -110,9 +110,54 @@
       changed_when: true
       when: not (skip_build | default(false) | bool)
 
+    # A record beside the binary of how it was built: the Bun that built it
+    # (the local pre-flight has just required the pin), the commit and whether
+    # the tree had changes, and the binary's SHA-256. A --skip-build deploy
+    # ships an existing binary and is accepted only with a matching record.
+    # The commit and dirty flag are for proving that such a binary is the build
+    # of the tree being deployed; nothing compares them yet.
+    - name: Record how the binary was built
+      when: not (skip_build | default(false) | bool)
+      delegate_to: localhost
+      become: false
+      vars:
+        ansible_become: false
+      block:
+        - name: Read the commit and whether the tree has changes
+          shell: >-
+            git -C "{{ repo_path }}" rev-parse HEAD &&
+            git -C "{{ repo_path }}" status --porcelain
+          register: build_tree
+          changed_when: false
+
+        - name: Read the Bun that built the binary
+          command: bun --version
+          register: build_bun
+          changed_when: false
+
+        - name: Read the built binary's SHA-256
+          stat:
+            path: "{{ repo_path }}/{{ binary_name }}"
+            checksum_algorithm: sha256
+          register: build_artefact
+
+        - name: Write the build record beside the binary
+          copy:
+            dest: "{{ repo_path }}/{{ binary_name }}.build.json"
+            content: "{{ build_record | to_nice_json }}\n"
+            mode: "0644"
+          vars:
+            build_record:
+              artefact: "{{ binary_name | basename }}"
+              sha256: "{{ build_artefact.stat.checksum }}"
+              bun: "{{ build_bun.stdout | trim }}"
+              commit: "{{ build_tree.stdout_lines | first }}"
+              dirty: "{{ (build_tree.stdout_lines | length) > 1 }}"
+
     - name: Confirm the binary exists before touching the host
       stat:
         path: "{{ repo_path }}/{{ binary_name }}"
+        checksum_algorithm: sha256
       delegate_to: localhost
       become: false
       vars:
@@ -125,6 +170,34 @@
         fail_msg: >-
           {{ binary_name }} not found in {{ repo_path }}. Run
           `{{ build_command }}` first, or drop skip_build.
+
+    # Also after --skip-build: the binary must carry a record that matches its
+    # bytes and names the pinned Bun, before anything is staged on the host.
+    - name: Require a build record that matches the binary and the pinned Bun
+      assert:
+        that:
+          - build_record.sha256 | default('') == built_binary.stat.checksum
+          - build_record.bun | default('') == bun.version
+        fail_msg: >-
+          {{ binary_name }}
+          {% if not build_record %}has no build record
+          ({{ binary_name }}.build.json): it was not built by this playbook, or
+          its record was removed.
+          {%- elif build_record.sha256 | default('') != built_binary.stat.checksum %}does
+          not match its build record (recorded SHA-256
+          {{ build_record.sha256 | default('none') }}, binary
+          {{ built_binary.stat.checksum }}): it was rebuilt or replaced after the
+          record was written.
+          {%- else %}was built with Bun {{ build_record.bun | default('unknown') }}
+          (its build record), not the pinned {{ bun.version }}; `bun build
+          --compile` embeds the Bun that ran it.
+          {%- endif %}
+          Nothing has been staged. Run deploy/deploy.sh without --skip-build on
+          a control machine whose bun is {{ bun.version }}.
+      vars:
+        build_record: >-
+          {{ lookup('ansible.builtin.file', repo_path ~ '/' ~ binary_name ~ '.build.json', errors='ignore')
+             | default('{}', true) | from_json }}
 
     - name: Resolve the desired signaling instance ports
       set_fact:
@@ -149,8 +222,6 @@
         # mismatch ends the play in the rescue below, workers untouched.
         - name: Require the pinned Bun on the signaling host
           import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml"
-          vars:
-            pinned_bun_check: host
 
         - name: Ensure the journald drop-in directory exists
           file:
@@ -264,12 +335,27 @@
             group: "{{ app.group }}"
             mode: "0755"
 
-        # The Bun the service will run is the one embedded in the binary: the
-        # build machine's, or an older build's after --skip-build.
-        - name: Require the pinned Bun in the staged binary
-          import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml"
-          vars:
-            pinned_bun_check: binary
+        # The service runs the Bun embedded in the binary, which the build
+        # record names. The staged file must be byte for byte that binary. It
+        # is read, never executed: a worker owns the staging directory's
+        # parent, and nothing staged runs as root.
+        - name: Read the staged binary's SHA-256
+          stat:
+            path: "{{ release_staging }}/p2party-server"
+            follow: false
+            checksum_algorithm: sha256
+          register: staged_binary
+
+        - name: Require the staged binary to be the one built
+          assert:
+            that:
+              - staged_binary.stat.isreg | default(false)
+              - staged_binary.stat.checksum | default('') == built_binary.stat.checksum
+            fail_msg: >-
+              {{ release_staging }}/p2party-server is not the binary built here
+              (staged SHA-256 {{ staged_binary.stat.checksum | default('none: not a regular file') }},
+              built {{ built_binary.stat.checksum }}). No worker has been
+              stopped and nothing migrated. Run deploy/deploy.sh again.
 
         # The binary and its environment are a matched pair: this release
         # requires COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary
