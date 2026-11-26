@@ -13,6 +13,7 @@ import findRoomPeers from "./findRoomPeers";
 import { PROTOCOL_VERSION } from "./protocolV4";
 import { isCurrentVerifiedSocket, wireSocketGeneration } from "./socketAuth";
 import { peerLogTag } from "./logTag";
+import { describeError } from "./logError";
 
 type HandlePeerAcceptsConnectionPrisma = Pick<ProcessPrismaClient, "peer">;
 type FindRoomPeers = typeof findRoomPeers;
@@ -120,7 +121,10 @@ const handlePeerAcceptsConnectionWithClient = async (
       // acceptor's socket -- terminal on the client (C4) -- while telling it
       // that it does not exist. Refuse this one acceptance and leave the
       // socket up, exactly as handlePeers now does.
-      console.error("handlePeerAcceptsConnection peer lookup failed", error);
+      console.error(
+        "handlePeerAcceptsConnection peer lookup failed",
+        describeError(error),
+      );
       if (!isCurrentSource()) return;
       ws.send(
         JSON.stringify({
@@ -152,7 +156,7 @@ const handlePeerAcceptsConnectionWithClient = async (
     // If it is ever reached, only a fixed message goes to the client: the
     // caught value can be anything thrown below, such as a database driver
     // error with its codes and version.
-    console.error("handlePeerAcceptsConnection failed", error);
+    console.error("handlePeerAcceptsConnection failed", describeError(error));
     if (!isCurrentSource()) return;
     ws.send(
       JSON.stringify({

@@ -4,6 +4,7 @@ import { PROTOCOL_VERSION } from "./protocolV4";
 import { deriveRoomIdentifier } from "./roomIdentifier";
 import { isCurrentVerifiedSocket } from "./socketAuth";
 import { runPeerRoomMutation } from "./peerRoomMutationQueue";
+import { describeError } from "./logError";
 
 import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
@@ -93,7 +94,7 @@ const handleLeaveRoomWithClient = async (
       );
     });
   } catch (error) {
-    console.error("p2party: room leave failed closed", error);
+    console.error("p2party: room leave failed closed", describeError(error));
     ws.close();
   }
 };

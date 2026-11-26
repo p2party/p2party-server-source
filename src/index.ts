@@ -1,6 +1,7 @@
 import { P2PartyWS } from "./wsServer";
 import { assertSecureTurnSecret } from "./utils/socketAuth";
 import { peerLogTag } from "./utils/logTag";
+import { describeError } from "./utils/logError";
 import { initPubSub, shutdownPubSub } from "./pubsub";
 import { startRoomRetention } from "./utils/roomRetention";
 
@@ -49,7 +50,7 @@ const shutdown = (signal: NodeJS.Signals) => {
   clearInterval(roomRetention);
   void shutdownPubSub()
     .catch((error: unknown) => {
-      console.error("p2party: shutdown failed", error);
+      console.error("p2party: shutdown failed", describeError(error));
     })
     .finally(() => {
       process.exit(signal === "SIGTERM" ? 0 : 130);

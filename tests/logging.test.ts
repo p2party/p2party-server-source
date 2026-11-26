@@ -51,16 +51,53 @@ const sensitiveLogCalls = (source: string): string[] => {
     .split("\n")
     .filter((line) => !/^\s*\/\//.test(line))
     .join("\n");
-  return callArguments(code, /\bconsole\.(?:log|info|warn|debug)\(/g).filter(
-    (args) => {
-      const expressions = args
-        .replace(/peerLogTag\([^()]*\)/g, "")
+  return callArguments(
+    code,
+    /\bconsole\.(?:log|info|warn|debug|error)\(/g,
+  ).filter((args) => {
+    const expressions = args
+      .replace(/peerLogTag\([^()]*\)/g, "")
+      .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, "")
+      .replace(/`(?:[^`\\]|\\.)*`/g, (literal) =>
+        [...literal.matchAll(/\$\{([^}]*)\}/g)].map(([, e]) => e).join(" "),
+      );
+    return SENSITIVE_NAME.test(expressions);
+  });
+};
+
+/**
+ * Console calls in `source` that pass a caught value on raw. A Prisma
+ * validation error's message quotes the query's arguments (peer ids, room
+ * ids), so a caught value reaches a log only through describeError, which
+ * keeps its class and a database code. Caught values are the bindings of
+ * `catch (x)`, of `.catch((x) => ...)` and of `.on("error", (x) => ...)`, and
+ * the conventional names error, err and cause.
+ */
+const rawCaughtValueCalls = (source: string): string[] => {
+  const code = source
+    .split("\n")
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join("\n");
+  const names = new Set(["error", "err", "cause"]);
+  for (const pattern of [
+    /\bcatch\s*\(\s*(\w+)/g,
+    /\.catch\(\s*\(?\s*(\w+)\b/g,
+    /\.on\(\s*"error"\s*,\s*\(?\s*(\w+)\b/g,
+  ])
+    for (const [, name] of code.matchAll(pattern)) names.add(name!);
+  const caught = new RegExp(`\\b(?:${[...names].join("|")})\\b`);
+  return callArguments(
+    code,
+    /\bconsole\.(?:log|info|warn|debug|error|trace|dir)\(/g,
+  ).filter((args) =>
+    caught.test(
+      args
+        .replace(/describeError\([^()]*\)/g, "")
         .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, "")
         .replace(/`(?:[^`\\]|\\.)*`/g, (literal) =>
           [...literal.matchAll(/\$\{([^}]*)\}/g)].map(([, e]) => e).join(" "),
-        );
-      return SENSITIVE_NAME.test(expressions);
-    },
+        ),
+    ),
   );
 };
 
@@ -145,15 +182,77 @@ describe("operator logs", () => {
       "console.log(`turn ${turnCredentials.username}`);",
       'console.debug("key", ws.data.publicKey);',
       'console.log("peer", fromPeerId);',
+      'console.error("failed", roomUrl);',
     ])
       expect(sensitiveLogCalls(leaking), leaking).toHaveLength(1);
     for (const clean of [
       'console.log("Client has connected", peerLogTag(ws.data.peerId));',
       'console.warn("room id and address are words in a message");',
       "console.info(`cleared ${String(cleared.length)} server id(s)`);",
-      'console.error("failed", roomUrl);',
     ])
       expect(sensitiveLogCalls(clean), clean).toEqual([]);
+  });
+
+  test("no log line passes a caught value on raw", () => {
+    const leaks = sourceFiles(srcRoot).flatMap((file) =>
+      rawCaughtValueCalls(readFileSync(file, "utf8")).map(
+        (args) => `${relative(srcRoot, file)}: ${args.trim()}`,
+      ),
+    );
+    expect(leaks).toEqual([]);
+  });
+
+  test("the caught-value scan flags each way of passing one on", () => {
+    for (const leaking of [
+      'try {} catch (error) { console.error("failed", error); }',
+      'try {} catch (failure) { console.error("failed", failure.message); }',
+      "try {} catch (e) { console.warn(`failed: ${e}`); }",
+      'void run().catch((reason) => console.error("failed", String(reason)));',
+      'client.on("error", (problem) => { console.error("listen", problem); });',
+      "console.error(error);",
+    ])
+      expect(rawCaughtValueCalls(leaking), leaking).toHaveLength(1);
+    for (const clean of [
+      'try {} catch (error) { console.error("failed", describeError(error)); }',
+      'console.error("an error message with the word error in it");',
+      "console.info(`cleared ${String(cleared.length)} server id(s)`);",
+    ])
+      expect(rawCaughtValueCalls(clean), clean).toEqual([]);
+  });
+
+  test("describeError keeps a class and a database code, never a message", async () => {
+    const { describeError, ServerRefusal } =
+      await import("../src/utils/logError");
+    const validation = Object.assign(
+      new (class PrismaClientValidationError extends Error {})(
+        `Invalid \`prisma.peer.findFirst()\` invocation: { id: "${FROM}" }`,
+      ),
+      { clientVersion: "7.9.0" },
+    );
+    expect(describeError(validation)).toBe("PrismaClientValidationError");
+    const known = Object.assign(
+      new (class PrismaClientKnownRequestError extends Error {})(
+        `Unique constraint failed on publicKey ${"ab".repeat(32)}`,
+      ),
+      { code: "P2002", meta: { target: ["publicKey"] } },
+    );
+    expect(describeError(known)).toBe("PrismaClientKnownRequestError P2002");
+    expect(
+      describeError(Object.assign(new Error("x"), { code: "40001" })),
+    ).toBe("Error 40001");
+    // A code that is not a short code is dropped, like the message.
+    expect(describeError(Object.assign(new Error("x"), { code: FROM }))).toBe(
+      "Error",
+    );
+    expect(describeError(`${FROM} as a thrown string`)).toBe(
+      "non-Error string",
+    );
+    expect(describeError(null)).toBe("null");
+    // This server's own refusals are fixed sentences and keep them.
+    class Refused extends ServerRefusal {}
+    expect(describeError(new Refused("Room member capacity reached"))).toBe(
+      "Refused: Room member capacity reached",
+    );
   });
 
   test("a peer log tag is eight hex digits that do not reveal the id", async () => {

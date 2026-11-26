@@ -5,6 +5,7 @@ import type { ProcessPrismaClient } from "../prismaClient";
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
 import { PROTOCOL_VERSION } from "./protocolV4";
+import { describeError } from "./logError";
 import {
   isCurrentVerifiedSocket,
   PERMANENT_CLOSE_CODE,
@@ -81,7 +82,7 @@ const handlePeersWithClient = async (
       // member's socket -- terminal on the client (C4) -- while telling it that
       // it does not exist. Refuse this one request and leave the socket up,
       // exactly as findRoomPeers now does.
-      console.error("handlePeers peer lookup failed", error);
+      console.error("handlePeers peer lookup failed", describeError(error));
       if (!isCurrentRequester()) return;
       ws.send(
         JSON.stringify({
@@ -201,7 +202,7 @@ const handlePeersWithClient = async (
       // missing a member whose socket is perfectly healthy. Both used to close
       // that socket and blame a room that does exist. The message stays
       // identical for both causes, so no room-existence bit is exposed.
-      console.error("handlePeers room lookup failed", error);
+      console.error("handlePeers room lookup failed", describeError(error));
       if (!isCurrentRequester()) return;
       ws.send(
         JSON.stringify({
@@ -222,7 +223,7 @@ const handlePeersWithClient = async (
     // If it is ever reached, only a fixed message goes to the client: the
     // caught value can be anything thrown below, such as a database driver
     // error with its codes and version.
-    console.error("handlePeers failed", error);
+    console.error("handlePeers failed", describeError(error));
     if (!isCurrentRequester()) return;
     ws.send(
       JSON.stringify({

@@ -77,9 +77,12 @@ const loggedErrors = async (
   body: () => Promise<unknown>,
 ): Promise<string[]> => {
   const messages: string[] = [];
-  const spy = spyOn(console, "error").mockImplementation((error: unknown) => {
-    messages.push(error instanceof Error ? error.message : String(error));
-  });
+  const spy = spyOn(console, "error").mockImplementation(
+    (...args: unknown[]) => {
+      // The refusal is the described error, the last argument.
+      messages.push(String(args.at(-1)).replace(/^RoomRequestRefused: /, ""));
+    },
+  );
   try {
     await body();
   } finally {

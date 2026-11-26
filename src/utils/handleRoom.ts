@@ -16,6 +16,10 @@ import type {
 } from "../utils/interfaces.js";
 import { PROTOCOL_VERSION } from "./protocolV4";
 import { admission, admissionLimits } from "./admission";
+import { describeError, ServerRefusal } from "./logError";
+
+/** A room request this server refuses; its message is a fixed sentence. */
+class RoomRequestRefused extends ServerRefusal {}
 
 interface Peer {
   id: string;
@@ -41,7 +45,7 @@ const handleRoomWithClient = async (
   try {
     await runPeerRoomMutation(fromPeerId, async () => {
       if (!isCurrent())
-        throw new Error("Room request socket is no longer current");
+        throw new RoomRequestRefused("Room request socket is no longer current");
 
       const identifier = deriveRoomIdentifier(roomUrl);
       const peer: Peer | null = await prisma.peer.findUnique({
@@ -59,7 +63,7 @@ const handleRoomWithClient = async (
       });
 
       if (!peer || peer.publicKey !== ws.data.publicKey || !isCurrent())
-        throw new Error(
+        throw new RoomRequestRefused(
           "Room id request was sent by a non-existing or unverified client",
         );
 
@@ -74,7 +78,7 @@ const handleRoomWithClient = async (
         ((peer._count?.rooms ?? 0) >= admissionLimits.roomsPerIdentity ||
           !membershipBudget.canAddMembership())
       )
-        throw new Error("Room membership capacity reached");
+        throw new RoomRequestRefused("Room membership capacity reached");
 
       // Serialize different identities joining one room on the supported worker.
       // Keep the peer queue outside this lock so stale-socket compensation cannot
@@ -89,15 +93,15 @@ const handleRoomWithClient = async (
           include: { _count: { select: { peers: true } } },
         });
         if (!isCurrent())
-          throw new Error("Room request socket was replaced before membership");
+          throw new RoomRequestRefused("Room request socket was replaced before membership");
 
         if (
           !wasMember &&
           (room._count?.peers ?? 0) >= admissionLimits.peersPerRoom
         )
-          throw new Error("Room member capacity reached");
+          throw new RoomRequestRefused("Room member capacity reached");
         if (!wasMember && !membershipBudget.newMembership())
-          throw new Error("Room membership capacity reached");
+          throw new RoomRequestRefused("Room membership capacity reached");
         await prisma.room.update({
           where: { id: room.id },
           data: {
@@ -118,7 +122,7 @@ const handleRoomWithClient = async (
               where: { id: room.id },
               data: { peers: { disconnect: { id: peer.id } } },
             });
-          throw new Error("Room request socket was replaced during membership");
+          throw new RoomRequestRefused("Room request socket was replaced during membership");
         }
 
         // The relay endpoint travels with the room response because that is
@@ -144,7 +148,7 @@ const handleRoomWithClient = async (
       });
     });
   } catch (error) {
-    console.error(error);
+    console.error("p2party: room request refused", describeError(error));
 
     if (isCurrent()) {
       // Capacity and database failures refuse this request without stranding

@@ -4,6 +4,7 @@ import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
 import { wsClients } from "../wsServer";
 import { isCurrentVerifiedSocket } from "./socketAuth";
+import { describeError } from "./logError";
 
 type FindRoomPeersPrisma = Pick<ProcessPrismaClient, "peer">;
 type SocketRegistry = Map<string, P2PartyWSClient>;
@@ -58,7 +59,7 @@ const findRoomTargetWithClient = async (
 
     return target && isCurrentSource() ? target : undefined;
   } catch (error) {
-    console.error("findRoomPeers failed", error);
+    console.error("findRoomPeers failed", describeError(error));
 
     return undefined;
   }

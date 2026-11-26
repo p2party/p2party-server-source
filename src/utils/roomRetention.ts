@@ -1,3 +1,4 @@
+import { describeError } from "./logError";
 import { prisma } from "../prismaClient";
 import type { ProcessPrismaClient } from "../prismaClient";
 
@@ -26,8 +27,8 @@ export const pruneEmptyRooms = async (
 
 export const startRoomRetention = (): ReturnType<typeof setInterval> => {
   const run = () => {
-    void pruneEmptyRooms().catch(() =>
-      console.error("Empty-room retention failed"),
+    void pruneEmptyRooms().catch((error: unknown) =>
+      console.error("Empty-room retention failed", describeError(error)),
     );
   };
   run();

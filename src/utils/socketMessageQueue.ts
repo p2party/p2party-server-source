@@ -1,3 +1,5 @@
+import { describeError } from "./logError";
+
 export const MAX_QUEUED_MESSAGES_PER_SOCKET = 64;
 export const MAX_QUEUED_MESSAGE_BYTES_PER_SOCKET = 2 * 1024 * 1024;
 
@@ -79,7 +81,10 @@ export const enqueueSocketMessage = <Socket extends QueuedSocket>(
         }
       }
     } catch (error) {
-      console.error("p2party: signaling queue failed closed", error);
+      console.error(
+        "p2party: signaling queue failed closed",
+        describeError(error),
+      );
       closeSocketMessageQueue(ws);
       ws.close(1011, "Signaling handler failed");
     } finally {

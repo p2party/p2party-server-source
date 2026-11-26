@@ -6,6 +6,7 @@ import {
   PERMANENT_CLOSE_CODE,
 } from "./socketAuth";
 import { PROTOCOL_VERSION } from "./protocolV4";
+import { describeError } from "./logError";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -111,7 +112,7 @@ const handleChallenge = async (
     ws.data.isAuthenticating = false;
     // The library's own text stays in the operator log: it describes the
     // server, not the client's proof.
-    console.error("Challenge verification failed", error);
+    console.error("Challenge verification failed", describeError(error));
     return rejectAuthentication(
       ws,
       "Challenge response could not be verified",

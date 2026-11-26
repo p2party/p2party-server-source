@@ -1,5 +1,6 @@
 import { createFreshSocketChallenge } from "./socketAuth";
 import { provisionalPeerId } from "./peerIdentity";
+import { describeError } from "./logError";
 
 import type { P2PartyWSClient } from "../wsServer";
 import type {
@@ -27,7 +28,7 @@ const handleConnection = async (
 
     return peerId;
   } catch (error) {
-    console.error("handleConnection failed", error);
+    console.error("handleConnection failed", describeError(error));
     ws.send(
       JSON.stringify({
         type: "error",
