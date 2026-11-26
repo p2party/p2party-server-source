@@ -67,40 +67,53 @@ describe("bounded signaling admission", () => {
       { ...admissionLimits, trackedAddresses: 1, newIdentitiesPerMinute: 1 },
       () => now,
     );
-    const lease = guard.reserve("192.0.2.1", "identity")!;
-    lease.release();
-    expect(guard.reserve("192.0.2.2", "other")).toBeUndefined();
+    const table = (guard as unknown as { ips: { size: number } }).ips;
+    guard.reserve("192.0.2.1", "identity")!.release();
+    // A full table evicts the idle entry instead of refusing the newcomer.
+    expect(guard.reserve("192.0.2.2", "other")).toBeDefined();
+    expect(table.size).toBe(1);
     expect(guard.newIdentity()).toBe(true);
     expect(guard.newIdentity()).toBe(false);
     now += 60001;
-    expect(guard.reserve("192.0.2.2", "other")).toBeDefined();
     expect(guard.newIdentity()).toBe(true);
   });
 
-  test("table saturation examines at most sixteen entries per rejected newcomer", () => {
-    const guard = new AdmissionController({
-      ...admissionLimits,
-      trackedAddresses: 100,
-    });
-    for (let i = 0; i < 100; i++)
-      guard.reserve(`192.0.2.${i}`, String(i))!.release();
-    const map = (guard as unknown as { ips: Map<string, unknown> }).ips;
-    const entries = map.entries.bind(map);
-    let examined = 0;
-    map.entries = () => {
-      const iterator = entries();
-      const next = iterator.next.bind(iterator);
-      iterator.next = () => {
-        examined++;
-        return next();
-      };
-      return iterator;
-    };
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const before = examined;
-      expect(guard.reserve(`198.51.100.${attempt}`, "new")).toBeUndefined();
-      expect(examined - before).toBeLessThanOrEqual(16);
-    }
+  test("a full address table evicts the least recently used idle key", () => {
+    const guard = new AdmissionController(
+      { ...admissionLimits, trackedAddresses: 3, attemptsPerIpPerMinute: 1 },
+      () => 100000,
+    );
+    const table = (
+      guard as unknown as {
+        ips: { size: number; has(key: string): boolean };
+      }
+    ).ips;
+    for (const address of ["192.0.2.1", "192.0.2.2", "192.0.2.3"])
+      guard.reserve(address, address)!.release();
+    // A refused attempt still marks 192.0.2.1 as recently used.
+    expect(guard.reserve("192.0.2.1", "again")).toBeUndefined();
+
+    expect(guard.reserve("192.0.2.4", "new")).toBeDefined();
+    expect(table.size).toBe(3);
+    expect(table.has("192.0.2.2")).toBe(false);
+    expect(table.has("192.0.2.1")).toBe(true);
+    expect(table.has("192.0.2.3")).toBe(true);
+
+    // The evicted key starts a fresh window; 192.0.2.3 is now the least
+    // recently used idle key.
+    expect(guard.reserve("192.0.2.2", "back")).toBeDefined();
+    expect(table.has("192.0.2.3")).toBe(false);
+    expect(guard.reserve("192.0.2.5", "open")).toBeDefined();
+    expect(table.has("192.0.2.1")).toBe(false);
+
+    // Every entry now holds an open socket. Those are never evicted, and the
+    // newcomer is still admitted and counted: the table exceeds its bound
+    // only by entries with open sockets, which MAX_CONNECTIONS bounds.
+    expect(guard.reserve("192.0.2.6", "open")).toBeDefined();
+    expect(table.size).toBe(4);
+    for (const address of ["192.0.2.2", "192.0.2.4", "192.0.2.5", "192.0.2.6"])
+      expect(table.has(address)).toBe(true);
+    expect(guard.reserve("192.0.2.6", "rate-limited")).toBeUndefined();
   });
 
   test("one /64 shares one bucket", () => {
@@ -150,6 +163,37 @@ describe("bounded signaling admission", () => {
           held++;
     expect(held).toBe(32);
     expect(guard.reserve("198.51.100.7", "bb".repeat(32))).toBeDefined();
+  });
+
+  test("one /48 cannot hold the global socket pool", () => {
+    const guard = new AdmissionController(
+      {
+        ...admissionLimits,
+        connections: 2048,
+        connectionsPerIp: 32,
+        attemptsPerIpPerMinute: 100000,
+      },
+      () => 100000,
+    );
+    let held = 0;
+    // 64 /64s of one /48, 32 sockets each, would be the whole pool.
+    for (let subnet = 1; subnet <= 64; subnet++)
+      for (let socket = 0; socket < 32; socket++)
+        if (
+          guard.reserve(
+            admissionAddress(
+              `2001:db8:aaaa:${subnet.toString(16)}::1`,
+              null,
+              false,
+            )!,
+            "aa".repeat(32),
+          )
+        )
+          held++;
+    // 10% of 2048.
+    expect(held).toBe(204);
+    expect(guard.reserve("198.51.100.7", "bb".repeat(32))).toBeDefined();
+    expect(guard.reserve("2001:db8:aaab:1::1", "cc".repeat(32))).toBeDefined();
   });
 
   test("one-shot upgrades from one /64 cannot fill the address table", () => {
@@ -252,6 +296,47 @@ describe("bounded signaling admission", () => {
     expect(unproved.newMembership()).toBe(false);
     // The next window restores the key's share.
     expect(attacker[0]!.newIdentity()).toBe(true);
+  });
+
+  test("twenty /64s inside one /48 cannot exhaust the global creation budget", () => {
+    const guard = new AdmissionController(
+      {
+        ...admissionLimits,
+        newIdentitiesPerMinute: 120,
+        newMembershipsPerMinute: 600,
+      },
+      () => 100000,
+    );
+    const proved = (remote: string, identity: string) => {
+      const lease = guard.reserve(
+        admissionAddress(remote, null, false)!,
+        identity,
+      )!;
+      expect(lease.authenticate()).toBe(true);
+      return lease;
+    };
+    let identities = 0,
+      memberships = 0;
+    // Each /64 tries its full 5% share.
+    for (let subnet = 1; subnet <= 20; subnet++) {
+      const lease = proved(
+        `2001:db8:aaaa:${subnet.toString(16)}::1`,
+        `attacker-${subnet}`,
+      );
+      for (let i = 0; i < 6; i++) if (lease.newIdentity()) identities++;
+      for (let i = 0; i < 30; i++) if (lease.newMembership()) memberships++;
+    }
+    // 10% of 120 and of 600 for the whole /48.
+    expect(identities).toBe(12);
+    expect(memberships).toBe(60);
+
+    // Another /48 and an IPv4 address keep their own shares.
+    const neighbour = proved("2001:db8:aaab:1::1", "neighbour");
+    expect(neighbour.newIdentity()).toBe(true);
+    expect(neighbour.newMembership()).toBe(true);
+    const victim = proved("198.51.100.7", "victim");
+    expect(victim.newIdentity()).toBe(true);
+    expect(victim.newMembership()).toBe(true);
   });
 
   test("only explicit loopback proxy trust accepts a client address header", () => {

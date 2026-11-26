@@ -36,39 +36,47 @@ export const admissionLimits = Object.freeze({
   newIdentitiesPerMinute: integer("NEW_IDENTITIES_PER_MINUTE", 120, 10000),
   newMembershipsPerMinute: integer("NEW_MEMBERSHIPS_PER_MINUTE", 600, 100000),
   persistentIdentities: integer("MAX_PERSISTENT_IDENTITIES", 100000, 10000000),
-  /** Retention period: the identity ceiling counts identities seen inside it. */
-  membershipTtlDays: integer("MEMBERSHIP_TTL_DAYS", 90, 3650),
   roomsPerIdentity: integer("MAX_ROOMS_PER_IDENTITY", 64, 1000),
   peersPerRoom: integer("MAX_PEERS_PER_ROOM", 128, 10000),
   authenticationTimeoutMs: integer("AUTHENTICATION_TIMEOUT_MS", 15000, 60000),
 });
 
 /**
- * No single source key may take more than this share of a process-wide
- * creation budget (new identities, new memberships) in one window.
+ * One source key (an IPv4 address or an IPv6 /64) may take at most this share
+ * of a process-wide creation budget (new identities, new memberships) in one
+ * window.
  */
 export const MAX_CREATION_SHARE_PERCENT_PER_SOURCE = 5;
+/**
+ * One IPv6 /48 may take at most this share of a process-wide creation budget
+ * in one window, and of the process-wide socket pool. A /48 holds 65,536 /64s,
+ * so without it twenty /64s at 5% each would exhaust a budget.
+ */
+export const MAX_SHARE_PERCENT_PER_IPV6_48 = 10;
 
-/** At least one creation per window, so a small configured budget stays usable. */
-const sourceShare = (budget: number): number =>
-  Math.max(
-    1,
-    Math.floor((budget * MAX_CREATION_SHARE_PERCENT_PER_SOURCE) / 100),
-  );
+/** At least one unit, so a small configured budget stays usable. */
+const share = (budget: number, percent: number): number =>
+  Math.max(1, Math.floor((budget * percent) / 100));
+
+export interface AdmissionSources {
+  /** The IPv4 address, or the /64 prefix of an IPv6 address. */
+  key: string;
+  /** The /48 prefix of an IPv6 address; IPv4, mapped or not, has none. */
+  block?: string;
+}
 
 /**
- * The accounting key for a client address: an IPv4 address as is, an IPv6
- * address by its /64 prefix, and an IPv4-mapped IPv6 address as its IPv4
- * address. One subscriber or host usually holds a whole /64, so keying on the
- * full IPv6 address would give it 2^64 separate budgets.
+ * Accounting keys for a client address. An IPv4-mapped IPv6 address counts as
+ * its IPv4 address. One subscriber or host usually holds a whole /64, so
+ * keying on the full IPv6 address would give it 2^64 separate budgets.
  */
-export const admissionKey = (address: string): string => {
+export const admissionSources = (address: string): AdmissionSources => {
   const bare = (
     address.startsWith("[") && address.endsWith("]")
       ? address.slice(1, -1)
       : address
   ).split("%")[0]!;
-  if (isIP(bare) !== 6) return bare;
+  if (isIP(bare) !== 6) return { key: bare };
   // URL canonicalization: lower-case hex groups, at most one "::", and any
   // dotted IPv4 tail rewritten as two hex groups.
   const canonical = new URL(`http://[${bare}]`).hostname.slice(1, -1);
@@ -85,16 +93,19 @@ export const admissionKey = (address: string): string => {
         ]
   ).map((group) => parseInt(group, 16));
   if (words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff)
-    return [
-      words[6]! >> 8,
-      words[6]! & 0xff,
-      words[7]! >> 8,
-      words[7]! & 0xff,
-    ].join(".");
-  return `${words
-    .slice(0, 4)
-    .map((word) => word.toString(16))
-    .join(":")}::/64`;
+    return {
+      key: [
+        words[6]! >> 8,
+        words[6]! & 0xff,
+        words[7]! >> 8,
+        words[7]! & 0xff,
+      ].join("."),
+    };
+  const groups = words.map((word) => word.toString(16));
+  return {
+    key: `${groups.slice(0, 4).join(":")}::/64`,
+    block: `${groups.slice(0, 3).join(":")}::/48`,
+  };
 };
 
 interface Bucket {
@@ -104,11 +115,68 @@ interface Bucket {
   messages: number;
   rooms: number;
 }
+
+/**
+ * Rate and socket buckets. A newcomer to a full table evicts the least
+ * recently used idle bucket (no open socket), so a full table neither refuses
+ * newcomers nor stops counting them. Buckets with open sockets are never
+ * evicted; the table exceeds its capacity only by those, which
+ * MAX_CONNECTIONS bounds. Each operation is O(1) amortized.
+ */
+class BucketTable {
+  private buckets = new Map<string, Bucket>();
+  /** Idle buckets, least recently used first. */
+  private idle = new Map<string, Bucket>();
+  constructor(private readonly capacity: number) {}
+
+  get size(): number {
+    return this.buckets.size;
+  }
+
+  has(key: string): boolean {
+    return this.buckets.has(key);
+  }
+
+  /** The key's bucket, created if needed, with its window rolled at `now`. */
+  use(key: string, now: number): Bucket {
+    let bucket = this.buckets.get(key);
+    if (!bucket) {
+      while (this.buckets.size >= this.capacity) {
+        const leastRecent = this.idle.keys().next();
+        if (leastRecent.done) break;
+        this.idle.delete(leastRecent.value);
+        this.buckets.delete(leastRecent.value);
+      }
+      bucket = { start: now, count: 0, active: 0, messages: 0, rooms: 0 };
+      this.buckets.set(key, bucket);
+    } else if (now - bucket.start >= 60000) {
+      bucket.start = now;
+      bucket.count = 0;
+      bucket.messages = 0;
+      bucket.rooms = 0;
+    }
+    if (bucket.active === 0) {
+      // Re-inserting moves the key to the most recently used end.
+      this.idle.delete(key);
+      this.idle.set(key, bucket);
+    }
+    return bucket;
+  }
+
+  open(key: string, bucket: Bucket): void {
+    if (bucket.active++ === 0) this.idle.delete(key);
+  }
+
+  close(key: string, bucket: Bucket): void {
+    if (--bucket.active === 0) this.idle.set(key, bucket);
+  }
+}
+
 type Creation = "identity" | "membership";
 interface CreationWindow {
   start: number;
   count: number;
-  /** Creations per source key in this window; at most `count` entries. */
+  /** Creations per source key and per /48 in this window; at most 2 * `count` entries. */
   bySource: Map<string, number>;
 }
 export interface AdmissionLease {
@@ -116,122 +184,95 @@ export interface AdmissionLease {
   authenticate(): boolean;
   message(): boolean;
   roomMutation(): boolean;
-  /** Charge one new durable identity to this socket's source key, then the process. */
+  /** Charge one new durable identity to this socket's source key and /48, then the process. */
   newIdentity(): boolean;
-  /** Charge one new room membership to this socket's source key, then the process. */
+  /** Charge one new room membership to this socket's source key and /48, then the process. */
   newMembership(): boolean;
 }
 
-/** Fixed windows and inactive-bucket expiry keep admission accounting bounded. */
+/** Fixed windows and least-recently-used eviction keep admission accounting bounded. */
 export class AdmissionController {
-  /** Keyed by `admissionKey`, not by the raw address. */
-  private ips = new Map<string, Bucket>();
-  private identities = new Map<string, Bucket>();
+  /** Keyed by `AdmissionSources.key`, not by the raw address. */
+  private ips: BucketTable;
+  /** IPv6 /48 prefixes. */
+  private blocks: BucketTable;
+  private identities: BucketTable;
   private connections = 0;
   private created: Record<Creation, CreationWindow> = {
     identity: { start: 0, count: 0, bySource: new Map() },
     membership: { start: 0, count: 0, bySource: new Map() },
   };
-  private sweeps = new WeakMap<
-    Map<string, Bucket>,
-    MapIterator<[string, Bucket]>
-  >();
   constructor(
     private readonly limits = admissionLimits,
     private readonly now = Date.now,
-  ) {}
-
-  private bucket(map: Map<string, Bucket>, key: string): Bucket | undefined {
-    const now = this.now();
-    let bucket = map.get(key);
-    if (!bucket && map.size >= this.limits.trackedAddresses) {
-      let sweep = this.sweeps.get(map);
-      if (!sweep) {
-        sweep = map.entries();
-        this.sweeps.set(map, sweep);
-      }
-      // At most 16 inspections per request, even when many IPv6 addresses fill
-      // the table. A full table may refuse newcomers until its bounded sweep
-      // reaches an expired entry; it never turns rejection into an O(n) scan.
-      for (let step = 0; step < 16; step++) {
-        const entry = sweep.next();
-        if (entry.done) {
-          this.sweeps.delete(map);
-          break;
-        }
-        const [address, value] = entry.value;
-        if (!value.active && now - value.start >= 60000) map.delete(address);
-      }
-      if (map.size >= this.limits.trackedAddresses) return undefined;
-    }
-    if (!bucket) {
-      bucket = { start: now, count: 0, active: 0, messages: 0, rooms: 0 };
-      map.set(key, bucket);
-    } else if (now - bucket.start >= 60000) {
-      bucket.start = now;
-      bucket.count = 0;
-      bucket.messages = 0;
-      bucket.rooms = 0;
-    }
-    return bucket;
+  ) {
+    this.ips = new BucketTable(limits.trackedAddresses);
+    this.blocks = new BucketTable(limits.trackedAddresses);
+    this.identities = new BucketTable(limits.trackedAddresses);
   }
 
   reserve(ip: string, identity: string): AdmissionLease | undefined {
     if (this.connections >= this.limits.connections) return undefined;
-    const source = admissionKey(ip);
-    const address = this.bucket(this.ips, source);
+    const now = this.now();
+    const sources = admissionSources(ip);
+    const address = this.ips.use(sources.key, now);
+    const block =
+      sources.block === undefined
+        ? undefined
+        : this.blocks.use(sources.block, now);
     if (
-      !address ||
       ++address.count > this.limits.attemptsPerIpPerMinute ||
-      address.active >= this.limits.connectionsPerIp
+      address.active >= this.limits.connectionsPerIp ||
+      (block &&
+        block.active >=
+          share(this.limits.connections, MAX_SHARE_PERCENT_PER_IPV6_48))
     )
       return undefined;
     // A public key is public: unproved sockets must never reserve its identity
     // quota, otherwise anyone could lock a known user's key out of the service.
     let key: Bucket | undefined;
-    address.active++;
+    this.ips.open(sources.key, address);
+    if (block) this.blocks.open(sources.block!, block);
     this.connections++;
     let released = false;
     return {
       release: () => {
         if (released) return;
         released = true;
-        address.active--;
-        if (key) key.active--;
+        this.ips.close(sources.key, address);
+        if (block) this.blocks.close(sources.block!, block);
+        if (key) this.identities.close(identity, key);
         this.connections--;
       },
       authenticate: () => {
         if (released) return false;
         if (key) return true;
-        const candidate = this.bucket(this.identities, identity);
-        if (
-          !candidate ||
-          candidate.active >= this.limits.connectionsPerIdentity
-        )
+        const candidate = this.identities.use(identity, this.now());
+        if (candidate.active >= this.limits.connectionsPerIdentity)
           return false;
         key = candidate;
-        key.active++;
+        this.identities.open(identity, key);
         return true;
       },
       message: () =>
         !released &&
-        ++this.bucket(
-          key ? this.identities : this.ips,
-          key ? identity : source,
-        )!.messages <= this.limits.messagesPerIdentityPerMinute,
+        ++(key
+          ? this.identities.use(identity, this.now())
+          : this.ips.use(sources.key, this.now())
+        ).messages <= this.limits.messagesPerIdentityPerMinute,
       roomMutation: () =>
         !released &&
         !!key &&
-        ++this.bucket(this.identities, identity)!.rooms <=
+        ++this.identities.use(identity, this.now()).rooms <=
           this.limits.roomMutationsPerIdentityPerMinute,
       // Creation needs a proved socket; unproved ones only read.
-      newIdentity: () => !released && !!key && this.create("identity", source),
+      newIdentity: () => !released && !!key && this.create("identity", sources),
       newMembership: () =>
-        !released && !!key && this.create("membership", source),
+        !released && !!key && this.create("membership", sources),
     };
   }
 
-  private create(kind: Creation, source?: string): boolean {
+  private create(kind: Creation, sources?: AdmissionSources): boolean {
     const now = this.now();
     const budget =
       kind === "identity"
@@ -244,13 +285,26 @@ export class AdmissionController {
         count: 0,
         bySource: new Map(),
       };
-    // The source's share is checked first and tied to the process window, so
-    // no key can take more than its share of any one window. A refusal
-    // charges nothing.
-    const used = source === undefined ? 0 : (window.bySource.get(source) ?? 0);
-    if (source !== undefined && used >= sourceShare(budget)) return false;
+    // The source key and its /48 are checked before the process budget, and
+    // their counts belong to the process window, so neither can take more
+    // than its share of any one window. A refusal charges nothing.
+    const charges: [string, number][] = [];
+    if (sources) {
+      charges.push([
+        sources.key,
+        share(budget, MAX_CREATION_SHARE_PERCENT_PER_SOURCE),
+      ]);
+      if (sources.block !== undefined)
+        charges.push([
+          sources.block,
+          share(budget, MAX_SHARE_PERCENT_PER_IPV6_48),
+        ]);
+    }
+    for (const [source, limit] of charges)
+      if ((window.bySource.get(source) ?? 0) >= limit) return false;
     if (window.count >= budget) return false;
-    if (source !== undefined) window.bySource.set(source, used + 1);
+    for (const [source] of charges)
+      window.bySource.set(source, (window.bySource.get(source) ?? 0) + 1);
     window.count++;
     return true;
   }
