@@ -30,7 +30,7 @@ images:
 
 cpus: 2
 memory: 2GiB
-disk: 12GiB
+disk: 8GiB
 
 mounts: []
 
@@ -65,11 +65,22 @@ vmOpts:
 
 networks: []
 
-# Checked in order; the first rule that matches a guest port decides.
+# Checked in order; the first rule that matches a guest port decides. After
+# these Lima appends its own rule, which forwards a port bound on the guest's
+# 127.0.0.1 to the same port on the host's 127.0.0.1; the two ignore rules
+# leave it nothing to match. A rule with guestIP 127.0.0.1 matches ports bound
+# on the guest's loopback (and on its unspecified addresses); one with
+# 0.0.0.0 matches ports bound on any of its interfaces but not on its
+# loopback, which is how the guest's Caddy admin port (127.0.0.1:2019) once
+# reached the host when only the second rule was here.
 portForwards:
   - guestPort: 443
     hostIP: "127.0.0.1"
     hostPort: 56443
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    proto: any
+    ignore: true
   - guestIP: "0.0.0.0"
     guestPortRange: [1, 65535]
     proto: any

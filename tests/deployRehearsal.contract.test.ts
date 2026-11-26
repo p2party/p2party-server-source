@@ -212,17 +212,21 @@ describe("release rehearsal contract", () => {
     expect(signaling?.hostSocket).toBeUndefined();
     expect(signaling?.reverse).toBeUndefined();
 
-    // Everything else is ignored, TCP and UDP, on every guest address. The
-    // ignore rule is last, so it cannot shadow the forward above, and Lima's
-    // own fallback rule (appended after it) is never reached.
-    const last = forwards.at(-1);
-    expect(forwards).toHaveLength(2);
-    expect(last).toEqual({
-      guestIP: "0.0.0.0",
-      guestPortRange: [1, 65535],
-      proto: "any",
-      ignore: true,
-    });
+    // Everything else is ignored, TCP and UDP, both on the guest's loopback
+    // and on its other addresses: Lima's own fallback rule, appended after
+    // these, forwards a port bound on the guest's 127.0.0.1 to the same port
+    // on the host's, and a 0.0.0.0 rule does not cover the guest's loopback.
+    // The ignore rules come after the forward, so they cannot shadow it.
+    expect(forwards).toHaveLength(3);
+    expect(forwards.indexOf(signaling!)).toBe(0);
+    for (const guestIP of ["127.0.0.1", "0.0.0.0"]) {
+      expect(forwards.slice(1)).toContainEqual({
+        guestIP,
+        guestPortRange: [1, 65535],
+        proto: "any",
+        ignore: true,
+      });
+    }
     expect(forwards.some((rule) => rule.guestIPMustBeZero === true)).toBe(
       false,
     );
@@ -252,7 +256,7 @@ describe("release rehearsal contract", () => {
     expect(lima.vmType).toBe("vz");
     expect(lima.cpus).toBe(2);
     expect(lima.memory).toBe("2GiB");
-    expect(lima.disk).toBe("12GiB");
+    expect(lima.disk).toBe("8GiB");
   });
 
   test(
