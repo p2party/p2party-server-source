@@ -3,7 +3,12 @@ import { describeError } from "./logError";
 export const MAX_QUEUED_MESSAGES_PER_SOCKET = 64;
 export const MAX_QUEUED_MESSAGE_BYTES_PER_SOCKET = 2 * 1024 * 1024;
 
-export type SocketMessage = string | ArrayBufferView;
+/**
+ * What Bun hands a websocket `message` handler (a string or a Buffer). Bun's
+ * own ArrayBufferView, a typed array or DataView, is what its `send` and
+ * `publish` accept; the DOM interface of the same name is wider.
+ */
+export type SocketMessage = string | Bun.ArrayBufferView;
 
 export interface SocketMessageQueueState {
   messageQueue?: SocketMessage[];
