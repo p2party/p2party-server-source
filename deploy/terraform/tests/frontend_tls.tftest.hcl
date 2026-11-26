@@ -1,13 +1,14 @@
 # These plans use provider mocks; they never read or modify infrastructure.
-# `terraform test` requires Terraform 1.7+ for provider mocks.
+# The configuration requires Terraform 1.17.2 or newer (p2party_main.tf).
 #
 # Each opt-in run starts from the deployment's live baseline (header rule
 # managed and enabled) and asserts that the other frontend resources stay as
 # they were, so a flag wired to a second resource fails here.
 #
 # "Zone settings stay unmanaged" reads one attribute through try() instead of
-# length() over the resource: when that assertion fails, Terraform 1.15.5
-# panics while rendering the whole zone-settings object ("value has marks").
+# length() over the resource: when that assertion failed, Terraform 1.15.5
+# panicked while rendering the whole zone-settings object ("value has marks").
+# Terraform 1.17.2 reports such a failure normally.
 mock_provider "cloudflare" {
   mock_data "cloudflare_rulesets" {
     defaults = {

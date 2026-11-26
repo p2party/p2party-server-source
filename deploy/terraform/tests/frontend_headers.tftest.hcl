@@ -1,5 +1,5 @@
 # These plans use provider mocks; they never read or modify infrastructure.
-# `terraform test` requires Terraform 1.7+ for provider mocks.
+# The configuration requires Terraform 1.17.2 or newer (p2party_main.tf).
 # The zone-settings assertions use try(); see tests/frontend_tls.tftest.hcl.
 mock_provider "cloudflare" {
   mock_data "cloudflare_rulesets" {
