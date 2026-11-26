@@ -12,6 +12,7 @@ import type {
 import findRoomPeers from "./findRoomPeers";
 import { PROTOCOL_VERSION } from "./protocolV4";
 import { isCurrentVerifiedSocket, wireSocketGeneration } from "./socketAuth";
+import { peerLogTag } from "./logTag";
 
 type HandlePeerAcceptsConnectionPrisma = Pick<ProcessPrismaClient, "peer">;
 type FindRoomPeers = typeof findRoomPeers;
@@ -49,9 +50,9 @@ const handlePeerAcceptsConnectionWithClient = async (
       // without this line the whole branch is invisible to the operator too.
       console.warn(
         "peer acceptance dropped: no current room pair for " +
-          fromPeerId +
+          peerLogTag(fromPeerId) +
           " -> " +
-          toPeerId,
+          peerLogTag(toPeerId),
       );
 
       return;

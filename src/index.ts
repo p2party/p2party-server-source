@@ -1,5 +1,6 @@
 import { P2PartyWS } from "./wsServer";
 import { assertSecureTurnSecret } from "./utils/socketAuth";
+import { peerLogTag } from "./utils/logTag";
 import { initPubSub, shutdownPubSub } from "./pubsub";
 import { startRoomRetention } from "./utils/roomRetention";
 
@@ -19,8 +20,9 @@ if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
 assertSecureTurnSecret(process.env.COTURN_SECRET);
 
 const events: P2PartyWSEvents = {
+  // Peers appear in the journal only as per-boot tags, never by stable id.
   open: (ws: P2PartyWSClient) => {
-    console.log("Client has connected", ws.data.peerId);
+    console.log("Client has connected", peerLogTag(ws.data.peerId));
   },
 
   message: (_ws: P2PartyWSClient, _msg: P2PartyWSMsg) => {
@@ -28,7 +30,7 @@ const events: P2PartyWSEvents = {
   },
 
   close: (ws: P2PartyWSClient) => {
-    console.log("Client has disconnected:", ws.data.peerId);
+    console.log("Client has disconnected:", peerLogTag(ws.data.peerId));
   },
 };
 

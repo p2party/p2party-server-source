@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createHandlePeerAcceptsConnection } from "../../src/utils/handlePeerAcceptsConnection";
+import { peerLogTag } from "../../src/utils/logTag";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
@@ -207,7 +208,11 @@ describe("peer acceptance dropped by a mid-flight leave", () => {
     expect(warnings).toHaveLength(1);
     const [message] = warnings[0];
     expect(String(message)).toContain("peer acceptance dropped");
-    expect(String(message)).toContain(SOURCE_ID);
-    expect(String(message)).toContain(TARGET_ID);
+    // The pair is named by per-boot log tags, never by stable peer id.
+    expect(String(message)).toContain(
+      `${peerLogTag(SOURCE_ID)} -> ${peerLogTag(TARGET_ID)}`,
+    );
+    expect(String(message)).not.toContain(SOURCE_ID);
+    expect(String(message)).not.toContain(TARGET_ID);
   });
 });
