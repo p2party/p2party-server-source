@@ -15,6 +15,8 @@ import {
   isBoundedDescription,
   isProtocolV4,
   MAX_SIGNALING_MESSAGE_CHARS,
+  PROTOCOL_VERSION_MISMATCH_CLOSE_CODE,
+  PROTOCOL_VERSION_MISMATCH_REASON,
 } from "./protocolV4";
 import {
   activateVerifiedSocket,
@@ -46,12 +48,18 @@ import type {
  * Marks exactly the nine "Malformed protocol-v4 <thing>" throws below, so the
  * catch at the bottom of handleMessage can close with
  * MALFORMED_PROTOCOL_CLOSE_CODE for those alone. Everything else the same
- * catch can see -- the identity check, the protocolVersion check, the
- * oversized-frame guard, JSON.parse, and every awaited handler -- still
- * throws a plain Error and still closes bare, because none of those are
- * provably a client-build mismatch that retrying cannot fix.
+ * catch can see -- the identity check, the oversized-frame guard,
+ * JSON.parse, and every awaited handler -- still throws a plain Error and
+ * still closes bare, because none of those are provably a client-build
+ * mismatch that retrying cannot fix.
  */
 class MalformedProtocolV4Message extends Error {}
+
+/**
+ * A frame that declares another protocol version, or none. Closed with the
+ * contract's version-mismatch code and reason (protocolV4.ts).
+ */
+class UnsupportedProtocolVersion extends Error {}
 
 const hasExactKeys = (value: object, allowed: readonly string[]): boolean => {
   const keys = Object.keys(value);
@@ -156,15 +164,21 @@ const handleMessage = async (
       | WebSocketMessageConnectionResponse
       | WebSocketMessagePeerConnectionRequest
       | WebSocketMessageLeaveRoomRequest = JSON.parse(serialized);
+    if (typeof msg !== "object" || msg === null || Array.isArray(msg))
+      throw new Error("Signaling message is not a JSON object");
 
+    // Before the identity check, so a client of another protocol version is
+    // told so whatever else it gets wrong, authenticated or not.
+    if (msg.type !== "pong" && !isProtocolV4(msg.protocolVersion))
+      throw new UnsupportedProtocolVersion(
+        "Unsupported signaling protocol version",
+      );
     if (
       !("fromPeerId" in msg) ||
       msg.fromPeerId !== ws.data.peerId ||
       (msg.type !== "challenge" && !isCurrentVerifiedSocket(wsClients, ws))
     )
       throw new Error("WebSocket identity is not freshly authenticated");
-    if (msg.type !== "pong" && !isProtocolV4(msg.protocolVersion))
-      throw new Error("Incompatible signaling protocol version");
     if (
       (msg.type === "room" || msg.type === "leaveRoom") &&
       ws.data.admission &&
@@ -213,9 +227,12 @@ const handleMessage = async (
               ws.close(1013, "Identity admission limit reached");
               break;
             }
-            // Record which instance now owns this socket, so the other workers
-            // can route signals here instead of dropping them. Awaited: a peer
-            // that is routable before it is claimed is a lost signal.
+            // Persist the identity and record which instance now owns this
+            // socket, so the other workers can route signals here instead of
+            // dropping them. Awaited: a peer that is routable before it is
+            // claimed is a lost signal. Only once both commit does this socket
+            // replace an older one for the same identity; until then that one
+            // keeps working.
             if (
               !(await activateVerifiedSocket(
                 wsClients,
@@ -366,11 +383,16 @@ const handleMessage = async (
   } catch (error) {
     console.error(error);
 
-    // Only the nine malformed-shape throws above are provably a client-build
-    // mismatch that retrying can never fix; every other cause this catch can
-    // see (identity, protocol-version, oversized-frame, JSON.parse, and any
-    // awaited handler) still closes bare, unchanged from before this split.
-    if (error instanceof MalformedProtocolV4Message)
+    // A version mismatch and the nine malformed-shape throws above are
+    // provably a client-build mismatch that retrying can never fix; every
+    // other cause this catch can see (identity, oversized-frame, JSON.parse,
+    // and any awaited handler) closes bare, so the client retries.
+    if (error instanceof UnsupportedProtocolVersion)
+      ws.close(
+        PROTOCOL_VERSION_MISMATCH_CLOSE_CODE,
+        PROTOCOL_VERSION_MISMATCH_REASON,
+      );
+    else if (error instanceof MalformedProtocolV4Message)
       ws.close(MALFORMED_PROTOCOL_CLOSE_CODE, error.message);
     else ws.close();
   }

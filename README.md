@@ -67,10 +67,13 @@ There is no built-in TURN secret and no development authentication bypass.
 ## Admission and database security
 
 Release 0.1.4 preserves protocol v4 and the mesh-repair behavior of 0.1.3.
-Unproved sockets perform a bounded identity lookup but cannot create durable
-peer records. A successful signature is followed by a serializable database
-transaction before routing activation. Existing identity IDs do not change;
-a concurrent old-server bootstrap that assigned another ID fails retryably.
+Unproved sockets do no database work and cannot create durable peer records:
+the peer id a socket is bound to is derived from its public key alone, so the
+answer before the signature verdict is the same whether or not the key has an
+identity row. A successful signature is followed by a serializable database
+transaction before routing activation. A row that a server before 0.1.4
+created with a random id is re-keyed to the derived id in that transaction;
+its room memberships move with it.
 
 The following positive-integer environment variables tune the defaults. Restart
 the process after changing them. Limits apply per process except the durable
@@ -106,7 +109,8 @@ new memberships per minute at the defaults. Upgrade attempts are limited per
 /64 only, 60 per minute each, so one /48 can make many attempts.
 
 A rejected upgrade returns HTTP 429 with `Retry-After: 60`, as does an upgrade
-whose client address cannot be parsed (for example an IPv6 zone id). Socket
+whose client address cannot be parsed (for example an IPv6 zone id). Neither
+response depends on whether the key has an identity row. Socket
 rate and authentication-deadline refusals use retryable close code 1013. Room
 capacity refusals return a request error and leave the authenticated socket
 open, as does a room request when 8 of the same peer's, or `MAX_PEERS_PER_ROOM`
@@ -282,9 +286,15 @@ the earlier introduction-and-acceptance flow.
    array holds exactly one entry, the accepting peer. One accepted peer per
    frame, one frame per acceptance.
 7. **`connection`**, **`description`** and **`candidate`** are relayed to
-   `toPeerId` after `findRoomPeers` re-checks that both peers exist and both are
-   members of that room. The relayed copy drops `toPeerId` and carries the
-   sender's `fromPeerId`.
+   `toPeerId` after one query (`findRoomPeers.ts`) finds the target's row as a
+   member of that room, with the sender's peer id and proved key a member of
+   the same room. It loads only the target's routing claim, never the room's
+   membership; for a `description` or `candidate` that claim also routes the
+   frame to another worker without a second lookup. A frame that fails the
+   check is dropped with no reply and the socket stays open, whether the room
+   is missing, the target is missing, or either peer is not a member, so a
+   sender cannot use a relay to learn whether a key ever registered. The
+   relayed copy drops `toPeerId` and carries the sender's `fromPeerId`.
 
 An acceptance delta is additive; treating it as the whole roster would delete
 every other member. A snapshot can replace the membership view only after the
@@ -372,7 +382,26 @@ Malformed, downgraded, cross-room, or cross-identity signaling fails closed.
 A frame that fails validation in `handleMessage` closes the socket from that
 function's `catch` without sending an `error` frame; the `error` frames listed
 above come from individual handlers, most of which also close or terminate the
-socket after sending one.
+socket after sending one. Their `error.message` is fixed text chosen by the
+server, never a library's error text or a caught error object. The close codes
+are:
+
+| Code   | Reason sent                                                            | Meaning                                                                                                                                                                            | Client retries |
+| ------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `1003` | `Unsupported signaling protocol version; this server speaks version 4` | The frame declares another `protocolVersion`, or none (only `pong` carries none)                                                                                                   | no             |
+| `1003` | `Malformed protocol-v4 <message>`                                      | The frame breaks the exact protocol-v4 shape for its `type`                                                                                                                        | no             |
+| `1008` | `Challenge response signature cannot be verified`                      | The signature does not verify for the socket's key                                                                                                                                 | no             |
+| `1008` | `Replaced by a newer session for this identity`                        | A newer socket of the same identity committed its authentication                                                                                                                   | no             |
+| `1008` | `Peer identity does not match this socket`                             | A proved socket's identity row no longer matches its key                                                                                                                           | no             |
+| `1011` | `Could not initialize WebSocket identity`, `Signaling handler failed`  | A server-side fault                                                                                                                                                                | yes            |
+| `1013` | rate, queue, admission and authentication-deadline reasons             | A limit in "Admission and database security"                                                                                                                                       | yes            |
+| none   |                                                                        | A stale challenge, a malformed signature encoding or a verifier exception; a stale or replaced socket's frame; an oversized frame; a failed authentication commit; a handler fault | yes            |
+
+The SDK's reconnect ladder stops on 1003, 1008 and 1010 from the server and
+retries every other close. The constants are in
+[`src/utils/socketAuth.ts`](src/utils/socketAuth.ts) and, for the version
+mismatch, beside `PROTOCOL_VERSION` in
+[`src/utils/protocolV4.ts`](src/utils/protocolV4.ts).
 
 ### Room correlation and TURN credentials
 
@@ -436,8 +465,8 @@ retry-safe and does not expose room existence.
 
 ## Protocol-v4 authentication
 
-Every WebSocket receives a new, socket-local nonce—even when its public key
-already has a stable peer ID:
+Every WebSocket receives a new, socket-local nonce, and the peer id derived
+from its public key, before anything is read from the database:
 
 ```json
 {
@@ -461,9 +490,10 @@ The client signs that exact nonce with its Ed25519 identity key and replies:
 }
 ```
 
-After successful proof verification, the server registers the candidate
-socket, commits its cross-instance routing claim, and rechecks that the exact
-socket still owns the process-local registry entry. Only then does it return:
+After successful proof verification, the server charges the identity's socket
+admission, commits the identity row and its cross-instance routing claim, and
+only then registers the socket as the identity's current one, closing any
+older socket for the same identity. Then it returns:
 
 ```json
 {
@@ -481,7 +511,18 @@ configuration does not alter authentication. When both `COTURN_SECRET` and
 signatures are not accepted as reconnect credentials.
 
 When the same identity authenticates twice on one server process, the new
-socket synchronously deauthorizes and closes its predecessor. Every later
+socket deauthorizes and closes its predecessor with `1008` and the reason
+`Replaced by a newer session for this identity`, synchronously, once its own
+identity row and routing claim have committed. Until then the predecessor
+keeps working, and if the new socket fails at any step (signature, admission,
+identity row, routing claim, or its own close) the predecessor is not touched
+and the new socket closes bare, so its client may retry. While its commit is
+in flight a proved socket's `pong` keeps it alive, but it may send nothing
+else. If two new sockets of one identity commit around the same time, the one
+that began activating later becomes current and the other closes with the same
+`1008`. The routing claim is shared by every socket of one identity on one
+process, so it is released only when the last of them is gone, including one
+still committing. Every later
 frame must come from the exact socket currently held in that process's
 registry. This is deliberately a process-local guarantee: `Peer.serverId` is
 routing metadata, not a distributed session lease. Two sockets for the same
@@ -505,9 +546,13 @@ bypasses that FIFO; malformed, unproved, or replaced-socket pongs do not.
 ## Client compatibility
 
 This build speaks protocol version 4 only, in the exact shapes above. There is
-no negotiation and no fallback for an older client: a frame carrying any other
-`protocolVersion`, or a `room`/`leaveRoom` request whose key set is not exactly
-the one documented, closes the socket.
+no negotiation and no fallback for an older or newer client. A frame carrying
+any other `protocolVersion`, or none, closes the socket with code
+`1003` and the reason `Unsupported signaling protocol version; this server speaks version 4`,
+before the frame's identity is checked, so a client of another version learns
+that is the cause whatever else it sends. The reason names only the server's
+version. A `room`/`leaveRoom` request whose key set is not exactly the one
+documented closes the socket with `1003` and a `Malformed protocol-v4` reason.
 
 Protocol v4 itself shipped in `p2party-js` 0.13.0, but the correlated room wire
 this server requires — `roomRequestId`, `roomLeaveId`, and TURN credentials with
@@ -547,9 +592,11 @@ of them except `Challenge`.
   stable peer id, `lastPing`, and `serverId`: which process currently holds the
   socket, or null. A process that exits without shutting down leaves its
   claims behind; the next process to start clears them (see `PendingSignal`). Created only after a valid socket-bound signature and before
-  routing activation. Existing peer IDs are preserved; previously unseen keys
-  receive a domain-separated deterministic UUID candidate without an initial
-  database write. Verified identity rows are retained to preserve stable IDs.
+  routing activation. The peer id is a domain-separated UUID derived from the
+  public key. A row a server before 0.1.4 created with a random id is re-keyed
+  to the derived id at that identity's next successful proof, keeping its room
+  memberships; peers in those rooms then see the identity under the new id.
+  Verified identity rows are retained to keep ids stable.
 - **`Room`** — one row per room, keyed by `identifier`, the SHA-512 of the
   64-hex room token ([`src/utils/roomIdentifier.ts`](src/utils/roomIdentifier.ts)).
   The token itself is not stored, though the operator sees it on the wire when a

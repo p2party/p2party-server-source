@@ -1,8 +1,14 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import handleMessage from "../../src/utils/handleMessage";
 import { wsClients } from "../../src/wsServer";
-import { MAX_SIGNALING_MESSAGE_CHARS } from "../../src/utils/protocolV4";
+import {
+  MAX_SIGNALING_MESSAGE_CHARS,
+  PROTOCOL_VERSION,
+} from "../../src/utils/protocolV4";
 
 import type {
   P2PartyWSClient,
@@ -56,10 +62,11 @@ afterEach(() => {
  * These pin the split the catch in handleMessage.ts must make: a message
  * that matches the declared protocol version but violates the exact wire
  * shape for its type is a client-build bug that retrying can never fix, so
- * it alone earns 1003. Every other cause the same catch can see -- a stale
- * identity, a version mismatch (which a rolling deploy can make transient),
- * and an oversized frame -- must keep closing bare, exactly as before, or a
- * healthy/recoverable client gets stranded.
+ * it alone earns 1003 with its own reason. A frame declaring another protocol
+ * version is the other build mismatch and also earns 1003, with the version
+ * reason (see "version mismatch" below). Every other cause the same catch can
+ * see -- a stale identity and an oversized frame -- must keep closing bare,
+ * exactly as before, or a healthy/recoverable client gets stranded.
  */
 describe("handleMessage malformed-shape closes carry 1003", () => {
   test("a structurally malformed pong (matching protocol version) closes with 1003", async () => {
@@ -151,29 +158,6 @@ describe("handleMessage keeps every other cause of the same catch bare", () => {
     expect(ws.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
   });
 
-  test("a protocol-version mismatch still closes with no code (rollout skew is not a client bug)", async () => {
-    const ws = verifiedSocket();
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      await handleMessage(
-        ws,
-        JSON.stringify({
-          type: "room",
-          fromPeerId: PEER_ID,
-          roomUrl: "ab".repeat(32),
-          roomRequestId: "00000000-0000-4000-8000-000000000004",
-          protocolVersion: 3,
-        }),
-        noopEvents,
-      );
-    } finally {
-      consoleError.mockRestore();
-    }
-
-    expect(ws.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
-  });
-
   test("an oversized frame still closes with no code", async () => {
     const ws = verifiedSocket();
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
@@ -186,5 +170,143 @@ describe("handleMessage keeps every other cause of the same catch bare", () => {
     }
 
     expect(ws.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
+  });
+});
+
+/**
+ * The server speaks one protocol version and there is no negotiation, so a
+ * frame declaring any other version is refused for good: the same build asks
+ * the same question on the next socket. The client's reconnect ladder treats
+ * 1003 from the server as final and reports it, where a bare close was
+ * retried forever. The reason names only the server's own version, never
+ * anything the client sent.
+ */
+describe("version mismatch", () => {
+  const REASON = `Unsupported signaling protocol version; this server speaks version ${String(PROTOCOL_VERSION)}`;
+
+  const unauthenticatedSocket = (): P2PartyWSClient & {
+    closeArgs: { code?: number; reason?: string }[];
+  } => {
+    const closeArgs: { code?: number; reason?: string }[] = [];
+    const ws = {
+      data: {
+        peerId: PEER_ID,
+        publicKey: "ab".repeat(32),
+        challengeNonce: "cd".repeat(32),
+        challengeId: "00000000-0000-4000-8000-000000000004",
+        socketGeneration: "",
+        isVerified: false,
+        isAuthenticating: false,
+        isAlive: true,
+      } satisfies P2PartyWSData,
+      readyState: 1,
+      closeArgs,
+      close: (code?: number, reason?: string) => {
+        closeArgs.push({ code, reason });
+      },
+    };
+    return ws as unknown as P2PartyWSClient & {
+      closeArgs: { code?: number; reason?: string }[];
+    };
+  };
+
+  const send = async (ws: P2PartyWSClient, frame: unknown) => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await handleMessage(ws, JSON.stringify(frame), {
+        ...noopEvents,
+        open: () => {
+          throw new Error("a mismatched socket was activated");
+        },
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
+  };
+
+  test("version mismatch closes with the contract code", async () => {
+    const frames: [
+      string,
+      () => P2PartyWSClient & {
+        closeArgs: { code?: number; reason?: string }[];
+      },
+      Record<string, unknown>,
+    ][] = [
+      [
+        "an older client's room request",
+        verifiedSocket,
+        {
+          type: "room",
+          fromPeerId: PEER_ID,
+          roomUrl: "ab".repeat(32),
+          roomRequestId: "00000000-0000-4000-8000-000000000004",
+          protocolVersion: PROTOCOL_VERSION - 1,
+        },
+      ],
+      [
+        "a newer client's challenge response, before authentication",
+        unauthenticatedSocket,
+        {
+          type: "challenge",
+          fromPeerId: PEER_ID,
+          challenge: "cd".repeat(32),
+          signature: "ef".repeat(64),
+          protocolVersion: PROTOCOL_VERSION + 1,
+        },
+      ],
+      [
+        "a frame with no protocolVersion",
+        verifiedSocket,
+        { type: "peers", fromPeerId: PEER_ID, roomId: ROOM_ID },
+      ],
+      [
+        "a client that does not send the bound peer id either",
+        unauthenticatedSocket,
+        { type: "challenge", publicKey: "ab".repeat(32), protocolVersion: 1 },
+      ],
+      [
+        "a version the client chose to make the reason echo it",
+        verifiedSocket,
+        {
+          type: "candidate",
+          fromPeerId: PEER_ID,
+          toPeerId: OTHER_PEER_ID,
+          roomId: ROOM_ID,
+          candidate: { candidate: "candidate:1" },
+          protocolVersion: "4; drop table Peer",
+        },
+      ],
+    ];
+
+    for (const [label, makeSocket, frame] of frames) {
+      wsClients.clear();
+      const ws = makeSocket();
+      await send(ws, frame);
+      expect(ws.closeArgs, label).toEqual([{ code: 1003, reason: REASON }]);
+      expect(ws.closeArgs[0]!.reason!, label).not.toContain("drop table");
+      expect(Buffer.byteLength(REASON), label).toBeLessThanOrEqual(123);
+    }
+  });
+
+  test("an unauthenticated mismatched socket never becomes verified", async () => {
+    const ws = unauthenticatedSocket();
+    await send(ws, {
+      type: "challenge",
+      fromPeerId: PEER_ID,
+      challenge: "cd".repeat(32),
+      signature: "ef".repeat(64),
+      protocolVersion: PROTOCOL_VERSION + 1,
+    });
+    expect(ws.data.isVerified).toBe(false);
+    expect(ws.data.isAuthenticating).toBe(false);
+    expect(wsClients.has(PEER_ID)).toBe(false);
+  });
+
+  test("the README documents the code and the exact reason", () => {
+    const readme = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "..", "README.md"),
+      "utf8",
+    ).replace(/\s+/g, " ");
+    expect(readme).toContain(`\`1003\` and the reason \`${REASON}\``);
   });
 });
