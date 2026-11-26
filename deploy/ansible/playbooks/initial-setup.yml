@@ -177,6 +177,8 @@
 
   vars:
     local_server_path: "{{ playbook_dir }}/../../.."
+    # The same path as in deploy.yml (tests/deploy.contract.test.ts checks).
+    migration_failure_marker: /var/lib/p2party-migration-failed
 
   tasks:
     - name: Create application directory
@@ -252,6 +254,32 @@
         path: "{{ app.home }}/server/p2party-server"
       register: signaling_binary
 
+    # deploy.yml leaves this marker from the moment it has stopped the workers
+    # until the new binary is installed, and keeps it after a failed
+    # migration: the binary on disk may then be older than the schema (after
+    # the identity re-key, a 0.1.4 binary must never start). Nothing below
+    # enables or starts a unit while it exists.
+    - name: Check for a deploy that left the binary and schema out of step
+      stat:
+        path: "{{ migration_failure_marker }}"
+      register: migration_failure_marker_file
+
+    - name: Read the interrupted deploy's recovery steps
+      slurp:
+        src: "{{ migration_failure_marker }}"
+      register: migration_failure_marker_text
+      when: migration_failure_marker_file.stat.exists
+
+    - name: Refuse to start signaling services after an interrupted deploy
+      fail:
+        msg: |
+          initial-setup.yml will not enable or start a signaling service:
+          {{ migration_failure_marker }} exists, so the binary on disk may not
+          match the database schema. It says:
+
+          {{ migration_failure_marker_text.content | b64decode }}
+      when: migration_failure_marker_file.stat.exists
+
     - name: Enable signaling services
       systemd:
         name: "p2party-signaling-{{ item }}"
@@ -313,9 +341,10 @@
               that you have already fixed in the source, the binary here
               predates that fix — run deploy/deploy.sh to build and ship it.
 
-              Otherwise: COTURN_SECRET missing or under 32 bytes, or Postgres
-              unreachable (the server refuses to start without cross-instance
-              routing, and says so within 10s rather than hanging).
+              Otherwise: COTURN_SECRET missing or under 32 bytes, Postgres
+              unreachable or not answering, or a schema this binary was not
+              built for. For the database cases the server exits within 10s
+              with one "p2party: refusing to start" line rather than hanging.
 
               {{ signaling_failure.stdout | default('no output captured') }}
 

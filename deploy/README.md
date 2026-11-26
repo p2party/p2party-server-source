@@ -17,50 +17,92 @@ bun run format:check
 The wrapper builds this repository's Linux binary, provisions verified database
 TLS, then on the signaling host:
 
-1. stops and disables every signaling worker (`p2party-signaling*.service`), so
-   neither `Restart=always` nor a reboot can start one while the schema changes;
-2. installs migration tooling from this release's `package.json` and
-   `bun.lockb` and applies pending migrations;
-3. only if they succeed, copies the new binary, its environment file and its
-   units, then enables and starts the desired workers and verifies their
-   version through Caddy.
+1. prepares the release while the old one keeps serving: installs migration
+   tooling from this release's `package.json` and `bun.lockb` (a registry
+   fetch), copies the schema and migrations, stages the new binary, its
+   environment file and its units in `~p2party/server/release-staging/`, and
+   renders and validates a candidate Caddy configuration. Nothing the running
+   workers read changes. If any of this fails, the play ends with "Report that
+   preparing the release failed" and production is still running the previous
+   release, untouched;
+2. stops and disables every signaling worker (`p2party-signaling*.service`), so
+   neither `Restart=always` nor a reboot can start one while the schema changes,
+   and writes the marker `/var/lib/p2party-migration-failed` (below);
+3. applies pending migrations;
+4. only if they succeed, installs the staged binary, environment file and
+   units, removes the marker, installs the Caddy configuration, then enables and
+   starts the desired workers and verifies their version through Caddy.
 
-Clients are cut off from step 1 until the new workers start. The migration CLI
+With several signaling hosts, a failure on one ends the play on all of them
+(`any_errors_fatal`), so no migration runs while a worker anywhere still serves.
+Clients are cut off from step 2 until the new workers start. The migration CLI
 lives in a separate `migration-tooling` directory; it uses the same audited
 dependency overrides as the release rather than fetching an independent CLI
 dependency tree. Its working directory remains the server directory containing
 `prisma.config.ts` and `prisma/`.
 
-The binary also checks the schema itself: before it opens its listener it reads
-Prisma's migration history and exits with one `p2party: refusing to start` line
-when the database is empty, older or newer than the build, or holds a failed
-migration. `Restart=always` then only repeats that refusal.
+The binary also checks the schema itself. Before it opens its listener it reads
+Prisma's migration history, on its own connection, within 8 seconds, and exits
+with one `p2party: refusing to start` line when the database does not answer,
+cannot be reached, is empty, lacks a migration the build ships, has one it does
+not ship, or holds a failed migration. It then re-runs the identity re-key
+statement within its own bound of 60 seconds (normally a no-op); a re-key that
+runs past it is cancelled, changes nothing, and ends the start with the same
+kind of line. `Restart=always` then only repeats the refusal.
 
 ## A failed or interrupted migration
 
 When `prisma migrate deploy` fails or is interrupted, the play ends with
-"Report the failed migration and how to recover". Every signaling worker is
-then stopped and disabled, and the previous binary is still in place, so nothing
-serves. Prisma does not run a migration in a transaction; each migration of this
-release can nevertheless run again after a failure (the re-key is a single
-statement, the claim-owner migration adds its columns only if missing).
+"Report the failed migration and how to recover", whose message is the steps
+below. Every signaling worker is then stopped and disabled, and the previous
+binary is still in place, so nothing serves. The migrate task is hidden from the
+Ansible output (`no_log`: its environment holds the connection string), so the
+play writes Prisma's output to `/var/log/p2party-migration-failure.log`,
+readable by root only, with the database password replaced by `<redacted>`.
 
-1. On the signaling host, from the server directory (`~p2party/server`), list
-   the migrations and find the failed one:
-   `~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js migrate status`,
-   with `DATABASE_URL` set as the play sets it.
-2. Fix what made it fail: a lock another session held, the database
-   unreachable, a full disk. The failed migration's error is in the play's
-   output and in `_prisma_migrations.logs`.
-3. Mark it rolled back, naming it exactly:
-   `... prisma/build/index.js migrate resolve --rolled-back <migration name>`.
+Prisma does not run a migration in a transaction, and a statement can commit
+without Prisma recording the migration as finished. Each migration this release
+adds runs again cleanly after a failure at any statement: the index and the
+claim-owner columns are created only if missing, and the re-key is one
+idempotent statement (`tests/db/migrationRerun.throwaway.test.ts` checks every
+statement boundary). The two migrations released in 0.1.4 are unchanged.
+
+1. Read why it failed: `sudo cat /var/log/p2party-migration-failure.log` on the
+   signaling host and, when Prisma recorded a failed migration, that row's
+   `logs` column in `"_prisma_migrations"`.
+2. Fix the cause: a lock another session held, the database unreachable, a full
+   disk.
+3. On the signaling host, as `p2party`, from `~p2party/server`, with
+   `DATABASE_URL` exported as the play builds it, ask Prisma which migration
+   failed, and if it names one, mark it rolled back by its exact name:
+
+   ```bash
+   ~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js migrate status
+   ~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js \
+     migrate resolve --rolled-back <migration name>
+   ```
+
+   For this release's migrations that is always safe: the next deploy runs the
+   whole migration again. If `migrate status` names no failed migration (the
+   database was unreachable before a migration started), there is nothing to
+   resolve. Use `migrate resolve --applied <migration name>` instead only when
+   you have checked that every statement of the migration took effect and you
+   do not want it run again; never for one whose effect is partial or unknown.
+
 4. Run `./deploy/deploy.sh` again. It applies the migration and only then
    installs and starts the new binary.
 
-Do not start the previous binary once
-`20261127000000_rekey_peers_to_derived_ids` is applied: rolling the binary back
-after the re-key is not supported. A new binary started on such a database
-refuses with the same instructions.
+From the moment a deploy stops the workers until it has installed the new
+binary, and after any failure in between, the file
+`/var/lib/p2party-migration-failed` exists on the signaling host and holds these
+steps (or, if the deploy ended after a successful migration, an instruction to
+run it again). `playbooks/initial-setup.yml` (also run by `site.yml`) refuses to
+enable or start a signaling unit while it exists, and prints it, although it
+still renders `.env` and the unit files first; a deploy that installs the new
+binary removes it. Do not start the previous binary by hand
+either: rolling the binary back after
+`20261127000000_rekey_peers_to_derived_ids` is not supported. A new binary
+started on such a database refuses with the same instructions.
 
 ## Relay capacity
 

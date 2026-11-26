@@ -23,6 +23,9 @@
 - name: Deploy p2party signaling server
   hosts: signaling_production
   become: true
+  # With several hosts, one whose worker could not be stopped must stop the
+  # whole play: the migration may not run while any worker anywhere serves.
+  any_errors_fatal: true
   vars_files:
     - "{{ playbook_dir }}/../group_vars/all/vars.yml"
     - "{{ playbook_dir }}/../group_vars/production/vars.yml"
@@ -38,6 +41,45 @@
     # Tooling is isolated from the compiled service and installed from the same
     # manifest/lockfile that passed the release audit, including security overrides.
     migration_tooling: "{{ app.home }}/server/migration-tooling"
+    # The new binary, environment and units wait here until the migration has
+    # succeeded. Root-only; nothing reads it but the install tasks.
+    release_staging: "{{ app.home }}/server/release-staging"
+    # A failed migration writes Prisma's output here (root-only, password
+    # removed) and leaves the marker that initial-setup.yml checks.
+    migration_log: /var/log/p2party-migration-failure.log
+    migration_failure_marker: /var/lib/p2party-migration-failed
+    deploy_interrupted: |
+      A deploy stopped every signaling worker and then ended before it had
+      installed the new binary: the schema may be ahead of the binary on disk.
+      Do not start that binary, and do not run initial-setup.yml (it refuses
+      to enable or start a signaling unit while this file exists). Run
+      deploy/deploy.sh again; if its migration fails, follow the steps it
+      prints (deploy/README.md, "A failed or interrupted migration").
+    migration_recovery: |
+      The PostgreSQL migration failed or was interrupted. Every signaling
+      worker is stopped and disabled and the previous binary is still in
+      place, so nothing serves until this is resolved.
+
+      Recover (deploy/README.md, "A failed or interrupted migration"):
+      1. Read why it failed in {{ migration_log }} (root only) on the
+         signaling host and, when Prisma recorded a failed migration, in its
+         row of "_prisma_migrations" ("logs" column).
+      2. Fix the cause: a lock another session held, the database
+         unreachable, a full disk.
+      3. From {{ app.home }}/server as {{ app.user }}, with DATABASE_URL set
+         as this play sets it, run `migrate status`:
+         {{ app.home }}/.bun/bin/bun {{ migration_tooling }}/node_modules/prisma/build/index.js migrate status
+         If it names a failed migration, mark it rolled back with the same
+         command and `migrate resolve --rolled-back <migration name>`. Every
+         migration of this release can run again after a failure at any
+         statement. If it names none (the database was unreachable before a
+         migration started), there is nothing to resolve.
+      4. Run this playbook again. It applies the migration and only then
+         installs and starts the new binary.
+      Until then, do not run initial-setup.yml (it refuses to enable or start
+      a signaling unit while {{ migration_failure_marker }} exists) and do not
+      start the previous binary: rolling it back after
+      20261127000000_rekey_peers_to_derived_ids is not supported.
     # Read the same package.json that bun build embeds through src/version.ts.
     # A skip-build deploy of an older binary therefore fails the health gate
     # instead of silently announcing a version different from the source tree.
@@ -86,82 +128,48 @@
              | default([app_port]) }}
 
     # ------------------------------------------------------------------
-    # Journal retention
+    # Prepare the release while the old one keeps serving
     # ------------------------------------------------------------------
-    # The signaling workers and Caddy log to the journal. This bounds the
-    # journal only; nothing in this repository configures rsyslog, so whether
-    # the host also copies the journal into syslog files must be checked there.
-    - name: Ensure the journald drop-in directory exists
-      file:
-        path: /etc/systemd/journald.conf.d
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Keep the journal for at most seven days
-      template:
-        src: "{{ playbook_dir }}/../templates/journald-retention.conf.j2"
-        dest: /etc/systemd/journald.conf.d/p2party-retention.conf
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Restart journald
-
-    # ------------------------------------------------------------------
-    # Ship the binary
-    # ------------------------------------------------------------------
-    - name: Ensure the server directory exists
-      file:
-        path: "{{ app.home }}/server"
-        state: directory
-        owner: "{{ app.user }}"
-        group: "{{ app.group }}"
-        mode: "0755"
-
-    # ------------------------------------------------------------------
-    # Stop every worker before the schema changes
-    # ------------------------------------------------------------------
-    # No worker of the release being replaced may serve while migrations run,
-    # and no new binary may exist on the host before they have succeeded, so
-    # that systemd can never start a binary against a schema it was not built
-    # for. Every installed signaling unit is stopped and disabled: Restart=
-    # always does not restart a stopped unit, and a disabled unit does not
-    # start at boot. Clients are cut off until the new workers start; this
-    # release accepts that downtime. The units are enabled again only by
-    # "Restart signaling services", after the new binary is in place.
-    - name: Discover the signaling units to stop before migrating
-      find:
-        paths: /etc/systemd/system
-        # The exact base name is the legacy cloud-init unit.
-        patterns:
-          - "p2party-signaling.service"
-          - "p2party-signaling-*.service"
-        file_type: file
-        recurse: false
-      register: signaling_units_before_migration
-
-    - name: Stop and disable every signaling worker before migrating
-      systemd:
-        name: "{{ item | basename }}"
-        state: stopped
-        enabled: false
-      loop: >-
-        {{ signaling_units_before_migration.files
-           | map(attribute='path') | list }}
-      loop_control:
-        label: "{{ item | basename }}"
-
-    # ------------------------------------------------------------------
-    # Postgres schema — migrations are applied on every deploy
-    # ------------------------------------------------------------------
-    # `prisma migrate deploy` only applies migrations that have not run yet and
-    # never generates or resets anything, so running it each time is how the
-    # schema stays in step with the binary being shipped. It is deliberately
-    # not gated behind a first-deploy flag: shipping code that expects a column
-    # the database does not have is exactly the failure this prevents.
-    - name: Apply Postgres migrations
+    # Everything that can fail without touching the database happens here,
+    # before any worker is stopped: the journal drop-in, the migration tooling
+    # (a registry fetch), the schema and migrations, and the new binary, its
+    # environment file, its units and the Caddy configuration, all staged
+    # under {{ release_staging }} or as a candidate file. Nothing the running
+    # workers read is changed. A failure here ends the play with production
+    # still running the previous release, untouched.
+    - name: Prepare the release without touching the running workers
       block:
+        - name: Ensure the journald drop-in directory exists
+          file:
+            path: /etc/systemd/journald.conf.d
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        # The signaling workers and Caddy log to the journal. This bounds the
+        # journal only; nothing in this repository configures rsyslog, so
+        # whether the host also copies the journal into syslog files must be
+        # checked there.
+        - name: Keep the journal for at most seven days
+          template:
+            src: "{{ playbook_dir }}/../templates/journald-retention.conf.j2"
+            dest: /etc/systemd/journald.conf.d/p2party-retention.conf
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Restart journald
+
+        - name: Ensure the server directory exists
+          file:
+            path: "{{ app.home }}/server"
+            state: directory
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0755"
+
+        # Tooling is installed from the same manifest and lockfile as the
+        # release, including its security overrides.
         - name: Create an isolated directory for audited migration tooling
           file:
             path: "{{ migration_tooling }}"
@@ -215,10 +223,10 @@
             mode: "0644"
             directory_mode: "0755"
 
-        # Prisma 7 removed `url` from the datasource block, so the CLI reads the
-        # connection string from prisma.config.ts. Without this file on the host,
-        # `migrate deploy` has no datasource at all — the schema alone is no
-        # longer enough.
+        # Prisma 7 removed `url` from the datasource block, so the CLI reads
+        # the connection string from prisma.config.ts. Without this file on the
+        # host, `migrate deploy` has no datasource at all — the schema alone is
+        # no longer enough.
         - name: Copy the Prisma config
           copy:
             src: "{{ repo_path }}/prisma.config.ts"
@@ -227,6 +235,188 @@
             group: "{{ app.group }}"
             mode: "0644"
 
+        - name: Ensure the release staging directory exists
+          file:
+            path: "{{ release_staging }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Stage the compiled binary
+          copy:
+            src: "{{ repo_path }}/{{ binary_name }}"
+            dest: "{{ release_staging }}/p2party-server"
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0755"
+
+        # The binary and its environment are a matched pair: this release
+        # requires COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary
+        # restarted against an older .env exits at startup. initial-setup.yml
+        # also writes this file, but a deploy must not depend on someone having
+        # re-run provisioning.
+        - name: Stage the signaling environment file
+          template:
+            src: "{{ playbook_dir }}/../templates/signaling.env.j2"
+            dest: "{{ release_staging }}/.env"
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0600"
+          # The rendered file contains both database and TURN credentials.
+          # Keep an operator's --diff from copying either secret into the
+          # Ansible log.
+          diff: false
+
+        # Same reasoning for the unit files. PORT is set here, per instance,
+        # and a deploy that ships a new binary against stale units cannot fix
+        # an ordering or environment bug in them — which is how every instance
+        # ended up binding 3001 and dying with EADDRINUSE.
+        - name: Stage the systemd unit files
+          template:
+            src: "{{ playbook_dir }}/../templates/p2party-signaling.service.j2"
+            dest: "{{ release_staging }}/p2party-signaling-{{ item }}.service"
+            owner: root
+            group: root
+            mode: "0644"
+          loop: "{{ signaling_instance_ports }}"
+          loop_control:
+            label: "{{ item }}"
+          vars:
+            signaling_port: "{{ item }}"
+
+        # Caddy must consume the exact same desired-port fact as the unit and
+        # health tasks. The candidate is rendered and validated here; it is
+        # installed only after the migration, before the workers start.
+        - name: Render the candidate Caddy configuration
+          template:
+            src: "{{ playbook_dir }}/../templates/Caddyfile.j2"
+            dest: /etc/caddy/Caddyfile.p2party-candidate
+            owner: root
+            group: root
+            mode: "0644"
+
+        # caddy validate runs as root and opens every log file the Caddyfile
+        # names, creating a missing one as root with mode 0600, which the caddy
+        # user then cannot open on reload. Every such file exists and belongs
+        # to caddy before validation, and again after it.
+        - name: Ensure Caddy's log directory belongs to caddy
+          file:
+            path: /var/log/caddy
+            state: directory
+            owner: caddy
+            group: caddy
+            mode: "0755"
+
+        - name: Ensure Caddy's log files exist and belong to caddy
+          file:
+            path: "{{ item }}"
+            state: touch
+            owner: caddy
+            group: caddy
+            mode: "0600"
+            modification_time: preserve
+            access_time: preserve
+          loop:
+            - "/var/log/caddy/{{ domains.signaling }}.log"
+
+        - name: Validate the candidate Caddy configuration
+          command:
+            argv:
+              - caddy
+              - validate
+              - --config
+              - /etc/caddy/Caddyfile.p2party-candidate
+              - --adapter
+              - caddyfile
+          changed_when: false
+
+        - name: Keep Caddy's log files owned by caddy after validation
+          file:
+            path: "{{ item }}"
+            state: touch
+            owner: caddy
+            group: caddy
+            mode: "0600"
+            modification_time: preserve
+            access_time: preserve
+          loop:
+            - "/var/log/caddy/{{ domains.signaling }}.log"
+      rescue:
+        - name: Check whether an earlier deploy left the service stopped
+          stat:
+            path: "{{ migration_failure_marker }}"
+          register: earlier_interrupted_deploy
+
+        - name: Report that preparing the release failed
+          fail:
+            msg: |
+              Preparing the release failed before this run stopped any
+              signaling worker or touched the database; nothing the running
+              workers read was changed. The failed task is named above this
+              message. Fix its cause (for example a registry fetch that failed
+              during `bun install`) and run this playbook again.
+              {% if earlier_interrupted_deploy.stat.exists %}
+              But an earlier deploy had already stopped every worker and not
+              finished ({{ migration_failure_marker }} exists): nothing is
+              serving, and the steps in that file still apply.
+              {% else %}
+              Production is still running the previous release, untouched.
+              {% endif %}
+
+    # ------------------------------------------------------------------
+    # Stop every worker before the schema changes
+    # ------------------------------------------------------------------
+    # No worker of the release being replaced may serve while migrations run,
+    # and the new binary is put in place only after they have succeeded, so
+    # that systemd can never start a binary against a schema it was not built
+    # for. Every installed signaling unit is stopped and disabled: Restart=
+    # always does not restart a stopped unit, and a disabled unit does not
+    # start at boot. Clients are cut off until the new workers start; this
+    # release accepts that downtime. The units are enabled again only by
+    # "Restart signaling services", after the new binary is in place.
+    - name: Discover the signaling units to stop before migrating
+      find:
+        paths: /etc/systemd/system
+        # The exact base name is the legacy cloud-init unit.
+        patterns:
+          - "p2party-signaling.service"
+          - "p2party-signaling-*.service"
+        file_type: file
+        recurse: false
+      register: signaling_units_before_migration
+
+    - name: Stop and disable every signaling worker before migrating
+      systemd:
+        name: "{{ item | basename }}"
+        state: stopped
+        enabled: false
+      loop: >-
+        {{ signaling_units_before_migration.files
+           | map(attribute='path') | list }}
+      loop_control:
+        label: "{{ item | basename }}"
+
+    # From here until the new binary is installed, the binary on disk may not
+    # match the schema. initial-setup.yml refuses to enable or start a
+    # signaling unit while this marker exists, and prints it; it is removed
+    # only after the new binary, environment and units are in place.
+    - name: Mark that the binary on disk may not match the schema
+      copy:
+        dest: "{{ migration_failure_marker }}"
+        content: "{{ deploy_interrupted }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    # ------------------------------------------------------------------
+    # Postgres schema — migrations are applied on every deploy
+    # ------------------------------------------------------------------
+    # `prisma migrate deploy` only applies migrations that have not run yet and
+    # never generates or resets anything, so running it each time is how the
+    # schema stays in step with the binary being shipped.
+    - name: Apply Postgres migrations
+      block:
         - name: Apply migrations against Postgres
           become_user: "{{ app.user }}"
           command:
@@ -241,148 +431,91 @@
             # or globally installed Prisma package participates in this migration.
             PATH: "{{ app.home }}/.bun/bin:{{ ansible_facts['env'].PATH }}"
             DATABASE_URL: "postgresql://{{ database.user | urlencode }}:{{ database.password | urlencode }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}&sslrootcert={{ database.ssl_root_cert }}"
+          # The connection string exists only in this task's environment, so the
+          # task is hidden from the Ansible log; a failure's output goes to
+          # {{ migration_log }} instead (rescue below).
           no_log: true
           register: migration_result
-          # A failed migration stops the deploy in the rescue below, before
-          # the new binary is even copied to the host.
+          # A failed migration stops the deploy in the rescue below, before the
+          # new binary is put in place.
           failed_when: migration_result.rc != 0
-
-        - name: Show migration output
-          debug:
-            msg: PostgreSQL migrations applied successfully
-          when: migration_result is defined
       rescue:
+        # Prisma's own output, with the database password removed in case any
+        # line quotes it, in a file only root can read.
+        - name: Write the failed migration's output for the operator
+          copy:
+            dest: "{{ migration_log }}"
+            content: >-
+              {{ ((migration_result.stdout | default('')) ~ '\n'
+                  ~ (migration_result.stderr | default(''))
+                  ~ '\n' ~ (migration_result.msg | default('')))
+                 | replace((database.password | urlencode) or '<no password>', '<redacted>')
+                 | replace(database.password or '<no password>', '<redacted>') }}
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+
+        # The marker set before the migration now says why.
+        - name: Record in the marker that the migration failed
+          copy:
+            dest: "{{ migration_failure_marker }}"
+            content: "{{ migration_recovery }}"
+            owner: root
+            group: root
+            mode: "0600"
+
         - name: Report the failed migration and how to recover
           fail:
-            msg: |
-              The PostgreSQL migration failed or was interrupted. Every
-              signaling worker is stopped and disabled and the previous binary
-              is still in place, so nothing serves until this is resolved.
-
-              Recover (deploy/README.md, "A failed or interrupted migration"):
-              1. On the signaling host, in {{ app.home }}/server, find the failed
-                 migration: run the migration tooling's Prisma CLI with
-                 `migrate status` (DATABASE_URL as in this play).
-              2. Fix what made it fail (a lock held, the database unreachable,
-                 the disk full).
-              3. Mark it rolled back:
-                 `prisma migrate resolve --rolled-back <migration name>`.
-                 This release's migrations run again cleanly after a failure.
-              4. Run this playbook again. It applies the migration and only
-                 then installs and starts the new binary.
-              Do not start the previous binary on this database: rolling the
-              binary back after 20261127000000_rekey_peers_to_derived_ids is
-              not supported.
+            msg: "{{ migration_recovery }}"
 
     # ------------------------------------------------------------------
-    # Ship the binary, only once the schema matches it
+    # Install the release, only once the schema matches it
     # ------------------------------------------------------------------
-    - name: Copy the compiled binary
+    - name: Install the staged binary
       copy:
-        src: "{{ repo_path }}/{{ binary_name }}"
+        src: "{{ release_staging }}/p2party-server"
         dest: "{{ app.home }}/server/p2party-server"
+        remote_src: true
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
         mode: "0755"
 
-    # The binary and its environment are a matched pair: this release requires
-    # COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary restarted
-    # against an older .env exits at startup. initial-setup.yml also writes this
-    # file, but a deploy must not depend on someone having re-run provisioning.
-    - name: Deploy the signaling environment file
-      template:
-        src: "{{ playbook_dir }}/../templates/signaling.env.j2"
+    - name: Install the staged signaling environment file
+      copy:
+        src: "{{ release_staging }}/.env"
         dest: "{{ app.home }}/server/.env"
+        remote_src: true
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
         mode: "0600"
-      # The rendered file contains both database and TURN credentials. Keep an
-      # operator's --diff from copying either secret into the Ansible log.
       diff: false
 
-    # Same reasoning for the unit files. PORT is set here, per instance, and a
-    # deploy that ships a new binary against stale units cannot fix an ordering
-    # or environment bug in them — which is how every instance ended up binding
-    # 3001 and dying with EADDRINUSE.
-    - name: Deploy the systemd unit files
-      template:
-        src: "{{ playbook_dir }}/../templates/p2party-signaling.service.j2"
+    # No notify: the restart task below already passes daemon_reload, so a
+    # handler here would be a second way to do the same thing and a runtime
+    # error if it were ever renamed.
+    - name: Install the staged systemd unit files
+      copy:
+        src: "{{ release_staging }}/p2party-signaling-{{ item }}.service"
         dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
+        remote_src: true
         owner: root
         group: root
         mode: "0644"
       loop: "{{ signaling_instance_ports }}"
       loop_control:
         label: "{{ item }}"
-      vars:
-        signaling_port: "{{ item }}"
-      # No notify: the restart task below already passes daemon_reload, so a
-      # handler here would be a second way to do the same thing and a runtime
-      # error if it were ever renamed.
+
+    - name: Remove the marker now that the binary matches the schema
+      file:
+        path: "{{ migration_failure_marker }}"
+        state: absent
 
     # ------------------------------------------------------------------
-    # Cut public routing over, restart, and verify
+    # Cut public routing over, start, and verify
     # ------------------------------------------------------------------
-    # Caddy must consume the exact same desired-port fact as the unit and health
-    # tasks. Narrow routing before the restart so a breaking wire release cannot
-    # alternate between an obsolete worker and the new one. With the supported
-    # single-worker production topology this intentionally accepts a brief
-    # restart window.
-    - name: Render the candidate Caddy configuration
-      template:
-        src: "{{ playbook_dir }}/../templates/Caddyfile.j2"
-        dest: /etc/caddy/Caddyfile.p2party-candidate
-        owner: root
-        group: root
-        mode: "0644"
-
-    # caddy validate runs as root and opens every log file the Caddyfile names,
-    # creating a missing one as root with mode 0600, which the caddy user then
-    # cannot open on reload. Every such file exists and belongs to caddy before
-    # validation, and again after it.
-    - name: Ensure Caddy's log directory belongs to caddy
-      file:
-        path: /var/log/caddy
-        state: directory
-        owner: caddy
-        group: caddy
-        mode: "0755"
-
-    - name: Ensure Caddy's log files exist and belong to caddy
-      file:
-        path: "{{ item }}"
-        state: touch
-        owner: caddy
-        group: caddy
-        mode: "0600"
-        modification_time: preserve
-        access_time: preserve
-      loop:
-        - "/var/log/caddy/{{ domains.signaling }}.log"
-
-    - name: Validate the candidate Caddy configuration
-      command:
-        argv:
-          - caddy
-          - validate
-          - --config
-          - /etc/caddy/Caddyfile.p2party-candidate
-          - --adapter
-          - caddyfile
-      changed_when: false
-
-    - name: Keep Caddy's log files owned by caddy after validation
-      file:
-        path: "{{ item }}"
-        state: touch
-        owner: caddy
-        group: caddy
-        mode: "0600"
-        modification_time: preserve
-        access_time: preserve
-      loop:
-        - "/var/log/caddy/{{ domains.signaling }}.log"
-
+    # Narrow routing before the start so a breaking wire release cannot
+    # alternate between an obsolete worker and the new one.
     - name: Atomically install the validated Caddy configuration
       command:
         argv:
@@ -436,11 +569,12 @@
             msg: |
               The signaling service did not start. Its own log follows.
 
-              Most likely: COTURN_SECRET missing or under 32 bytes,
-              DATABASE_URL unreachable (initPubSub aborts startup rather than
-              running without cross-instance routing), or a database schema
-              this build was not made for (its "p2party: refusing to start"
-              line says what it found and what to run).
+              Most likely: COTURN_SECRET missing or under 32 bytes, the
+              database unreachable or not answering, or a database schema this
+              build was not made for. For both database cases the server exits
+              within 10s with one "p2party: refusing to start" line saying what
+              it found and what to run (a startup re-key that runs past its own
+              60s bound is reported the same way).
 
               {{ signaling_failure.stdout | default('no output captured') }}
 

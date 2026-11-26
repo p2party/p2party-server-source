@@ -76,8 +76,15 @@ interface PlaybookTask {
   systemd?: Record<string, unknown>;
   find?: { patterns?: string[] };
   fail?: { msg?: string };
+  shell?: string;
+  meta?: string;
+  service?: Record<string, unknown>;
+  stat?: Record<string, unknown>;
+  when?: unknown;
 }
 interface Play {
+  any_errors_fatal?: boolean;
+  vars?: Record<string, string>;
   tasks: PlaybookTask[];
   handlers?: PlaybookTask[];
 }
@@ -127,10 +134,42 @@ const coturnDefault = (name: string): number => {
 describe("production deployment contract", () => {
   test("the deploy playbook stops every worker before it migrates and installs the binary only after", () => {
     const play = playWithTask(deploy, "Apply migrations against Postgres");
+    const tasks = flatten(play.tasks);
     const at = (name: string) => position(play, name);
+    const prepare = "Prepare the release without touching the running workers";
     const discover = "Discover the signaling units to stop before migrating";
     const stop = "Stop and disable every signaling worker before migrating";
+    const mark = "Mark that the binary on disk may not match the schema";
     const migrate = "Apply migrations against Postgres";
+    const unmark = "Remove the marker now that the binary matches the schema";
+
+    // With several hosts, a host whose stop fails ends the play everywhere:
+    // the migration may not run while any worker anywhere serves.
+    expect(play.any_errors_fatal).toBe(true);
+
+    // Everything that can fail without touching the database happens in the
+    // preparation block, before any worker is stopped, and stages the new
+    // files away from the paths the running workers read.
+    const preparation = task(play, prepare);
+    const prepared = flatten(preparation.block ?? []).map(({ name }) => name);
+    for (const name of [
+      "Install exactly the audited migration dependencies",
+      "Copy the migrations",
+      "Copy the Prisma config",
+      "Stage the compiled binary",
+      "Stage the signaling environment file",
+      "Stage the systemd unit files",
+      "Validate the candidate Caddy configuration",
+    ])
+      expect(prepared, name).toContain(name);
+    expect(at(prepare)).toBeLessThan(at(discover));
+    const preparedFailure = preparation.rescue?.find(
+      ({ name }) => name === "Report that preparing the release failed",
+    )?.fail?.msg;
+    expect(preparedFailure).toContain(
+      "Production is still running the previous release, untouched.",
+    );
+    expect(preparedFailure).toContain("an earlier deploy had already stopped");
 
     // Every installed unit, the legacy cloud-init name included, is stopped
     // and disabled: Restart=always does not restart a stopped unit and a
@@ -148,48 +187,136 @@ describe("production deployment contract", () => {
       "signaling_units_before_migration.files",
     );
 
+    // Stop, mark, migrate, install, unmark, start.
     expect(at(discover)).toBeLessThan(at(stop));
-    expect(at(stop)).toBeLessThan(at("Apply Postgres migrations"));
-    expect(at(migrate)).toBeLessThan(at("Copy the compiled binary"));
-    expect(at(migrate)).toBeLessThan(
-      at("Deploy the signaling environment file"),
-    );
-    expect(at(migrate)).toBeLessThan(at("Deploy the systemd unit files"));
-    expect(at("Copy the compiled binary")).toBeLessThan(
-      at("Restart signaling services"),
-    );
+    expect(at(stop)).toBeLessThan(at(mark));
+    expect(at(mark)).toBeLessThan(at(migrate));
+    for (const install of [
+      "Install the staged binary",
+      "Install the staged signaling environment file",
+      "Install the staged systemd unit files",
+    ]) {
+      expect(at(migrate), install).toBeLessThan(at(install));
+      expect(at(install), install).toBeLessThan(at(unmark));
+    }
+    expect(at(unmark)).toBeLessThan(at("Restart signaling services"));
+    // The migration block holds only the migration: its rescue speaks for it.
+    expect(
+      (task(play, "Apply Postgres migrations").block ?? []).map(
+        ({ name }) => name,
+      ),
+    ).toEqual([migrate]);
 
-    // Before the migrations nothing installs the binary or its units, and
-    // nothing but the stop touches a signaling unit.
-    for (const earlier of flatten(play.tasks).slice(0, at(migrate))) {
-      expect(String(earlier.copy?.dest ?? ""), earlier.name).not.toContain(
-        "p2party-server",
-      );
-      expect(String(earlier.template?.dest ?? ""), earlier.name).not.toMatch(
-        /p2party-signaling|server\/\.env/,
-      );
+    // Before the migration nothing writes the live binary, environment or
+    // units, and nothing but the stop acts on a signaling service, by any
+    // module: systemd, service, a command or shell naming systemctl, or a
+    // handler flush.
+    const live = [
+      "{{ app.home }}/server/p2party-server",
+      "{{ app.home }}/server/.env",
+    ];
+    for (const earlier of tasks.slice(0, at(migrate))) {
+      for (const dest of [earlier.copy?.dest, earlier.template?.dest]) {
+        if (dest === undefined) continue;
+        expect(live, earlier.name).not.toContain(String(dest));
+        expect(String(dest), earlier.name).not.toContain(
+          "/etc/systemd/system/",
+        );
+      }
+      expect(earlier.meta, earlier.name).toBeUndefined();
+      expect(earlier.service, earlier.name).toBeUndefined();
+      const command = [
+        ...(earlier.command?.argv ?? []),
+        typeof earlier.command === "string" ? earlier.command : "",
+        earlier.shell ?? "",
+      ].join(" ");
+      expect(command, earlier.name).not.toMatch(/systemctl|service\s/);
       if (earlier.systemd && earlier.name !== stop)
         expect(String(earlier.systemd.name ?? ""), earlier.name).not.toContain(
           "p2party-signaling",
         );
     }
 
-    // A failed migration ends the play with the recovery, the service stopped
-    // and the old binary in place.
-    const report = task(play, "Apply Postgres migrations").rescue?.find(
-      ({ name }) => name === "Report the failed migration and how to recover",
+    // A failed migration ends the play with the recovery, the service stopped,
+    // the previous binary in place, Prisma's output in a root-only file and
+    // the recovery recorded in the marker.
+    const failed = task(play, "Apply Postgres migrations").rescue ?? [];
+    const failedNames = failed.map(({ name }) => name);
+    expect(failedNames).toEqual([
+      "Write the failed migration's output for the operator",
+      "Record in the marker that the migration failed",
+      "Report the failed migration and how to recover",
+    ]);
+    expect(failed[0]!.copy).toMatchObject({
+      dest: "{{ migration_log }}",
+      owner: "root",
+      group: "root",
+      mode: "0600",
+    });
+    expect(failed[0]!.no_log).toBe(true);
+    expect(String(failed[0]!.copy?.content)).toContain(
+      "replace(database.password",
     );
-    expect(report?.fail?.msg).toContain(
-      "prisma migrate resolve --rolled-back <migration name>",
+    expect(failed[1]!.copy).toMatchObject({
+      dest: "{{ migration_failure_marker }}",
+      content: "{{ migration_recovery }}",
+      mode: "0600",
+    });
+    expect(failed[2]!.fail?.msg).toBe("{{ migration_recovery }}");
+    expect(task(play, migrate).no_log).toBe(true);
+    const recovery = play.vars?.migration_recovery ?? "";
+    for (const stated of [
+      "previous binary is still in\nplace",
+      "{{ migration_log }} (root only)",
+      "migrate resolve --rolled-back <migration name>",
+      "do not run initial-setup.yml",
+      "is not supported",
+    ])
+      expect(recovery, stated).toContain(stated);
+    expect(play.vars?.migration_log).toBe(
+      "/var/log/p2party-migration-failure.log",
     );
-    expect(report?.fail?.msg).toContain("previous binary\nis still in place");
-    expect(report?.fail?.msg).toContain("not supported");
 
     // Only after the binary is in place are the units enabled and started.
     expect(task(play, "Restart signaling services").systemd).toMatchObject({
       state: "restarted",
       enabled: true,
     });
+  });
+
+  test("initial-setup refuses to start signaling services while a deploy is unfinished", () => {
+    const deployPlay = playWithTask(
+      deploy,
+      "Apply migrations against Postgres",
+    );
+    const setupPlay = playWithTask(initialSetup, "Enable signaling services");
+    expect(setupPlay.vars?.migration_failure_marker).toBe(
+      deployPlay.vars?.migration_failure_marker,
+    );
+    const check = task(
+      setupPlay,
+      "Check for a deploy that left the binary and schema out of step",
+    );
+    expect(check.stat).toEqual({ path: "{{ migration_failure_marker }}" });
+    const refuse = task(
+      setupPlay,
+      "Refuse to start signaling services after an interrupted deploy",
+    );
+    expect(refuse.when).toBe("migration_failure_marker_file.stat.exists");
+    expect(refuse.fail?.msg).toContain(
+      "{{ migration_failure_marker_text.content | b64decode }}",
+    );
+    const refusal = position(
+      setupPlay,
+      "Refuse to start signaling services after an interrupted deploy",
+    );
+    // Before anything enables, starts or restarts a signaling unit.
+    for (const [index, later] of flatten(setupPlay.tasks).entries())
+      if (
+        later.systemd &&
+        String(later.systemd.name ?? "").includes("p2party-signaling")
+      )
+        expect(index, later.name).toBeGreaterThan(refusal);
   });
 
   test("every provisioning path installs verified PostgreSQL TLS ahead of client cutover", () => {
@@ -295,9 +422,14 @@ describe("production deployment contract", () => {
 
   test("secret-bearing environment renders suppress diffs", () => {
     const deployEnvironment = deploy.slice(
-      deploy.indexOf("- name: Deploy the signaling environment file"),
-      deploy.indexOf("- name: Deploy the systemd unit files"),
+      deploy.indexOf("- name: Stage the signaling environment file"),
+      deploy.indexOf("- name: Stage the systemd unit files"),
     );
+    const deployInstall = deploy.slice(
+      deploy.indexOf("- name: Install the staged signaling environment file"),
+      deploy.indexOf("- name: Install the staged systemd unit files"),
+    );
+    expect(deployInstall).toContain("diff: false");
     const setupEnvironment = initialSetup.slice(
       initialSetup.indexOf("- name: Deploy .env file"),
       initialSetup.indexOf(
@@ -525,8 +657,9 @@ describe("production deployment contract", () => {
         play,
         "Ensure the journald drop-in directory exists",
       );
-      expect(play.tasks.indexOf(directory)).toBeLessThan(
-        play.tasks.indexOf(install),
+      expect(flatten(play.tasks).indexOf(directory), name).toBeGreaterThan(-1);
+      expect(flatten(play.tasks).indexOf(directory), name).toBeLessThan(
+        flatten(play.tasks).indexOf(install),
       );
     }
   });
