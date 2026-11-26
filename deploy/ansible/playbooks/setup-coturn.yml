@@ -26,14 +26,25 @@
           - coturn_bps_capacity | default(30000000) | int >= coturn_max_bps | default(625000) | int
           - coturn_max_allocate_lifetime | default(600) | int > 0
           - coturn_max_allocate_lifetime | default(600) | int <= 3600
-          # coturn counts user-quota per credential username, so this is what
-          # one username can reserve: keep it to half the aggregate capacity.
-          # It is not a per-identity bound: an identity gets a new username
-          # every credential lifetime and coturn does not re-check a username's
-          # expiry on Refresh (README, "Relay bound"). The same defaults as
-          # turnserver.conf.j2.
+          # What one credential username can reserve, computed from the same
+          # variables and defaults as turnserver.conf.j2, kept to half of the
+          # aggregate capacity. coturn counts user-quota per username (the
+          # hourly tag) and checks its expiry only on a session's first
+          # request (check_stun_auth, src/server/ns_turn_server.c, coturn 4.6.1
+          # and master 44fa529). One identity therefore holds at most three
+          # tags' quota at once if it stops refreshing, and gains one more
+          # tag's quota every lifetime while it keeps refreshing old
+          # allocations. This guards against one client's runaway use; it does
+          # not bound an adversary, who can also use several identities.
           - 2 * (coturn_user_quota | default(12) | int) * (coturn_max_bps | default(625000) | int) <= coturn_bps_capacity | default(30000000) | int
-        fail_msg: Set positive coturn_max_bps, coturn_user_quota and coturn_bps_capacity with user quota * max bps at most half the capacity, and coturn_max_allocate_lifetime between 1 and 3600; zero disables the bandwidth guard
+        fail_msg: >-
+          Set positive coturn_max_bps, coturn_user_quota and coturn_bps_capacity
+          with coturn_user_quota * coturn_max_bps, what one credential username
+          can reserve, at most half of coturn_bps_capacity, and
+          coturn_max_allocate_lifetime between 1 and 3600;
+          zero disables the bandwidth guard.
+          This limits one username, not one identity or an adversary with
+          several identities.
 
     - name: Display setup info
       debug:

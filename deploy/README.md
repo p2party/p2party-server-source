@@ -35,10 +35,48 @@ quotas remain 1,200 total and 12 per credential username, and an allocation
 that is not refreshed is released within `coturn_max_allocate_lifetime` (600 s
 by default). The playbook refuses settings where `coturn_user_quota` ×
 `coturn_max_bps`, what one credential username can reserve, exceeds half of
-`coturn_bps_capacity`. That is not a per-identity limit: coturn does not
-re-check a username's expiry on Refresh, so an identity that keeps refreshing
-can hold allocations under a new username every hour. See "Relay bound" in the
-root [README](../README.md#relay-bound).
+`coturn_bps_capacity`.
+
+coturn counts the quota per username, here the hourly tag, and checks a
+username's expiry only on a session's first request (`check_stun_auth` in
+`src/server/ns_turn_server.c`, coturn 4.6.1 and master `44fa529`). One identity
+therefore holds at most three tags' quota at once if it stops refreshing, and
+gains one more tag's quota every lifetime for as long as it keeps refreshing its
+old allocations. The quota guards against one client's runaway use; it is not a
+bound on an adversary, who can also simply use several identities. See "Relay
+bound" in the root [README](../README.md#relay-bound), and its
+[admission section](../README.md#admission-and-database-security) for
+signaling admission defaults, trusted proxy handling and their overrides.
+
+### Relay exhaustion
+
+The relay's total capacity is the only hard limit: `total-quota` (1,200
+allocations) and `coturn_bps_capacity` (30,000,000 bytes/second, 48 reserved
+allocations at the default `coturn_max_bps`). Four identities with a full quota
+each reserve all of it. Once it is reached, coturn answers new Allocate requests
+with 486 ("Allocation Quota Reached" or "Allocation Bandwidth Quota Reached"),
+and clients that need the relay cannot connect.
+
+With this template an operator sees no sign of exhaustion on the TURN host: the
+log goes to `/dev/null`, the telnet CLI is off (`no-cli`), and neither coturn's
+`prometheus` exporter nor its `redis-statsdb` statistics are configured.
+Diagnosing it means enabling one of them for the occasion, for example running
+`turnserver` by hand with `--log-file=stdout`, or `--prometheus` without
+username labels if the installed package was built with it. Clients report
+relay failures before the host does.
+
+Two mitigations were considered and not built:
+
+- **Per-source-address limits at the TURN host's firewall**, for example
+  nftables connection or rate limits on ports 3478 and 443. They cap what one
+  address can open, but everyone behind one carrier-grade NAT or campus address
+  shares the limit, and an adversary with many addresses is not slowed.
+- **A stable per-identity tag with TLS-only TURN** (no plain `turn:` URL).
+  coturn would pool the quota per identity and the pseudonym would cross the
+  network only inside TLS. But the TURN host would hold a permanent pseudonym
+  per identity, every relayed connection would move to TLS over TCP with its
+  head-of-line blocking and connectivity cost, and an adversary with several
+  identities would still not be bounded.
 
 ## Upgrading to 0.1.5
 
@@ -46,10 +84,6 @@ Where several workers share a database, stop every 0.1.4 worker before the first
 0.1.5 worker starts and run all workers under one database role: a 0.1.5 worker
 counts another as live only through its named PostgreSQL session, which 0.1.4
 does not open, so it would clear a running 0.1.4 worker's routing claims.
-
-This is a capacity and cost guard, not proof of unique users. See the root
-[README](../README.md#admission-and-database-security) for signaling admission
-defaults, trusted proxy handling and their operator overrides.
 
 ## Database trust
 

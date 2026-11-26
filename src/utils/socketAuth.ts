@@ -274,11 +274,17 @@ const turnUsernameTag = (
  * function of identity and window alone, so any lifetime-long interval sees
  * at most two distinct ones.
  *
- * coturn counts `user-quota` per username part after `<digits>:`, here the
- * tag, so each window gives an identity a separate quota bucket. coturn checks
- * the expiry only when a TURN session first authenticates, not on Refresh, so
- * an allocation outlives its credential for as long as the client refreshes
- * it. See the README for the relay bound this leaves.
+ * coturn counts `user-quota` per username, the part after `<digits>:`, here
+ * the tag, so each window gives an identity a separate quota bucket. It checks
+ * a username's expiry only on a session's first request: `check_stun_auth` in
+ * coturn's src/server/ns_turn_server.c looks the key up, and so checks the
+ * expiry, only while the session has none cached, and Refresh is never
+ * re-checked (coturn 4.6.1 and master 44fa529, read November 2026). One
+ * identity therefore holds at most three tags' quota at once if it stops
+ * refreshing, and gains one more tag's quota every lifetime for as long as it
+ * keeps refreshing its old allocations. The quota guards against one client's
+ * runaway use; it is not a bound on an adversary, who can also simply use
+ * several identities. See "Relay bound" in the README.
  */
 export const createTurnCredentials = (
   publicKey: string,

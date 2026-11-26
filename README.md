@@ -413,11 +413,11 @@ one hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
 hour, so a credential is valid for at least one hour and less than two. A
 bundle comes with every successful room join, and every join by one identity
 within one such hour receives the identical bundle. coturn counts its
-per-username allocation quota per tag, so per identity per hour. It checks the
-expiry only when a TURN session first authenticates, so an allocation made with
-a credential stays usable after the credential expires for as long as it is
-refreshed; "Relay bound" under Deployment gives the limit this leaves. URL
-normalization follows the `COTURN_URLS` limits above.
+per-username allocation quota per tag, so per identity per hour, and checks the
+expiry only on a session's first request, so an allocation stays usable after
+its credential expires for as long as it is refreshed. "Relay bound" under
+Deployment states what this limits and what it does not. URL normalization
+follows the `COTURN_URLS` limits above.
 
 When `COTURN_SECRET` or `COTURN_URLS` is missing, or no URL survives
 normalization, `turnCredentials` is omitted from the `roomId` response entirely
@@ -658,28 +658,40 @@ bandwidth request reserve the per-allocation maximum, so the defaults permit 48
 simultaneous such allocations; raise aggregate capacity for larger relay-heavy
 rooms. Allocation quotas remain 1,200 total and 12 per credential username.
 
-What this bounds, read from coturn's source (release 4.6.1 and master, November
-2026): coturn counts `user-quota` per username part after
-`<digits>:`, here the tag, and checks a username's expiry only when a TURN
-session first authenticates. Refresh, CreatePermission and ChannelBind on that
-session reuse the cached key and are not re-checked, and coturn does not end a
-session when its credential expires.
+What holds, read from coturn's source (release 4.6.1 and master `44fa529`,
+November 2026):
 
-- One credential username can reserve at most 12 × 625,000 = 7,500,000
-  bytes/second, a quarter of the capacity. The playbook refuses overrides where
+- coturn counts `user-quota` per username, the part after `<digits>:`, here the
+  hourly tag (`get_real_username` and `check_new_allocation_quota` in
+  `src/apps/relay/userdb.c`). One username reserves at most 12 × 625,000 =
+  7,500,000 bytes/second, a quarter of the capacity. The playbook computes that
+  share from the template's own variables and refuses overrides where
   `coturn_user_quota` × `coturn_max_bps` exceeds half of `coturn_bps_capacity`.
-- One identity has no bound of its own over time. A client that keeps
-  refreshing its allocations keeps them after the credential expires, and each
-  hour it joins a room it receives a new tag with a fresh quota. Without
-  refreshes past expiry, one identity holds reservations under at most three
-  tags at once. A credential is issued at most two lifetimes L (one hour each)
+- coturn checks a username's expiry only on a session's first request:
+  `check_stun_auth` in `src/server/ns_turn_server.c` looks the key up, and so
+  checks the expiry in `get_user_key`, only while the session has none cached.
+  Refresh, CreatePermission and ChannelBind reuse the cached key, and coturn
+  does not end a session when its credential expires.
+- One identity therefore holds at most three tags' quota at once if it stops
+  refreshing: a credential is issued at most two lifetimes L (one hour each)
   before it expires, and an unrefreshed allocation outlives it by at most
-  A = `coturn_max_allocate_lifetime`. The tags live at one moment therefore
-  expire within (now − A, now + 2L), which holds at most ⌈(2L + A)/L⌉ = 3 of
-  them for 0 < A ≤ L.
-- The relay as a whole is bounded by `total-quota` and `bps-capacity` only.
-  This is a capacity and cost guard, not proof of unique users: a handful of
-  identities can reserve the whole capacity.
+  A = `coturn_max_allocate_lifetime`, so the live tags expire within
+  (now − A, now + 2L), at most ⌈(2L + A)/L⌉ = 3 of them for 0 < A ≤ L. It gains
+  one more tag's quota every lifetime for as long as it keeps refreshing its old
+  allocations.
+- The quota guards against one client's runaway use. It is not a bound on an
+  adversary, who can also simply use several identities: at the defaults four
+  identities with a full quota each reserve the whole relay. `total-quota` and
+  `bps-capacity` are the only hard limits; see "Relay exhaustion" in
+  [`deploy/README.md`](deploy/README.md#relay-exhaustion).
+
+The tag is hourly on purpose. A stable tag would let coturn pool the quota per
+identity, but it would put a permanent pseudonym on the path of every plain
+`turn:` request, linkable across days and networks, which is what the opaque
+username exists to remove. The earlier `<expiry>:<identity key>` username
+already pooled the quota per identity, because coturn strips the `<digits>:`
+prefix; what one username can reserve fell only because `coturn_max_bps` went
+from 3,000,000 to 625,000.
 
 The units and reservation semantics follow the [coturn configuration](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf)
 and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2projects).

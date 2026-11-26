@@ -260,6 +260,50 @@ describe("production deployment contract", () => {
     expect(setupCoturn).toContain("zero disables the bandwidth guard");
   });
 
+  test("every relay passage states the bound coturn enforces, not a per-identity one", () => {
+    // The five passages that describe the TURN quota, as prose: comment
+    // markers and line breaks removed.
+    const prose = (path: string) =>
+      readFileSync(join(repoRoot, path), "utf8")
+        .split("\n")
+        .map((line) => line.replace(/^\s*(?:#|\/\/|\/?\*+\/?)\s?/, ""))
+        .join(" ")
+        .replace(/\s+/g, " ");
+    for (const path of [
+      "deploy/ansible/templates/turnserver.conf.j2",
+      "deploy/ansible/playbooks/setup-coturn.yml",
+      "README.md",
+      "deploy/README.md",
+      "src/utils/socketAuth.ts",
+    ]) {
+      const text = prose(path);
+      // The withdrawn claim: one identity limited to half the relay through
+      // at most two valid usernames, enforced with a fixed 4x multiplier.
+      for (const withdrawn of [
+        /at most two valid usernames/i,
+        /at most two are valid/i,
+        /one identity can reserve at most/i,
+        /half the capacity; the playbook refuses/i,
+        /2 × 12 × 625,000/,
+        /per-identity bound:/i,
+        /quota therefore applies per identity(?! per hour)/i,
+        /4 \* \(coturn_user_quota/,
+      ])
+        expect(text, `${path}: ${String(withdrawn)}`).not.toMatch(withdrawn);
+      // What holds, with its source.
+      for (const stated of [
+        /first request/i,
+        /three tags/i,
+        /one more tag/i,
+        /runaway use/i,
+        /several identities/i,
+        /check_stun_auth/,
+        /4\.6\.1/,
+      ])
+        expect(text, `${path}: ${String(stated)}`).toMatch(stated);
+    }
+  });
+
   test("max-allocate-lifetime is set", () => {
     // coturn's default is 3600 s; an allocation that is not refreshed holds
     // its bandwidth reservation at most this long after its last request.
@@ -307,6 +351,11 @@ describe("production deployment contract", () => {
       "coturn_max_bps",
       "coturn_user_quota",
     ]);
+    // No fixed multiplier for an assumed number of usernames per identity:
+    // the only constant outside the defaults is the 2 that means "half".
+    expect(
+      bound[0]!.replace(/default\([0-9]+\)/g, "").match(/[0-9]+/g),
+    ).toEqual(["2"]);
     for (const [name, fallback] of used)
       expect(fromTemplate.get(name)).toBe(fallback);
 

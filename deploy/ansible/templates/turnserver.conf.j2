@@ -34,9 +34,8 @@ ec-curve-name=prime256v1
 # long-lived credential is ever handed to a browser. The tag is an HMAC of the
 # identity key and expiry under the same secret; the key itself never appears.
 # The expiry is rounded up to a whole credential lifetime (one hour), so one
-# identity gets one username per lifetime and at most two are valid for a new
-# allocation at any instant. coturn checks the expiry only when a session first
-# authenticates, not on Refresh, so a refreshed allocation outlives it.
+# identity gets one username per lifetime. coturn checks the expiry only on a
+# session's first request (see Quotas), so a refreshed allocation outlives it.
 use-auth-secret
 static-auth-secret={{ vault_coturn_auth_secret }}
 realm={{ vault_coturn_realm }}
@@ -49,13 +48,21 @@ realm={{ vault_coturn_realm }}
 # Both bandwidth settings are bytes/sec, with input and output counted separately.
 # Clients without a BANDWIDTH request reserve max-bps per allocation: the default
 # aggregate budget admits 48 such allocations. Raise it for larger rooms.
-# user-quota counts per username part after "<digits>:", the tag, which changes
-# every credential lifetime. One username can therefore reserve user-quota *
-# max-bps, which setup-coturn.yml requires to be at most half of bps-capacity
-# (12 * 625000 = 7500000 of 30000000 at the defaults). That is not a
-# per-identity bound: an identity that keeps refreshing its allocations can
-# hold them under a new username every hour, and only total-quota and
-# bps-capacity bound the relay as a whole.
+# coturn counts user-quota per username, the part after "<digits>:", here the
+# hourly tag (get_real_username and check_new_allocation_quota in
+# src/apps/relay/userdb.c). It checks a username's expiry only on a session's
+# first request: check_stun_auth in src/server/ns_turn_server.c looks the key
+# up, and so checks the expiry, only while the session has none cached; Refresh,
+# CreatePermission and ChannelBind are not re-checked (coturn 4.6.1 and master
+# 44fa529, read November 2026). One username reserves at most user-quota *
+# max-bps (12 * 625000 = 7500000 of 30000000 at the defaults), which
+# setup-coturn.yml keeps to half of bps-capacity. One identity holds at most
+# three tags' quota at once if it stops refreshing, and gains one more tag's
+# quota every lifetime for as long as it keeps refreshing its old allocations.
+# The quota guards against one client's runaway use; it is not a bound on an
+# adversary, who can also simply use several identities (four full quotas
+# reserve the whole relay at the defaults). total-quota and bps-capacity are
+# the only hard limits.
 total-quota={{ coturn_total_quota | default(1200) }}
 user-quota={{ coturn_user_quota | default(12) }}
 max-bps={{ coturn_max_bps | default(625000) }}
