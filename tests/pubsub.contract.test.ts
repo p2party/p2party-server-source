@@ -98,7 +98,7 @@ describe("cross-instance signal routing", () => {
 });
 
 describe("data ownership", () => {
-  test("startup clears dead servers by LISTEN-session liveness, then sweeps by age", () => {
+  test("startup sweeps by age, then clears dead servers by LISTEN-session liveness", () => {
     // A live owner drains within one safety poll, so rows past the age limit
     // are undeliverable wherever they are addressed (behaviour is covered in
     // pubsub.routingRetention.test.ts). Claims are cleared only for server ids
@@ -112,10 +112,12 @@ describe("data ownership", () => {
     const periodic = init.indexOf("startPendingSignalSweep()");
     expect(naming).toBeGreaterThan(-1);
     expect(listen).toBeGreaterThan(naming);
-    expect(clearDead).toBeGreaterThan(listen);
+    // The age sweep runs first, so the liveness check only groups rows that
+    // are younger than the age limit.
+    expect(sweep).toBeGreaterThan(listen);
+    expect(clearDead).toBeGreaterThan(sweep);
     expect(init).toContain("connectedServerIds(client, serverIds)");
-    expect(sweep).toBeGreaterThan(clearDead);
-    expect(periodic).toBeGreaterThan(sweep);
+    expect(periodic).toBeGreaterThan(clearDead);
     const shutdown =
       /export const shutdownPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
     expect(shutdown).toContain("clearInterval(pendingSignalSweep)");

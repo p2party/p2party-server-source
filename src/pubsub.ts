@@ -42,8 +42,15 @@ const CONNECT_TIMEOUT_MS = 10_000;
  * to a peer that never came back.
  */
 export const PENDING_SIGNAL_MAX_AGE_MS = 120_000;
-/** How often the age sweep runs; a row lives at most MAX_AGE plus this. */
+/**
+ * How often the age sweep runs. While no more than one run's batches of rows
+ * age out per period, a row lives at most MAX_AGE plus this.
+ */
 const PENDING_SIGNAL_SWEEP_MS = 30_000;
+/** Rows one delete statement may remove, as in room retention. */
+export const PENDING_SIGNAL_SWEEP_BATCH = 1_000;
+/** Batches one sweep run may delete, so a run is bounded after an outage. */
+export const PENDING_SIGNAL_SWEEP_MAX_BATCHES = 10;
 /** Prefix of the LISTEN session's application_name; see routingSessionName. */
 const ROUTING_SESSION_PREFIX = "p2party-signaling:";
 /**
@@ -118,10 +125,25 @@ export const sweepStalePendingSignals = async (
   store: Pick<RoutingStore, "pendingSignal"> = prisma,
   now = Date.now(),
 ): Promise<number> => {
-  const { count } = await store.pendingSignal.deleteMany({
-    where: { createdAt: { lt: new Date(now - PENDING_SIGNAL_MAX_AGE_MS) } },
-  });
-  return count;
+  const cutoff = new Date(now - PENDING_SIGNAL_MAX_AGE_MS);
+  let deleted = 0;
+  // Oldest first through the createdAt index, one bounded batch at a time; a
+  // short batch means nothing older is left.
+  for (let batch = 0; batch < PENDING_SIGNAL_SWEEP_MAX_BATCHES; batch++) {
+    const stale = await store.pendingSignal.findMany({
+      where: { createdAt: { lt: cutoff } },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+      take: PENDING_SIGNAL_SWEEP_BATCH,
+    });
+    if (stale.length === 0) break;
+    const { count } = await store.pendingSignal.deleteMany({
+      where: { id: { in: stale.map(({ id }) => id) } },
+    });
+    deleted += count;
+    if (stale.length < PENDING_SIGNAL_SWEEP_BATCH) break;
+  }
+  return deleted;
 };
 
 /** Run sweepStalePendingSignals every PENDING_SIGNAL_SWEEP_MS. */
@@ -182,14 +204,14 @@ export const clearDeadServerState = async (
   isConnected: (serverIds: string[]) => Promise<Set<string>>,
   self: string = SERVER_ID,
 ): Promise<string[]> => {
-  const claims = await store.peer.findMany({
+  // GROUP BY in SQL, over the serverId and targetServerId indexes: one row
+  // per server id, never every peer or queued signal.
+  const claims = await store.peer.groupBy({
+    by: ["serverId"],
     where: { serverId: { not: null } },
-    select: { serverId: true },
-    distinct: ["serverId"],
   });
-  const addressed = await store.pendingSignal.findMany({
-    select: { targetServerId: true },
-    distinct: ["targetServerId"],
+  const addressed = await store.pendingSignal.groupBy({
+    by: ["targetServerId"],
   });
   const foreign = [
     ...new Set([
@@ -296,8 +318,14 @@ export const initPubSub = async (): Promise<void> => {
 
   safetyPoll = setInterval(() => void drainPendingSignals(), SAFETY_POLL_MS);
 
-  // Clear the claims and rows of processes that exited without shutting down,
-  // then everything past the age limit; the periodic sweep keeps it there.
+  // Delete everything past the age limit first, so the liveness check below
+  // only groups recent rows, then clear the claims and rows of processes that
+  // exited without shutting down. The periodic sweep keeps the age limit.
+  try {
+    await sweepStalePendingSignals();
+  } catch (error) {
+    console.error("p2party: failed to sweep stale pending signals", error);
+  }
   const client = listenClient;
   try {
     const cleared = await clearDeadServerState(prisma, (serverIds) =>
@@ -312,11 +340,6 @@ export const initPubSub = async (): Promise<void> => {
       "p2party: failed to clear dead servers' routing state",
       error,
     );
-  }
-  try {
-    await sweepStalePendingSignals();
-  } catch (error) {
-    console.error("p2party: failed to sweep stale pending signals", error);
   }
   pendingSignalSweep = startPendingSignalSweep();
 };

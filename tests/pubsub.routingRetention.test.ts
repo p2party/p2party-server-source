@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import {
   PENDING_SIGNAL_MAX_AGE_MS,
+  PENDING_SIGNAL_SWEEP_BATCH,
+  PENDING_SIGNAL_SWEEP_MAX_BATCHES,
   SERVER_ID,
   clearDeadServerState,
   connectedServerIds,
@@ -27,11 +29,16 @@ interface SignalRow {
 
 /**
  * An in-memory stand-in for the two Prisma delegates the routing code uses.
- * It implements exactly the filters the code sends and throws on anything
- * else, so an unexpected query shape fails the test instead of matching
- * every row.
+ * It implements exactly the queries the code sends and throws on anything
+ * else, so an unexpected query shape fails the test instead of matching every
+ * row. A findMany without a bounded `take` throws too: no routing query may
+ * load every row. Each delete statement's size is recorded.
  */
-const routingStore = (peers: PeerRow[], signals: SignalRow[]) => {
+const routingStore = (
+  peers: PeerRow[],
+  signals: SignalRow[],
+  deleteSizes: number[] = [],
+) => {
   const keysOnly = (value: object, allowed: string[]) => {
     for (const key of Object.keys(value))
       if (!allowed.includes(key)) throw new Error(`unexpected filter ${key}`);
@@ -39,14 +46,17 @@ const routingStore = (peers: PeerRow[], signals: SignalRow[]) => {
   const signalMatches = (
     row: SignalRow,
     where: {
+      id?: { in: string[] };
       createdAt?: { lt: Date };
       targetServerId?: { in: string[] };
     },
   ) => {
-    keysOnly(where, ["createdAt", "targetServerId"]);
+    keysOnly(where, ["id", "createdAt", "targetServerId"]);
+    if (where.id) keysOnly(where.id, ["in"]);
     if (where.createdAt) keysOnly(where.createdAt, ["lt"]);
     if (where.targetServerId) keysOnly(where.targetServerId, ["in"]);
     return (
+      (where.id === undefined || where.id.in.includes(row.id)) &&
       (where.createdAt === undefined ||
         row.createdAt.getTime() < where.createdAt.lt.getTime()) &&
       (where.targetServerId === undefined ||
@@ -55,15 +65,10 @@ const routingStore = (peers: PeerRow[], signals: SignalRow[]) => {
   };
   return {
     peer: {
-      findMany: async (args: {
-        where: { serverId: { not: null } };
-        select: { serverId: true };
-        distinct: ["serverId"];
-      }) => {
+      groupBy: async (args: unknown) => {
         expect(args).toEqual({
+          by: ["serverId"],
           where: { serverId: { not: null } },
-          select: { serverId: true },
-          distinct: ["serverId"],
         });
         return [
           ...new Set(peers.map((p) => p.serverId).filter((id) => id !== null)),
@@ -92,17 +97,28 @@ const routingStore = (peers: PeerRow[], signals: SignalRow[]) => {
       },
     },
     pendingSignal: {
-      findMany: async (args: {
-        select: { targetServerId: true };
-        distinct: ["targetServerId"];
-      }) => {
-        expect(args).toEqual({
-          select: { targetServerId: true },
-          distinct: ["targetServerId"],
-        });
+      groupBy: async (args: unknown) => {
+        expect(args).toEqual({ by: ["targetServerId"] });
         return [...new Set(signals.map((s) => s.targetServerId))].map(
           (targetServerId) => ({ targetServerId }),
         );
+      },
+      findMany: async (args: {
+        where: { createdAt: { lt: Date } };
+        select: { id: true };
+        orderBy: { createdAt: "asc" };
+        take: number;
+      }) => {
+        keysOnly(args, ["where", "select", "orderBy", "take"]);
+        expect(args.select).toEqual({ id: true });
+        expect(args.orderBy).toEqual({ createdAt: "asc" });
+        if (!(args.take > 0 && args.take <= 1_000))
+          throw new Error(`unbounded findMany (take ${String(args.take)})`);
+        return signals
+          .filter((row) => signalMatches(row, args.where))
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, args.take)
+          .map(({ id }) => ({ id }));
       },
       deleteMany: async ({
         where,
@@ -112,6 +128,7 @@ const routingStore = (peers: PeerRow[], signals: SignalRow[]) => {
         const before = signals.length;
         const kept = signals.filter((row) => !signalMatches(row, where));
         signals.splice(0, signals.length, ...kept);
+        deleteSizes.push(before - kept.length);
         return { count: before - kept.length };
       },
     },
@@ -196,6 +213,51 @@ describe("routing state retention", () => {
     task!();
     await Promise.resolve();
     expect(signals).toEqual([]);
+  });
+
+  test("the sweep deletes in bounded batches, oldest first", async () => {
+    const now = 1_800_000_000_000;
+    const stale = 2 * PENDING_SIGNAL_SWEEP_BATCH + 500;
+    const signals = [
+      ...Array.from({ length: stale }, (_, i) =>
+        signal(`stale-${String(i)}`, i % 2 ? DEAD : LIVE, now - 121_000 - i),
+      ),
+      signal("fresh", LIVE, now),
+    ];
+    const deleteSizes: number[] = [];
+    expect(
+      await sweepStalePendingSignals(
+        routingStore([], signals, deleteSizes),
+        now,
+      ),
+    ).toBe(stale);
+    expect(signals.map(({ id }) => id)).toEqual(["fresh"]);
+    // Three statements, none larger than one batch.
+    expect(deleteSizes).toEqual([
+      PENDING_SIGNAL_SWEEP_BATCH,
+      PENDING_SIGNAL_SWEEP_BATCH,
+      500,
+    ]);
+
+    // A backlog larger than one run is drained over several runs, each run
+    // bounded at PENDING_SIGNAL_SWEEP_MAX_BATCHES statements.
+    const backlog =
+      PENDING_SIGNAL_SWEEP_MAX_BATCHES * PENDING_SIGNAL_SWEEP_BATCH + 7;
+    const big = Array.from({ length: backlog }, (_, i) =>
+      signal(`old-${String(i)}`, DEAD, now - 200_000 - i),
+    );
+    const sizes: number[] = [];
+    const store = routingStore([], big, sizes);
+    expect(await sweepStalePendingSignals(store, now)).toBe(
+      PENDING_SIGNAL_SWEEP_MAX_BATCHES * PENDING_SIGNAL_SWEEP_BATCH,
+    );
+    expect(sizes).toHaveLength(PENDING_SIGNAL_SWEEP_MAX_BATCHES);
+    // The oldest went first.
+    expect(big.map(({ id }) => id).sort()).toEqual(
+      Array.from({ length: 7 }, (_, i) => `old-${String(i)}`).sort(),
+    );
+    expect(await sweepStalePendingSignals(store, now)).toBe(7);
+    expect(big).toEqual([]);
   });
 
   test("startup clears claims of a dead server id", async () => {
