@@ -210,13 +210,16 @@ The apex DNS record must be proxied through Cloudflare for the rule to run. This
 rule is the only source of HSTS that Terraform manages; the zone HSTS setting
 is left unmanaged on purpose (see [Frontend HTTPS and TLS](#frontend-https-and-tls)).
 
-Terraform 1.2+ is required for the ownership precondition. Terraform 1.7+ runs
-the offline provider-mock plans covering the default-off behavior, disabled
-initial rules, existing-rule preservation, and that each opt-in changes only its
-own resource. Run them from a clean copy of the committed tree. In
-`deploy/terraform` itself, `terraform test` loads the ignored `terraform.tfvars`,
-whose rollout flags make the default-off tests fail. From the repository root,
-after `./deploy/tf init` has installed the providers:
+The configuration requires Terraform 1.17.2 or newer (`required_version` in
+`terraform/p2party_main.tf`). `terraform test` runs the offline provider-mock
+plans covering the default-off behavior, disabled initial rules, existing-rule
+preservation, and that each opt-in changes only its own resource. Run them from
+a clean copy of the committed tree. In `deploy/terraform` itself,
+`terraform test` loads the ignored `terraform.tfvars`, whose rollout flags make
+the default-off tests fail. From the repository root, after
+`./deploy/tf init -upgrade` has installed the providers this configuration
+names (the ignored `.terraform.lock.hcl` records the versions installed before;
+`-upgrade` replaces them):
 
 ```bash
 tf_test_dir="$(mktemp -d)"

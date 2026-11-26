@@ -10,7 +10,6 @@ mock_provider "cloudflare" {
 }
 
 mock_provider "hcloud" {}
-mock_provider "null" {}
 
 variables {
   hcloud_token               = "test-only-placeholder"
