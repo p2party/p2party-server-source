@@ -45,7 +45,9 @@ const handleRoomWithClient = async (
   try {
     await runPeerRoomMutation(fromPeerId, async () => {
       if (!isCurrent())
-        throw new RoomRequestRefused("Room request socket is no longer current");
+        throw new RoomRequestRefused(
+          "Room request socket is no longer current",
+        );
 
       const identifier = deriveRoomIdentifier(roomUrl);
       const peer: Peer | null = await prisma.peer.findUnique({
@@ -93,7 +95,9 @@ const handleRoomWithClient = async (
           include: { _count: { select: { peers: true } } },
         });
         if (!isCurrent())
-          throw new RoomRequestRefused("Room request socket was replaced before membership");
+          throw new RoomRequestRefused(
+            "Room request socket was replaced before membership",
+          );
 
         if (
           !wasMember &&
@@ -122,7 +126,9 @@ const handleRoomWithClient = async (
               where: { id: room.id },
               data: { peers: { disconnect: { id: peer.id } } },
             });
-          throw new RoomRequestRefused("Room request socket was replaced during membership");
+          throw new RoomRequestRefused(
+            "Room request socket was replaced during membership",
+          );
         }
 
         // The relay endpoint travels with the room response because that is
