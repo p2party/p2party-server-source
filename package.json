@@ -18,6 +18,9 @@
   "engines": {
     "bun": ">=1.4.5"
   },
+  "overrides": {
+    "effect": "3.22.5"
+  },
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",

@@ -194,17 +194,18 @@ rotation. Keep the database CA key in protected operational backups, never Git.
 The server retains `@ondemos/core` for Ed25519 proof verification and the
 PostgreSQL/Prisma libraries for persistence. UUID and hexadecimal checks are
 small local functions with boundary tests; `class-validator` is no longer a
-runtime dependency. There are no dependency overrides: every transitive package
-resolves to what its dependent declares, and Prisma's CLI packages pin their own
-dependencies to exact versions. `tests/dependencyCompatibility.test.ts` checks
-the `deepmerge-ts` that Prisma's configuration loader uses with plain-object,
-recursive-input and real configuration-loader tests. Run `bun audit` alongside
-the release checks. On
-2026-11-26 it reports one advisory, GHSA-7589-6fvf-x4pw (a ReDoS in effect's
-`Schema.TemplateLiteral`, fixed in 3.22.1), for the `effect` 3.20.0 that
-`@prisma/config` 7.10.1 pins. That package decodes this repository's own
-`prisma.config.ts`, with no `Schema.TemplateLiteral`; a fix would mean forcing
-`effect` outside Prisma's pin, so it waits for a Prisma release.
+runtime dependency. Prisma's CLI packages pin their own dependencies to exact
+versions, and none of those packages is in the compiled binary; the host installs
+them as migration tooling. `tests/dependencyFloors.test.ts` holds a security
+floor, with its advisories, for each Prisma CLI dependency that has had one, and
+fails when `bun.lock` resolves a package below its floor or when an override has
+no recorded reason. There is one override: `@prisma/config` 7.10.1 pins `effect`
+3.20.0, below the fix for GHSA-7589-6fvf-x4pw (a ReDoS in
+`Schema.TemplateLiteral`, fixed in 3.22.1), so `effect` is lifted to 3.22.5, the
+newest patch of that line. Remove it once Prisma's pin reaches the fix.
+`tests/dependencyCompatibility.test.ts` checks the `deepmerge-ts` that Prisma's
+configuration loader uses, and that the loader accepts this repository's
+configuration. Run `bun audit` alongside the release checks.
 The TLS handshake regressions also require the `openssl` command.
 
 ## Health and version
