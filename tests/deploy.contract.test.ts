@@ -872,7 +872,7 @@ describe("production deployment contract", () => {
     expect(installTooling).toBeGreaterThan(copyLock);
     expect(copySchema).toBeGreaterThan(installTooling);
     expect(migrate).toBeGreaterThan(copySchema);
-    expect(deploy).toContain("loop: [package.json, bun.lockb]");
+    expect(deploy).toContain("loop: [package.json, bun.lock]");
     expect(deploy).toContain("- --frozen-lockfile");
     expect(deploy).toContain(
       '"{{ migration_tooling }}/node_modules/prisma/build/index.js"',

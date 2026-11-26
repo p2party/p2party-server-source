@@ -18,7 +18,7 @@ The wrapper builds this repository's Linux binary, provisions verified database
 TLS, then on the signaling host:
 
 1. prepares the release while the old one keeps serving: installs migration
-   tooling from this release's `package.json` and `bun.lockb` (a registry
+   tooling from this release's `package.json` and `bun.lock` (a registry
    fetch), copies the schema and migrations, stages the new binary, its
    environment file and its units in `~p2party/server/release-staging/`, and
    renders and validates a candidate Caddy configuration. Nothing the running
@@ -40,6 +40,21 @@ lives in a separate `migration-tooling` directory; it uses the same audited
 dependency overrides as the release rather than fetching an independent CLI
 dependency tree. Its working directory remains the server directory containing
 `prisma.config.ts` and `prisma/`.
+
+The migration tooling is installed and run by the signaling host's own Bun,
+`~p2party/.bun/bin/bun`, which `playbooks/initial-setup.yml` installs only when
+it is absent and never upgrades. `bun.lock` is Bun's text lockfile with
+`lockfileVersion` 2. In a local test Bun 1.4.0 installed from it and Bun 1.3.14
+refused it (`UnknownLockfileVersion`); no version in between was tested. On a
+host whose Bun is older, the deploy ends at "Report that preparing the release
+failed" with production untouched. Before deploying, check the host's version
+and, if it is older than 1.4.0, install the version this release was tested
+with:
+
+```bash
+sudo -u p2party /home/p2party/.bun/bin/bun --version
+sudo -u p2party -H bash -c 'curl -fsSL https://bun.com/install | bash -s "bun-v1.4.5"'
+```
 
 The binary also checks the schema itself. Before it opens its listener it reads
 Prisma's migration history, on its own connection, within 8 seconds, and exits

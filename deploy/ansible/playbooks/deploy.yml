@@ -185,7 +185,7 @@
             owner: "{{ app.user }}"
             group: "{{ app.group }}"
             mode: "0644"
-          loop: [package.json, bun.lockb]
+          loop: [package.json, bun.lock]
 
         - name: Install exactly the audited migration dependencies
           become_user: "{{ app.user }}"

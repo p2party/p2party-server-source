@@ -11,7 +11,7 @@ end-to-end encryption and per-message DataChannels live in
 
 ## Requirements
 
-- Bun 1.3 or newer
+- Bun 1.4.5 or newer
 - PostgreSQL 14+ reachable via a `postgresql://` URL in `DATABASE_URL`
 
 ## Local setup
