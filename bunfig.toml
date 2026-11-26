@@ -1,0 +1,6 @@
+# Under `bun test` only: tests/preload.ts runs before any test file is
+# imported. Bun loads .env into process.env for test runs too, so without the
+# preload every test that imports a server module would configure the shared
+# Prisma client from the developer's DATABASE_URL. See "Testing" in README.md.
+[test]
+preload = ["./tests/preload.ts"]
