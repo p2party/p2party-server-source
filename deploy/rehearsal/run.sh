@@ -15,7 +15,7 @@
 #   upgrade    from the baseline, the commit under test deployed over 0.1.4
 #   scenario-1 ... scenario-8
 #              the fault scenarios of deploy/rehearsal/README.md, each from
-#              the baseline (scenario-6 from the upgrade); each ends with the
+#              the baseline (scenario-6 runs the upgrade first); each ends with the
 #              README's next step and a second run (scenario 7)
 #   fresh      a new VM provisioned by the commit's own site.yml (with
 #              install-postgres, setup-coturn and initial-setup), then
@@ -290,7 +290,17 @@ sanitize() {
   args+=(-e "s#$WORK#<work>#g" -e "s#${WORK#/private}#<work>#g")
   [ -n "${TOOLS:-}" ] && args+=(-e "s#$TOOLS#<tools>#g" -e "s#${TOOLS#/private}#<tools>#g")
   args+=(-e "s#$repo#<repo>#g" -e "s#$CONTROL_DIR#<control-dir>#g" -e "s#$HOME#~#g")
-  sed "${args[@]}" | perl -pe 's/\e\[[0-9;]*[A-Za-z]//g'
+  # ansible-core prints every vaulted value as $REDACTED$, and the vault's
+  # database user and name ("p2party") occur in these paths too.
+  sed "${args[@]}" | SANITIZE_PATHS="$WORK:${WORK#/private}:${TOOLS:-$WORK}:$repo:$HOME" perl -pe '
+    BEGIN {
+      my %name = ();
+      my @p = split /:/, $ENV{SANITIZE_PATHS};
+      @name{@p} = ("<work>", "<work>", "<tools>", "<repo>", "~");
+      for my $path (@p) { (my $masked = $path) =~ s/p2party/\$REDACTED\$/g; push @pairs, [$masked, $name{$path}]; }
+    }
+    for my $pair (@pairs) { my ($from, $to) = @$pair; s/\Q$from\E/$to/g; }
+    s/\e\[[0-9;]*[A-Za-z]//g'
 }
 
 # ---------------------------------------------------------------------------
@@ -360,6 +370,7 @@ prepare_tree() {
   local rev="$1" flavour="${2:-git}" sha dir
   sha="$(git -C "$repo" rev-parse --verify "$rev^{commit}")"
   dir="$TREES/${sha:0:12}"
+  prune_trees "${sha:0:12}"
   if [ ! -f "$dir.ready" ]; then
     log "preparing a tree of ${sha:0:12}"
     rm -rf "$dir"
@@ -388,6 +399,24 @@ prepare_tree() {
     dir="$plain"
   fi
   printf '%s\n' "$dir"
+}
+
+# At most one tree per release is kept: release 0.1.4's, the commit under
+# test's, and the one being prepared (each with its own node_modules, about
+# 0.5 GB).
+prune_trees() {
+  local keep_014 keep_commit entry name
+  keep_014="$(git -C "$repo" rev-parse --short=12 "$RELEASE_014")"
+  keep_commit="${COMMIT_SHA:0:12}"
+  for entry in "$TREES"/*; do
+    [ -e "$entry" ] || continue
+    name="$(basename "$entry")"
+    name="${name%.ready}"
+    case "$name" in
+      "$keep_014" | "$keep_commit" | "$1") ;;
+      *) rm -rf "$entry" ;;
+    esac
+  done
 }
 
 # The Bun a tree's package.json pins, for building it. Release 0.1.4 pins
@@ -495,15 +524,20 @@ vm_create() {
 # The instance's disk and firmware state, copied as APFS clones (no space is
 # used until the instance's copy diverges). A snapshot also outlives the
 # instance: restoring creates the instance again and puts the files back.
-SNAPSHOT_FILES=(diffdisk vz-efi vz-identifier)
+# Lima 2.3 names the vz disk "disk"; older releases used "diffdisk".
+SNAPSHOT_FILES=(disk diffdisk vz-efi vz-identifier)
 snapshot_save() {
   local name="$1" file
   vm_stop
   rm -rf "${SNAPSHOTS:?}/$name"
   mkdir -p "$SNAPSHOTS/$name"
   for file in "${SNAPSHOT_FILES[@]}"; do
-    [ -e "$INSTANCE_DIR/$file" ] && cp -c "$INSTANCE_DIR/$file" "$SNAPSHOTS/$name/$file"
+    if [ -e "$INSTANCE_DIR/$file" ]; then
+      cp -c "$INSTANCE_DIR/$file" "$SNAPSHOTS/$name/$file"
+    fi
   done
+  [ -e "$SNAPSHOTS/$name/disk" ] || [ -e "$SNAPSHOTS/$name/diffdisk" ] ||
+    die "snapshot $name holds no disk (no disk or diffdisk in $INSTANCE_DIR)"
   log "snapshot $name saved"
 }
 
@@ -727,6 +761,10 @@ ensure_baseline() {
     snapshot_restore baseline
   fi
   guest_install_helpers
+  # cloud-init runs its per-instance modules again on every Lima start (a new
+  # instance id), apt's source list included; the multiarch restriction of
+  # the amd64-runtime stand-in is put back.
+  guest_cmd "$GUEST_LIB/standins.sh amd64-sources" >/dev/null
 }
 
 # The README's step before a deploy: check the host's Bun and, if it is not
@@ -760,6 +798,7 @@ mode_upgrade() {
   rc=0
   play_recorded "deploy.yml from the plain archive" "$LOGS/upgrade-plain-archive.log" "$tree_plain" deploy.yml || rc=$?
   record_state "after the run from the plain archive"
+  rm -rf "$tree_plain"
 
   res ""
   res "## 2. From the archive with the commit's git metadata"
@@ -778,7 +817,6 @@ mode_upgrade() {
   res_block "The items of deploy/README.md \"First exercised at the release deploy\" as they ran here (architecture, Rosetta, the binary's ELF header, TypeScript's native package in the tooling, Prisma, Caddy, PostgreSQL, the host's Bun):" \
     "$WORK/tmp/first-exercised.txt"
   record_host after-upgrade
-  snapshot_save upgraded
   result_close
   [ "$rc" -eq 0 ] || die "the upgrade's deploy.yml failed (exit $rc)"
 }
@@ -796,7 +834,9 @@ guest_sql() {
 lock_holder_start() {
   printf 'BEGIN;\n%s\nSELECT pg_sleep(900);\n' "$1" >"$WORK/tmp/lock-holder.sql"
   guest_copy "$WORK/tmp/lock-holder.sql" /tmp/lock-holder.sql
-  guest_cmd "chmod 0644 /tmp/lock-holder.sql && setsid -f bash -c 'sudo -u postgres psql -X -q -d p2party -f /tmp/lock-holder.sql >/tmp/lock-holder.log 2>&1'"
+  # Fully detached: a descriptor left open on the shell session would keep
+  # `limactl shell` waiting for the 900-second sleep.
+  guest_cmd "chmod 0644 /tmp/lock-holder.sql && setsid -f bash -c 'sudo -u postgres psql -X -q -d p2party -f /tmp/lock-holder.sql' </dev/null >/tmp/lock-holder.log 2>&1"
   sleep 3
   res "- Lock holder: an open transaction ran \`$1\` and then \`SELECT pg_sleep(900)\`; its backend: $(guest_sql "SELECT pid || ' ' || state || ' since ' || xact_start FROM pg_stat_activity WHERE query LIKE '%pg_sleep(900)%' AND pid <> pg_backend_pid();")"
 }
@@ -873,8 +913,11 @@ EOF
 }
 
 # The failed migration named by `migrate status`, if any.
+# Prisma prints either "The `<name>` migration started at ... failed" or
+# "Following migration have failed:" and the names on the lines after it.
 failed_migration_name() {
-  sed -n 's/^The `\([0-9a-z_]*\)` migration started at .* failed$/\1/p' "$WORK/tmp/readme-prisma.txt" | head -1
+  awk '/^The `[0-9a-z_]*` migration started at .* failed/ { gsub(/^The `|` migration.*$/, ""); print; exit }
+    /^Following migrations? ha(ve|s) failed:/ { getline; print; exit }' "$WORK/tmp/readme-prisma.txt"
 }
 
 record_failure_log() {
@@ -898,6 +941,20 @@ readme_recover_and_rerun() {
   res "### Step 4: run the deploy again"
   play_recorded "deploy.yml, second run" "$LOGS/$logprefix-second-run.log" "$tree" deploy.yml || rc=$?
   record_state "after the second run"
+  if [ "$rc" -ne 0 ]; then
+    record_failure_log
+    cp "$WORK/tmp/failure-log.txt" "$WORK/tmp/readme-prisma.txt"
+    name="$(sed -n 's/.*The `\([0-9a-z_]*\)` migration started at .* failed.*/\1/p' "$WORK/tmp/failure-log.txt" | head -1)"
+    if [ -n "$name" ]; then
+      res ""
+      res "### Beyond the README: the migration the second run's failure log names, rolled back, and a third run"
+      res "- The failure log names \`$name\`, which \`migrate status\` did not."
+      readme_prisma migrate resolve --rolled-back "$name" || true
+      rc=0
+      play_recorded "deploy.yml, third run" "$LOGS/$logprefix-third-run.log" "$tree" deploy.yml || rc=$?
+      record_state "after the third run"
+    fi
+  fi
   return "$rc"
 }
 
@@ -978,7 +1035,7 @@ mode_scenario_3() {
     "$README_MIGRATION_FAILED" "$README_RECOVERY_STEPS" "$README_MARKER" "$README_SCHEMA_CHECK"
   host_bun_to_pin
   lock_holder_start 'LOCK TABLE "PendingSignal" IN ROW EXCLUSIVE MODE;'
-  deploy_with_blocked_migration "$LOGS/s3-deploy.log" "$scenario_tree" 75 'CREATE INDEX%' || rc=$?
+  deploy_with_blocked_migration "$LOGS/s3-deploy.log" "$scenario_tree" 75 '%CREATE INDEX%' || rc=$?
   lock_holder_end
   record_state "after the failed migration"
   record_failure_log
@@ -997,7 +1054,7 @@ mode_scenario_4() {
     "$README_MIGRATION_FAILED" "$README_RECOVERY_STEPS" "$README_MARKER" "$README_SCHEMA_CHECK"
   host_bun_to_pin
   lock_holder_start 'SELECT count(*) FROM "Peer";'
-  deploy_with_blocked_migration "$LOGS/s4-deploy.log" "$scenario_tree" 75 'ALTER TABLE%' || rc=$?
+  deploy_with_blocked_migration "$LOGS/s4-deploy.log" "$scenario_tree" 75 '%ALTER TABLE%' || rc=$?
   lock_holder_end
   record_state "after the failed migration"
   record_rows "after the failed migration (the re-key applied, the claim-owner columns not)" || true
@@ -1034,15 +1091,15 @@ mode_scenario_5() {
 # (6) A second run after a success.
 mode_scenario_6() {
   local rc=0 before after
-  if [ -d "$SNAPSHOTS/upgraded" ]; then
-    snapshot_restore upgraded
-    guest_install_helpers
-  else
-    mode_upgrade
-    vm_start || true
-  fi
+  # From the baseline: the upgrade first (the first success), then the run
+  # under test. Only the baseline is ever kept as a snapshot.
+  ensure_baseline
   result_open 09-scenario-6-second-run-after-success "Scenario 6: a second run after a success"
   scenario_tree="$(prepare_tree "$COMMIT_SHA")"
+  host_bun_to_pin
+  rc=0
+  play_recorded "deploy.yml, the first run (the upgrade)" "$LOGS/s6-first-run.log" "$scenario_tree" deploy.yml || rc=$?
+  [ "$rc" -eq 0 ] || die "the first deploy of scenario 6 failed (exit $rc)"
   res ""
   res "## What deploy/README.md says about this case"
   res ""
@@ -1127,6 +1184,7 @@ mode_scenario_8() {
     play_recorded "deploy.yml -e skip_build=true at ${COMMIT_SHA:0:12}" "$LOGS/s8c-deploy.log" "$scenario_tree" deploy.yml -e skip_build=true || rc=$?
     record_state "after 8c"
     rm -f "$builds/p2party_linux_x64" "$builds/p2party_linux_x64.build.json"
+    rm -rf "$other_tree" "$other_tree.ready"
   fi
 }
 
@@ -1134,6 +1192,9 @@ mode_scenario_8() {
 # without a public address. Stand-ins as in the baseline, plus the TURN
 # certificate (README, "What stands in for what"); the host's Bun is the pin,
 # in place of the online installer initial-setup.yml runs when it is absent.
+# coturn and Caddy both listen on 443 and production gives each its own host;
+# on this one VM, site.yml runs without its coturn tag and setup-coturn.yml
+# runs last, on its own.
 mode_fresh() {
   local tree rc=0
   result_open 10-fresh-install "Fresh install: the commit's site.yml on a new VM, then deploy.yml and initial-setup.yml"
@@ -1145,7 +1206,7 @@ mode_fresh() {
   standin coturn-certificate "$TURN_NAME" "$STUN_NAME"
   res ""
   res "## site.yml"
-  play_recorded "site.yml" "$LOGS/fresh-site.log" "$tree" site.yml || rc=$?
+  play_recorded "site.yml --skip-tags coturn" "$LOGS/fresh-site.log" "$tree" site.yml --skip-tags coturn || rc=$?
   record_state "after site.yml"
   if guest_cmd "test -s /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt" >/dev/null 2>&1; then
     standin trust-caddy-ca
@@ -1162,13 +1223,19 @@ mode_fresh() {
   rc=0
   play_recorded "initial-setup.yml" "$LOGS/fresh-initial-setup.log" "$tree" initial-setup.yml || rc=$?
   record_state "after initial-setup.yml"
+  res ""
+  res "## setup-coturn.yml (Caddy already holds 443 on this VM)"
+  rc=0
+  play_recorded "setup-coturn.yml" "$LOGS/fresh-setup-coturn.log" "$tree" setup-coturn.yml || rc=$?
+  guest_cmd "systemctl is-active coturn; ss -Hltnup | grep -E ':(443|3478) ' | awk '{print \$1, \$5, \$7}' | sort -u" >"$WORK/tmp/coturn.txt" 2>&1 || true
+  res_block "coturn after setup-coturn.yml (unit state; listeners on 443 and 3478):" "$WORK/tmp/coturn.txt"
   record_host after-fresh
 }
 
 mode_clean() {
   vm_delete
-  rm -rf "${SNAPSHOTS:?}"/* "${TREES:?}"/*
-  log "deleted the instance, the snapshots and the trees (secrets, logs and results are kept in $WORK)"
+  rm -rf "${SNAPSHOTS:?}"/* "${TREES:?}"/* "${CACHE:?}"/*
+  log "deleted the instance, the snapshot, the trees and the package cache (secrets, logs and results are kept in $WORK; Lima keeps the downloaded image in its own cache)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1190,6 +1257,7 @@ ensure_secrets
 # download (bun build --compile looks for it under this name).
 cp -c -n "$TOOLS/bun-linux-x64-$PIN/bun" "$CACHE/bun/bun-linux-x64-v$PIN" 2>/dev/null || true
 trap cleanup EXIT
+trap 'exit 143' TERM INT
 rm -f "$WORK/disk-guard-tripped"
 disk_guard_start
 log "commit under test: ${COMMIT_SHA:0:12} ($COMMIT_SUBJECT); work directory $WORK"

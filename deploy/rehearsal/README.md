@@ -109,12 +109,45 @@ deploy/rehearsal/run.sh clean
 
 Run it from an archive copy of the repository rather than the working tree;
 `--commit` names the commit under test (default: the repository's `HEAD`).
-Every mode deletes the instance at the end unless `--keep` is given; the
-snapshots (APFS clones of the instance's disk) stay in the work directory
-until `clean`. The instance is created or started only with at least 15 GiB
-free on the host, and a background check stops and deletes it at once if free
-space falls below 8 GiB.
+Every mode deletes the instance at the end unless `--keep` is given. The
+instance is created or started only with at least 15 GiB free on the host, and
+a background check stops and deletes it at once if free space falls below
+8 GiB, or if Lima ever listens on a host port below 5000.
+
+Disk, measured on 2026-11-26 (`du`): at its peak a run holds the instance's
+disk (up to 4.2 GiB of an 8 GiB sparse file), the one snapshot of the baseline
+(3.7 GiB; an APFS clone, so the instance shares its blocks until they
+diverge), one tree each for release 0.1.4 and the commit under test (0.5 GiB
+each, with their `node_modules`), Bun's package cache (0.7 GiB) and Lima's
+copy of the image in its own cache (2.4 GiB: the 0.6 GiB download and its
+converted raw form): about 12 GiB by `du`. The tools take another 0.4 GiB.
+Only the baseline is kept between modes: scenario 6 runs the upgrade itself,
+and the plain-archive copy and scenario 8's second tree are deleted as soon as
+they have been used. `clean` deletes the instance, the snapshot, the trees and
+the package cache; what is left is the secrets, logs and results (a few MB)
+and Lima's image cache, which `limactl prune` or deleting that one entry
+removes.
 
 ## Results
 
 The result files are under [`results/`](results/), one directory per date.
+Each names the commit it ran against. The committed copies were formatted
+with the repository's Prettier, which changes only the fence markers, trailing
+spaces, blank lines and apt's carriage-return progress lines in the recorded
+output. The runs of 2026-11-26, in short
+(the defects are listed in the task report that goes with them, for the
+follow-up task; no playbook was changed here):
+
+| Run                                              | What happened                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Baseline (0.1.4 from `ecf691a`)                  | `install-postgres.yml` and `deploy.yml` passed; `initial-setup.yml` ends in failure on its last task (`git_commit` is undefined), after doing everything else. 0.1.4 served through Caddy and on 127.0.0.1:56443                                                                                              |
+| Upgrade                                          | Passed. All five migrations applied; every seeded row as the re-key intends. Health still reports version 0.1.4 (`package.json` is unchanged). From a plain `git archive` the deploy stops at its build record (`git rev-parse HEAD`), before any host changes                                                |
+| 1. Another Bun on the operator's PATH            | Refused by the local pre-flight; nothing on the host changed; 0.1.4 kept serving; the README's next step worked                                                                                                                                                                                               |
+| 2. Another Bun on the host                       | Refused by the host's Bun check before `postgres-tls.yml`; nothing on the host changed; 0.1.4 kept serving; installing the pin and running again worked                                                                                                                                                       |
+| 3. A migration fails before the re-key           | The migration waited on the lock with no timeout until its session was terminated. `migrate status` then named no failed migration, so the README's steps say there is nothing to resolve, and the next deploy failed with P3009 naming it                                                                    |
+| 4. A migration fails after the re-key            | The same wait. The re-key was applied and the next migration failed; here `migrate status` named it, and the README's recovery (resolve as rolled back, run again) worked. `initial-setup.yml` refused to start the unit while the marker existed                                                             |
+| 5. The new binary will not start                 | The deploy reported the server's own error after the migration and the cutover; nothing served until the value was fixed and the deploy run again. The README is silent on this case                                                                                                                          |
+| 6. A second run after a success                  | Passed; it stops and restarts the worker even with nothing to change (10 tasks changed)                                                                                                                                                                                                                       |
+| 7. A second run after each failure               | In each result file of 1–5 and 8                                                                                                                                                                                                                                                                              |
+| 8. `--skip-build` with another commit's artefact | 0.1.4's binary without a record, and with another binary's record: refused on the control machine, nothing on the host changed. Another commit's binary with its own record: accepted (the record's commit is not compared, as the README says)                                                               |
+| Fresh install (`site.yml`)                       | `site.yml` (without its coturn tag: coturn and Caddy both need 443 and share this VM) provisioned PostgreSQL and the signaling host and ended on the same `git_commit` failure; `deploy.yml` then passed; `setup-coturn.yml` installed its checked configuration and coturn could not bind 443, held by Caddy |

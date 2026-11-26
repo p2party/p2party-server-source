@@ -79,8 +79,7 @@ UNIT
   # (multiarch); the arm64 mirror stays the source for everything else.
   amd64-runtime)
     dpkg --add-architecture amd64
-    sources=/etc/apt/sources.list.d/ubuntu.sources
-    grep -q '^Architectures:' "$sources" || sed -i 's/^Types: deb$/Types: deb\nArchitectures: arm64/' "$sources"
+    "$0" amd64-sources
     cat >/etc/apt/sources.list.d/ubuntu-amd64.sources <<'SOURCES'
 Types: deb
 URIs: http://archive.ubuntu.com/ubuntu/
@@ -92,6 +91,14 @@ SOURCES
     apt-get update -q
     apt-get install -y -q libc6:amd64 libgcc-s1:amd64 libssl3t64:amd64 zlib1g:amd64
     dpkg-query -W -f '${Package}:${Architecture} ${Version}\n' libc6:amd64 libssl3t64:amd64
+    ;;
+
+  # The arm64 mirror serves no amd64 indexes, so its entries are limited to
+  # arm64. cloud-init rewrites this file when it runs its apt module again,
+  # which it does on every Lima start; run.sh repeats this step after a start.
+  amd64-sources)
+    sources=/etc/apt/sources.list.d/ubuntu.sources
+    grep -q '^Architectures:' "$sources" || sed -i 's/^Types: deb$/Types: deb\nArchitectures: arm64/' "$sources"
     ;;
 
   # The host's Bun: production's initial-setup.yml runs Bun's online installer
@@ -137,6 +144,9 @@ SOURCES
     stun="${2:?stun name}"
     live="/etc/letsencrypt/live/$realm"
     mkdir -p "$live"
+    # certbot creates its hook directories on its first run, which is skipped
+    # here; the play writes its deploy hook into one of them.
+    mkdir -p /etc/letsencrypt/renewal-hooks/deploy /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/post
     openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=$realm" \
       -addext "subjectAltName=DNS:$realm,DNS:$stun" \
       -keyout "$live/privkey.pem" -out "$live/fullchain.pem" 2>/dev/null

@@ -62,7 +62,7 @@ true
 
 section "migration history (_prisma_migrations)"
 sudo -u postgres psql -X -q -A -F ' | ' -d "$DB" -c \
-  'SELECT migration_name, finished_at IS NOT NULL AS finished, rolled_back_at IS NOT NULL AS rolled_back, applied_steps_count AS steps FROM "_prisma_migrations" ORDER BY started_at, migration_name' 2>&1
+  'SELECT migration_name, finished_at IS NOT NULL AS finished, rolled_back_at IS NOT NULL AS rolled_back, applied_steps_count AS steps, logs IS NOT NULL AS has_logs FROM "_prisma_migrations" ORDER BY started_at, migration_name' 2>&1
 
 section "schema details"
 sudo -u postgres psql -X -q -A -t -d "$DB" -c \
