@@ -98,15 +98,27 @@ describe("cross-instance signal routing", () => {
 });
 
 describe("data ownership", () => {
-  test("startup cleanup only removes provably undeliverable rows", () => {
-    // A sweep that deletes by age alone would discard signals queued for
-    // sibling instances that are alive and merely busy — rows this process does
-    // not own. During a rolling restart each new worker would do it in turn.
+  test("startup clears dead servers by LISTEN-session liveness, then sweeps by age", () => {
+    // A live owner drains within one safety poll, so rows past the age limit
+    // are undeliverable wherever they are addressed (behaviour is covered in
+    // pubsub.routingRetention.test.ts). Claims are cleared only for server ids
+    // without a connected LISTEN session, which a sibling opens before it
+    // claims any peer.
     const init = /export const initPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
-    expect(init).toContain("pendingSignal.deleteMany");
-    // Must be constrained to server ids that no connected peer claims.
-    expect(init).toContain("notIn: liveServerIds");
-    expect(init).toContain("distinct:");
+    const naming = init.indexOf("routingSessionName(SERVER_ID)");
+    const listen = init.indexOf("query(`LISTEN");
+    const clearDead = init.indexOf("clearDeadServerState(prisma");
+    const sweep = init.indexOf("sweepStalePendingSignals()");
+    const periodic = init.indexOf("startPendingSignalSweep()");
+    expect(naming).toBeGreaterThan(-1);
+    expect(listen).toBeGreaterThan(naming);
+    expect(clearDead).toBeGreaterThan(listen);
+    expect(init).toContain("connectedServerIds(client, serverIds)");
+    expect(sweep).toBeGreaterThan(clearDead);
+    expect(periodic).toBeGreaterThan(sweep);
+    const shutdown =
+      /export const shutdownPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
+    expect(shutdown).toContain("clearInterval(pendingSignalSweep)");
   });
 
   test("shutdown deletes only this instance's rows", () => {

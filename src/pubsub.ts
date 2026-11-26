@@ -5,8 +5,10 @@ import pg from "pg";
 import { postgresConnection } from "./db/ssl";
 import { prisma } from "./prismaClient";
 import { wsClients } from "./wsServer";
+import { peerLogTag } from "./utils/logTag";
 import { isCurrentVerifiedSocket } from "./utils/socketAuth";
 
+import type { ProcessPrismaClient } from "./prismaClient";
 import type { P2PartyWSClient } from "./wsServer";
 
 /**
@@ -33,11 +35,37 @@ const CHANNEL = `server_${SERVER_ID}`;
 const SAFETY_POLL_MS = 5_000;
 /** Fail fast instead of hanging: see the note at the pg.Client construction. */
 const CONNECT_TIMEOUT_MS = 10_000;
-/** Rows older than this belong to a process that died without cleaning up. */
-const STALE_SIGNAL_MS = 5 * 60 * 1000;
+/**
+ * A queued offer, answer or ICE candidate is stale long before this. Older
+ * rows are deleted whichever process they are addressed to: a live owner
+ * drains within one safety poll, so an older row belongs to a dead process or
+ * to a peer that never came back.
+ */
+export const PENDING_SIGNAL_MAX_AGE_MS = 120_000;
+/** How often the age sweep runs; a row lives at most MAX_AGE plus this. */
+const PENDING_SIGNAL_SWEEP_MS = 30_000;
+/** Prefix of the LISTEN session's application_name; see routingSessionName. */
+const ROUTING_SESSION_PREFIX = "p2party-signaling:";
+/**
+ * PostgreSQL closes the LISTEN session of a host that vanished without a TCP
+ * reset within about a minute, instead of the operating system's defaults of
+ * two hours idle or about fifteen minutes with data unacknowledged, so its
+ * liveness ends with it. Keepalive values are seconds; the user timeout is
+ * milliseconds (PostgreSQL 12 and later).
+ */
+const SESSION_KEEPALIVE = {
+  tcp_keepalives_idle: "30",
+  tcp_keepalives_interval: "10",
+  tcp_keepalives_count: "3",
+  tcp_user_timeout: "60000",
+} as const;
 
 let listenClient: pg.Client | undefined;
 let safetyPoll: ReturnType<typeof setInterval> | undefined;
+let pendingSignalSweep: ReturnType<typeof setInterval> | undefined;
+
+type RoutingStore = Pick<ProcessPrismaClient, "peer" | "pendingSignal">;
+type ActivityClient = Pick<pg.Client, "query">;
 
 interface PendingSignalFrame {
   id: string;
@@ -85,6 +113,106 @@ const drainPendingSignals = async (): Promise<void> => {
   }
 };
 
+/** Delete every queued signal older than PENDING_SIGNAL_MAX_AGE_MS. */
+export const sweepStalePendingSignals = async (
+  store: Pick<RoutingStore, "pendingSignal"> = prisma,
+  now = Date.now(),
+): Promise<number> => {
+  const { count } = await store.pendingSignal.deleteMany({
+    where: { createdAt: { lt: new Date(now - PENDING_SIGNAL_MAX_AGE_MS) } },
+  });
+  return count;
+};
+
+/** Run sweepStalePendingSignals every PENDING_SIGNAL_SWEEP_MS. */
+export const startPendingSignalSweep = (
+  store: Pick<RoutingStore, "pendingSignal"> = prisma,
+  now: () => number = Date.now,
+  every: (task: () => void, ms: number) => ReturnType<typeof setInterval> = (
+    task,
+    ms,
+  ) => setInterval(task, ms),
+): ReturnType<typeof setInterval> =>
+  every(() => {
+    sweepStalePendingSignals(store, now()).catch((error: unknown) => {
+      console.error("p2party: failed to sweep stale pending signals", error);
+    });
+  }, PENDING_SIGNAL_SWEEP_MS);
+
+/**
+ * The application_name of a process's LISTEN session. The session is the
+ * process's liveness heartbeat: PostgreSQL ends it when the process exits or
+ * its connection drops, and a process that has none cannot be woken to drain.
+ */
+export const routingSessionName = (serverId: string): string =>
+  `${ROUTING_SESSION_PREFIX}${serverId}`;
+
+/** Which of `serverIds` have a LISTEN session connected to PostgreSQL now. */
+export const connectedServerIds = async (
+  client: ActivityClient,
+  serverIds: readonly string[],
+): Promise<Set<string>> => {
+  const result = await client.query<{ application_name: string }>(
+    "SELECT application_name FROM pg_stat_activity WHERE application_name = ANY($1::text[])",
+    [serverIds.map(routingSessionName)],
+  );
+  return new Set(
+    result.rows.map(({ application_name }) =>
+      application_name.slice(ROUTING_SESSION_PREFIX.length),
+    ),
+  );
+};
+
+/**
+ * Clear the routing state of processes that died without shutting down.
+ *
+ * After SIGKILL, an OOM kill or a crash, peers that have not reconnected keep
+ * `serverId` set to the dead process, and sendToPeer keeps queueing their
+ * signals (SDP and ICE, with IP addresses) for a process that will never
+ * drain them. Every server id named by a claim or a queued row, other than
+ * this process's, is checked against the live LISTEN sessions; the claims and
+ * rows of ids without one are cleared. A sibling's session exists before it
+ * claims any peer, so a live sibling is never cleared. Throws, clearing
+ * nothing, when liveness cannot be read.
+ *
+ * Returns the server ids that were cleared.
+ */
+export const clearDeadServerState = async (
+  store: RoutingStore,
+  isConnected: (serverIds: string[]) => Promise<Set<string>>,
+  self: string = SERVER_ID,
+): Promise<string[]> => {
+  const claims = await store.peer.findMany({
+    where: { serverId: { not: null } },
+    select: { serverId: true },
+    distinct: ["serverId"],
+  });
+  const addressed = await store.pendingSignal.findMany({
+    select: { targetServerId: true },
+    distinct: ["targetServerId"],
+  });
+  const foreign = [
+    ...new Set([
+      ...claims.map(({ serverId }) => serverId),
+      ...addressed.map(({ targetServerId }) => targetServerId),
+    ]),
+  ].filter((id): id is string => id !== null && id !== self);
+  if (foreign.length === 0) return [];
+
+  const live = await isConnected(foreign);
+  const dead = foreign.filter((id) => !live.has(id));
+  if (dead.length === 0) return [];
+
+  await store.peer.updateMany({
+    where: { serverId: { in: dead } },
+    data: { serverId: null },
+  });
+  await store.pendingSignal.deleteMany({
+    where: { targetServerId: { in: dead } },
+  });
+  return dead;
+};
+
 /**
  * Open the LISTEN connection. Must run once at startup, before sockets are
  * accepted. Throws if the connection cannot be established: a process that
@@ -125,6 +253,23 @@ export const initPubSub = async (): Promise<void> => {
 
   try {
     await listenClient.connect();
+    // Name the session before this process can claim a peer, so a sibling
+    // that starts later sees it as live. Set after connecting so a parameter
+    // in DATABASE_URL cannot override it.
+    await listenClient.query(
+      "SELECT set_config('application_name', $1, false)," +
+        " set_config('tcp_keepalives_idle', $2, false)," +
+        " set_config('tcp_keepalives_interval', $3, false)," +
+        " set_config('tcp_keepalives_count', $4, false)," +
+        " set_config('tcp_user_timeout', $5, false)",
+      [
+        routingSessionName(SERVER_ID),
+        SESSION_KEEPALIVE.tcp_keepalives_idle,
+        SESSION_KEEPALIVE.tcp_keepalives_interval,
+        SESSION_KEEPALIVE.tcp_keepalives_count,
+        SESSION_KEEPALIVE.tcp_user_timeout,
+      ],
+    );
     await listenClient.query(`LISTEN "${CHANNEL}"`);
   } catch (cause) {
     listenClient = undefined;
@@ -151,33 +296,25 @@ export const initPubSub = async (): Promise<void> => {
 
   safetyPoll = setInterval(() => void drainPendingSignals(), SAFETY_POLL_MS);
 
-  // Clear rows left behind by a process that exited without shutting down.
-  //
-  // Scoped deliberately. Deleting every row past an age threshold would also
-  // delete rows addressed to sibling instances that are alive and simply busy —
-  // this process does not own those, and a rolling restart would have each new
-  // worker discard its siblings' queued signals in turn. Only rows addressed to
-  // a server id that no connected peer claims are provably undeliverable, so
-  // only those are removed.
+  // Clear the claims and rows of processes that exited without shutting down,
+  // then everything past the age limit; the periodic sweep keeps it there.
+  const client = listenClient;
   try {
-    const claimed = await prisma.peer.findMany({
-      where: { serverId: { not: null } },
-      select: { serverId: true },
-      distinct: ["serverId"],
-    });
-    const liveServerIds = claimed
-      .map((peer) => peer.serverId)
-      .filter((id): id is string => id !== null);
-
-    await prisma.pendingSignal.deleteMany({
-      where: {
-        createdAt: { lt: new Date(Date.now() - STALE_SIGNAL_MS) },
-        targetServerId: { notIn: liveServerIds },
-      },
-    });
+    await clearDeadServerState(prisma, (serverIds) =>
+      connectedServerIds(client, serverIds),
+    );
   } catch (error) {
-    console.error("p2party: failed to clear orphaned pending signals", error);
+    console.error(
+      "p2party: failed to clear dead servers' routing state",
+      error,
+    );
   }
+  try {
+    await sweepStalePendingSignals();
+  } catch (error) {
+    console.error("p2party: failed to sweep stale pending signals", error);
+  }
+  pendingSignalSweep = startPendingSignalSweep();
 };
 
 /**
@@ -234,7 +371,11 @@ export const sendToPeer = async (
     await listenClient.query(`NOTIFY "server_${peer.serverId}"`);
     return true;
   } catch (error) {
-    console.error("p2party: failed to route signal to peer", toPeerId, error);
+    console.error(
+      "p2party: failed to route signal to peer",
+      peerLogTag(toPeerId),
+      error,
+    );
     return false;
   }
 };
@@ -254,7 +395,7 @@ export const claimPeer = async (peerId: string): Promise<boolean> => {
     });
     return true;
   } catch (error) {
-    console.error("p2party: failed to claim peer", peerId, error);
+    console.error("p2party: failed to claim peer", peerLogTag(peerId), error);
     return false;
   }
 };
@@ -271,7 +412,7 @@ export const releasePeer = async (peerId: string): Promise<void> => {
       data: { serverId: null },
     });
   } catch (error) {
-    console.error("p2party: failed to release peer", peerId, error);
+    console.error("p2party: failed to release peer", peerLogTag(peerId), error);
   }
 };
 
@@ -279,6 +420,8 @@ export const releasePeer = async (peerId: string): Promise<void> => {
 export const shutdownPubSub = async (): Promise<void> => {
   if (safetyPoll) clearInterval(safetyPoll);
   safetyPoll = undefined;
+  if (pendingSignalSweep) clearInterval(pendingSignalSweep);
+  pendingSignalSweep = undefined;
   try {
     await prisma.pendingSignal.deleteMany({
       where: { targetServerId: SERVER_ID },
