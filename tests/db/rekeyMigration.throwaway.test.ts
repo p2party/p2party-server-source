@@ -189,6 +189,45 @@ describeWithThrowawayPostgres("one-time re-key of stored identities", () => {
     expect(restart).toBeGreaterThan(migrate);
   }, 60_000);
 
+  test("a migration left half-applied by a failure runs again cleanly", async () => {
+    // Prisma runs a migration's statements without a transaction, so a
+    // failure after the claim-owner migration's first statement leaves that
+    // column in place. The documented recovery (resolve --rolled-back, then
+    // deploy) must still complete.
+    const ownerMigration = migrationNames.find((name) =>
+      name.endsWith("_routing_claim_owner"),
+    )!;
+    database = await freshDatabase(
+      migrationNames.filter((name) => name < ownerMigration),
+    );
+    await database.client.query(
+      `ALTER TABLE "Peer" ADD COLUMN "socketGeneration" VARCHAR(36)`,
+    );
+    await database.client.query(
+      `INSERT INTO "_prisma_migrations" (id, checksum, migration_name, started_at, applied_steps_count)
+       VALUES (gen_random_uuid()::text, 'interrupted', $1, now(), 0)`,
+      [ownerMigration],
+    );
+    const resolve = await prismaMigrate(database.url, migrationNames, [
+      "migrate",
+      "resolve",
+      "--rolled-back",
+      ownerMigration,
+    ]);
+    expect(resolve.exitCode, resolve.output).toBe(0);
+    const redeploy = await prismaMigrate(database.url, migrationNames);
+    expect(redeploy.exitCode, redeploy.output).toBe(0);
+    const { rows } = await database.client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE (table_name, column_name) IN (('Peer', 'socketGeneration'), ('PendingSignal', 'kind'))
+       ORDER BY column_name`,
+    );
+    expect(rows.map(({ column_name }) => column_name)).toEqual([
+      "kind",
+      "socketGeneration",
+    ]);
+  }, 60_000);
+
   test("the re-key is idempotent and resumes after an interruption", async () => {
     database = await freshDatabase(before);
     const { old } = await seed(database.client, 5);
