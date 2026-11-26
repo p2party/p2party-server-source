@@ -31,10 +31,14 @@ The aggregate budget is 30,000,000 bytes/second and the per-allocation budget is
 when idle; input and output are counted separately. Set the Ansible variable
 `coturn_bps_capacity` higher for larger relay-heavy rooms and apply
 `playbooks/setup-coturn.yml`. Both bandwidth settings must be positive. Allocation
-quotas remain 1,200 total and 12 per credential username. A credential username
-is stable per identity for one hour and one identity holds at most two valid
-ones, so the playbook refuses settings where 2 × `coturn_user_quota` ×
-`coturn_max_bps` exceeds half of `coturn_bps_capacity`.
+quotas remain 1,200 total and 12 per credential username, and an allocation
+that is not refreshed is released within `coturn_max_allocate_lifetime` (600 s
+by default). The playbook refuses settings where `coturn_user_quota` ×
+`coturn_max_bps`, what one credential username can reserve, exceeds half of
+`coturn_bps_capacity`. That is not a per-identity limit: coturn does not
+re-check a username's expiry on Refresh, so an identity that keeps refreshing
+can hold allocations under a new username every hour. See "Relay bound" in the
+root [README](../README.md#relay-bound).
 
 ## Upgrading to 0.1.5
 

@@ -398,20 +398,26 @@ When TURN is configured, the `roomId` response includes:
 ```
 
 The numeric username prefix equals `expiresAtUnixSeconds`. The tag is the
-first 22 base64url characters of HMAC-SHA256 under `COTURN_SECRET` of the
-authenticated socket's 32-byte identity public key followed by the expiry as an
-unsigned 64-bit big-endian integer. The identity key therefore never appears in
-the username, and usernames from different hours cannot be linked without the
-secret. `credential` is the base64 HMAC-SHA1 of `username` under
-`COTURN_SECRET` — the coturn REST convention. The expiry is the current time
-plus one hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
+first 22 base64url characters of HMAC-SHA256 under `COTURN_SECRET` of the fixed
+label `p2party turn username tag v1`, the authenticated socket's 32-byte identity
+public key and the expiry as an unsigned 64-bit big-endian integer. The identity
+key therefore never appears in the username, and usernames from different hours
+cannot be linked without the secret. The TURN host holds `COTURN_SECRET` too, so
+whoever controls it can test a tag against public keys it already knows (room
+rosters disclose members' keys); the server has no other configured secret that
+every worker shares and the TURN host lacks. `credential` is the base64
+HMAC-SHA1 of `username` under `COTURN_SECRET` — the coturn REST convention; the
+label keeps the two HMAC inputs distinct. The expiry is the current time plus
+one hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
 [`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)), rounded up to a whole
 hour, so a credential is valid for at least one hour and less than two. A
 bundle comes with every successful room join, and every join by one identity
-within one such hour receives the identical bundle. coturn's per-username
-allocation quota therefore applies per identity, and one identity holds at most
-two valid usernames at a time. URL normalization follows the `COTURN_URLS`
-limits above.
+within one such hour receives the identical bundle. coturn counts its
+per-username allocation quota per tag, so per identity per hour. It checks the
+expiry only when a TURN session first authenticates, so an allocation made with
+a credential stays usable after the credential expires for as long as it is
+refreshed; "Relay bound" under Deployment gives the limit this leaves. URL
+normalization follows the `COTURN_URLS` limits above.
 
 When `COTURN_SECRET` or `COTURN_URLS` is missing, or no URL survives
 normalization, `turnCredentials` is omitted from the `roomId` response entirely
@@ -556,9 +562,13 @@ of them except `Challenge`.
 - **`PendingSignal`** — a serialized frame written only when the target peer's
   socket belongs to another instance. Deleted on delivery, when the target is no
   longer here, and at shutdown. Every 30 seconds, rows older than 120 seconds
-  are deleted wherever they are addressed, so no row lives longer than about
-  150 seconds. At startup a process also clears the rows and `Peer.serverId`
-  claims of every other server id whose PostgreSQL LISTEN session is gone. Each
+  are deleted wherever they are addressed, oldest first through an index on
+  `createdAt`, in statements of at most 1,000 rows and at most 10,000 rows per
+  run. No row therefore lives longer than about 150 seconds unless more than
+  10,000 rows age out within one 30-second period. At startup a process runs
+  that sweep first, then clears the rows and `Peer.serverId` claims of every
+  other server id whose PostgreSQL LISTEN session is gone, grouping the server
+  ids in SQL rather than reading every row. Each
   process names that session `p2party-signaling:<serverId>` in
   `pg_stat_activity` before it claims a peer, and sets TCP keepalives so
   PostgreSQL ends the session of a vanished host within about a minute.
@@ -611,33 +621,67 @@ link a username to its identity key. The playbook deletes the log directory and
 rotation config of earlier provisioning.
 
 Both playbooks that provision the signaling host install a journald drop-in
-(`templates/journald-retention.conf.j2`, `MaxRetentionSec=7day`) and restart
-journald, so the workers' and Caddy's journal entries are kept for at most
-seven days. Nothing in this repository configures rsyslog: if the host also
-copies the journal into syslog files, their retention follows that host's
-logrotate settings, is not covered by this change, and must be checked on the
-host.
+(`templates/journald-retention.conf.j2`, `MaxRetentionSec=7day` and
+`MaxFileSec=1day`) and restart journald. journald deletes only archived journal
+files, and the active file is archived at least daily, so a journal entry is
+kept for about eight days at most. The drop-in applies to every unit on the
+host, not only the workers and Caddy. Caddy's access log is not in the journal:
+it is a file under `/var/log/caddy` kept for `logging.log_retention_days` days
+(14 by default, 30 in the production group variables). Nothing in this
+repository configures rsyslog: if the host also copies the journal into syslog
+files, their retention follows that host's logrotate settings, is not covered
+by this change, and must be checked on the host.
 
 A rendered configuration is checked before it replaces a running one, and a
 failed check fails the play with the running service untouched. Caddyfiles go
 through `caddy validate` (a candidate file in `deploy.yml`, the template's
-`validate` in `initial-setup.yml`). coturn has no configuration check mode, so
-`setup-coturn.yml` renders a candidate and asserts that it has no unrendered
-template text, a shared secret of at least 32 characters, a realm, positive
-quotas and bandwidth limits, and that it logs nowhere, before installing it.
+`validate` in `initial-setup.yml`). Validation runs as root and opens every log
+file the Caddyfile names, so the playbooks create those files owned by the
+`caddy` user before validating and enforce that ownership again afterwards.
+coturn has no configuration check mode, so `setup-coturn.yml` renders a
+candidate and asserts that it has no unrendered template text, a shared secret
+of at least 32 characters, a realm, positive quotas, bandwidth limits and
+allocation lifetime, and that it logs nowhere, before installing it; the
+candidate, which holds the secret, is removed whether or not the checks pass.
+The playbook also fails, naming the flag, if the coturn unit or
+`/etc/default/coturn` passes `-l`/`--log-file`, `--syslog`, `-n` or a `-c`
+other than `/etc/turnserver.conf`, any of which would override the template.
 
-The coturn template sets `coturn_bps_capacity` to 30,000,000 bytes/second and
-`coturn_max_bps` to 625,000 bytes/second per allocation. Input and output are
-counted separately. These Ansible variables are operator-overridable and must
-remain positive. Ordinary clients without a bandwidth request reserve the
-per-allocation maximum, so the defaults permit 48 simultaneous such
-allocations; raise aggregate capacity for larger relay-heavy rooms. Allocation
-quotas remain 1,200 total and 12 per credential username. One identity holds at
-most two valid usernames, so it can reserve at most 2 × 12 × 625,000 =
-15,000,000 bytes/second, half the capacity; the playbook refuses overrides that
-break this bound. This bounds bandwidth allocation; it does not establish
-unique users or prevent every denial of service: a handful of identities can
-still reserve the whole capacity. The units and reservation semantics follow the [coturn configuration](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf)
+### Relay bound
+
+The coturn template sets `coturn_bps_capacity` to 30,000,000 bytes/second,
+`coturn_max_bps` to 625,000 bytes/second per allocation and
+`coturn_max_allocate_lifetime` to 600 seconds (coturn's own default is 3,600).
+Input and output are counted separately. These Ansible variables are
+operator-overridable and must remain positive. Ordinary clients without a
+bandwidth request reserve the per-allocation maximum, so the defaults permit 48
+simultaneous such allocations; raise aggregate capacity for larger relay-heavy
+rooms. Allocation quotas remain 1,200 total and 12 per credential username.
+
+What this bounds, read from coturn's source (release 4.6.1 and master, November
+2026): coturn counts `user-quota` per username part after
+`<digits>:`, here the tag, and checks a username's expiry only when a TURN
+session first authenticates. Refresh, CreatePermission and ChannelBind on that
+session reuse the cached key and are not re-checked, and coturn does not end a
+session when its credential expires.
+
+- One credential username can reserve at most 12 × 625,000 = 7,500,000
+  bytes/second, a quarter of the capacity. The playbook refuses overrides where
+  `coturn_user_quota` × `coturn_max_bps` exceeds half of `coturn_bps_capacity`.
+- One identity has no bound of its own over time. A client that keeps
+  refreshing its allocations keeps them after the credential expires, and each
+  hour it joins a room it receives a new tag with a fresh quota. Without
+  refreshes past expiry, one identity holds reservations under at most three
+  tags at once. A credential is issued at most two lifetimes L (one hour each)
+  before it expires, and an unrefreshed allocation outlives it by at most
+  A = `coturn_max_allocate_lifetime`. The tags live at one moment therefore
+  expire within (now − A, now + 2L), which holds at most ⌈(2L + A)/L⌉ = 3 of
+  them for 0 < A ≤ L.
+- The relay as a whole is bounded by `total-quota` and `bps-capacity` only.
+  This is a capacity and cost guard, not proof of unique users: a handful of
+  identities can reserve the whole capacity.
+
+The units and reservation semantics follow the [coturn configuration](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf)
 and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2projects).
 
 ## Privacy boundary
