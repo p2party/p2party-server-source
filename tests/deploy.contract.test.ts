@@ -57,6 +57,35 @@ const journaldRetention = () =>
     "utf8",
   );
 
+interface PlaybookTask {
+  name: string;
+  template?: Record<string, unknown>;
+  copy?: Record<string, unknown>;
+  assert?: unknown;
+  notify?: string;
+  diff?: boolean;
+  no_log?: boolean;
+  systemd?: Record<string, unknown>;
+}
+interface Play {
+  tasks: PlaybookTask[];
+  handlers?: PlaybookTask[];
+}
+
+/** The play of a playbook that contains the task named `name`. */
+const playWithTask = (playbook: string, name: string): Play => {
+  const plays = Bun.YAML.parse(playbook) as Partial<Play>[];
+  const play = plays.find((p) => p.tasks?.some((t) => t.name === name));
+  if (!play) throw new Error(`no play has a task named ${name}`);
+  return play as Play;
+};
+
+const task = (play: Play, name: string): PlaybookTask => {
+  const found = play.tasks.find((t) => t.name === name);
+  if (!found) throw new Error(`no task named ${name}`);
+  return found;
+};
+
 /** The Jinja default of a `name={{ var | default(N) }}` coturn line. */
 const coturnDefault = (name: string): number => {
   const match = new RegExp(
@@ -260,9 +289,102 @@ describe("production deployment contract", () => {
       expect(globalBlock).toContain(filter);
   });
 
-  test("journald keeps at most seven days", () => {
+  test("journald keeps at most seven days on the signaling host", () => {
     expect(journaldRetention()).toMatch(/^\[Journal\]$/m);
     expect(journaldRetention()).toMatch(/^MaxRetentionSec=7day$/m);
+    // Both paths that provision the signaling host install it and restart
+    // journald, which reads its configuration only at start.
+    for (const [name, source] of [
+      ["deploy.yml", deploy],
+      ["initial-setup.yml", initialSetup],
+    ] as const) {
+      const play = playWithTask(
+        source,
+        "Keep the journal for at most seven days",
+      );
+      const install = task(play, "Keep the journal for at most seven days");
+      expect(install.template, name).toEqual({
+        src: "{{ playbook_dir }}/../templates/journald-retention.conf.j2",
+        dest: "/etc/systemd/journald.conf.d/p2party-retention.conf",
+        owner: "root",
+        group: "root",
+        mode: "0644",
+      });
+      expect(install.notify, name).toBe("Restart journald");
+      const handler = (play.handlers ?? []).find(
+        (h) => h.name === "Restart journald",
+      );
+      expect(handler?.systemd, name).toEqual({
+        name: "systemd-journald",
+        state: "restarted",
+      });
+      const directory = task(
+        play,
+        "Ensure the journald drop-in directory exists",
+      );
+      expect(play.tasks.indexOf(directory)).toBeLessThan(
+        play.tasks.indexOf(install),
+      );
+    }
+  });
+
+  test("a Caddyfile that fails validation never replaces the running one", () => {
+    // deploy.yml renders a candidate, validates it, then moves it into place
+    // (ordering pinned above); initial-setup.yml validates in the template task.
+    const play = playWithTask(initialSetup, "Deploy Caddyfile");
+    expect(task(play, "Deploy Caddyfile").template?.validate).toBe(
+      "caddy validate --config %s --adapter caddyfile",
+    );
+    expect(deploy).toContain("- /etc/caddy/Caddyfile.p2party-candidate");
+  });
+
+  test("a coturn configuration that fails validation never replaces the running one", () => {
+    const play = playWithTask(
+      setupCoturn,
+      "Validate the candidate coturn configuration",
+    );
+    const names = play.tasks.map((t) => t.name);
+    const order = [
+      "Render the candidate coturn configuration",
+      "Read the candidate coturn configuration",
+      "Validate the candidate coturn configuration",
+      "Install the validated coturn configuration",
+      "Remove the coturn configuration candidate",
+    ].map((name) => names.indexOf(name));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Only the install step writes the live file, and only it restarts coturn.
+    const writers = play.tasks.filter(
+      (t) =>
+        t.template?.dest === "/etc/turnserver.conf" ||
+        t.copy?.dest === "/etc/turnserver.conf",
+    );
+    expect(writers.map((t) => t.name)).toEqual([
+      "Install the validated coturn configuration",
+    ]);
+    expect(writers[0]!.notify).toBe("Restart Coturn");
+    // The candidate holds the TURN secret: no diff, no logged contents.
+    expect(task(play, "Render the candidate coturn configuration").diff).toBe(
+      false,
+    );
+    expect(writers[0]!.diff).toBe(false);
+    expect(task(play, "Read the candidate coturn configuration").no_log).toBe(
+      true,
+    );
+    const checks = (
+      task(play, "Validate the candidate coturn configuration").assert as {
+        that: string[];
+      }
+    ).that.join("\n");
+    for (const required of [
+      "[{][{]|[{]%",
+      "^static-auth-secret=\\S{32,}$",
+      "^log-file=/dev/null$",
+      "^user-quota=[1-9][0-9]*$",
+      "^max-bps=[1-9][0-9]*$",
+      "^bps-capacity=[1-9][0-9]*$",
+    ])
+      expect(checks).toContain(required);
   });
 
   test("deployed migrations use the audited lockfile and the server's schema/config", () => {

@@ -102,6 +102,8 @@
         state: present
         update_cache: yes
 
+    # The rendered file is checked before it replaces the running one: a
+    # Caddyfile that fails validation fails the play and leaves Caddy as it is.
     - name: Deploy Caddyfile
       template:
         src: "{{ playbook_dir }}/../templates/Caddyfile.j2"
@@ -109,6 +111,7 @@
         owner: root
         group: root
         mode: "0644"
+        validate: caddy validate --config %s --adapter caddyfile
       vars:
         signaling_instance_ports: "{{ signaling_ports | default([app_port]) }}"
       notify: Reload Caddy
@@ -147,6 +150,26 @@
         owner: "{{ app.user }}"
         group: "{{ app.group }}"
         mode: "0755"
+
+    # The signaling workers and Caddy log to the journal. This bounds the
+    # journal only; nothing in this repository configures rsyslog, so whether
+    # the host also copies the journal into syslog files must be checked there.
+    - name: Ensure the journald drop-in directory exists
+      file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Keep the journal for at most seven days
+      template:
+        src: "{{ playbook_dir }}/../templates/journald-retention.conf.j2"
+        dest: /etc/systemd/journald.conf.d/p2party-retention.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart journald
 
     # Binary is deployed by deploy.yml playbook
     # This playbook sets up the environment and systemd services
@@ -272,3 +295,11 @@
     - name: Reload systemd
       systemd:
         daemon_reload: true
+
+    # journald re-reads its configuration only on restart. Since systemd 230 it
+    # keeps services' stdout streams across a restart in its file descriptor
+    # store, so the workers keep logging.
+    - name: Restart journald
+      systemd:
+        name: systemd-journald
+        state: restarted

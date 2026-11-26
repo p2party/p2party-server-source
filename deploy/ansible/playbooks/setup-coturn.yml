@@ -109,19 +109,66 @@
         mode: "0600"
         remote_src: yes
 
-    - name: Deploy coturn configuration
+    # coturn has no configuration check mode, so the rendered file is checked
+    # here before it replaces the running one: a candidate that fails these
+    # checks fails the play and leaves /etc/turnserver.conf as it was.
+    - name: Render the candidate coturn configuration
       template:
         src: "{{ playbook_dir }}/../templates/turnserver.conf.j2"
-        dest: /etc/turnserver.conf
+        dest: /etc/turnserver.conf.p2party-candidate
         owner: turnserver
         group: turnserver
         mode: "0600"
+      # It holds the TURN shared secret; keep an operator's --diff from
+      # copying it into the Ansible log.
+      diff: false
+
+    - name: Read the candidate coturn configuration
+      slurp:
+        src: /etc/turnserver.conf.p2party-candidate
+      register: coturn_candidate
+      no_log: true
+
+    # A failed assertion prints its expression, never the file's contents.
+    - name: Validate the candidate coturn configuration
+      assert:
+        that:
+          - coturn_candidate_text is not search('[{][{]|[{]%')
+          - coturn_candidate_text is search('^use-auth-secret$', multiline=True)
+          - coturn_candidate_text is search('^static-auth-secret=\S{32,}$', multiline=True)
+          - coturn_candidate_text is search('^realm=\S+$', multiline=True)
+          - coturn_candidate_text is search('^log-file=/dev/null$', multiline=True)
+          - coturn_candidate_text is search('^no-stdout-log$', multiline=True)
+          - coturn_candidate_text is not search('^(syslog|verbose|Verbose|log-binding)$', multiline=True)
+          - coturn_candidate_text is search('^total-quota=[1-9][0-9]*$', multiline=True)
+          - coturn_candidate_text is search('^user-quota=[1-9][0-9]*$', multiline=True)
+          - coturn_candidate_text is search('^max-bps=[1-9][0-9]*$', multiline=True)
+          - coturn_candidate_text is search('^bps-capacity=[1-9][0-9]*$', multiline=True)
+        fail_msg: The rendered coturn configuration failed validation; /etc/turnserver.conf is unchanged
+        quiet: true
+      vars:
+        coturn_candidate_text: "{{ coturn_candidate.content | b64decode }}"
+
+    - name: Install the validated coturn configuration
+      copy:
+        src: /etc/turnserver.conf.p2party-candidate
+        dest: /etc/turnserver.conf
+        remote_src: true
+        owner: turnserver
+        group: turnserver
+        mode: "0600"
+      diff: false
       notify: Restart Coturn
+
+    - name: Remove the coturn configuration candidate
+      file:
+        path: /etc/turnserver.conf.p2party-candidate
+        state: absent
 
     # coturn now writes no log (turnserver.conf.j2). Hosts provisioned earlier
     # still hold up to 14 days of rotated files pairing TURN usernames, which
-    # carry identity keys, with client addresses; without their rotation
-    # config nothing would ever delete them.
+    # then carried identity keys, with client addresses; without their
+    # rotation config nothing would ever delete them.
     - name: Remove the coturn file log and its rotation
       file:
         path: "{{ item }}"
