@@ -135,7 +135,12 @@ describe("eviction from another instance", () => {
     const clients = new Map<string, P2PartyWSClient>();
     const store = claimStore();
     const old = await establishedSocket(clients, store);
-    const stale = `${old.data.socketGeneration.slice(0, -1)}0`;
+    // A generation that differs from the socket's in its last character. The
+    // generation is a random UUID, so a fixed replacement character would equal
+    // the real one once in 16 runs.
+    const generation = old.data.socketGeneration;
+    const stale = `${generation.slice(0, -1)}${generation.endsWith("0") ? "1" : "0"}`;
+    expect(stale).not.toBe(generation);
 
     // An eviction for a generation this instance no longer has: nothing.
     expect(
