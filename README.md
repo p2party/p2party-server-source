@@ -390,17 +390,21 @@ When TURN is configured, the `roomId` response includes:
 {
   "turnCredentials": {
     "urls": ["turns:turn.example.com:443?transport=tcp"],
-    "username": "<expiresAtUnixSeconds>:<identity Ed25519 public key>",
+    "username": "<expiresAtUnixSeconds>:<22-character tag>",
     "credential": "<TURN REST HMAC>",
     "expiresAtUnixSeconds": 1785258000
   }
 }
 ```
 
-The expiry is bound to both the numeric username prefix and the authenticated
-socket public key suffix. `credential` is the base64 HMAC-SHA1 of `username`
-under `COTURN_SECRET` — the coturn REST convention. The expiry is the current
-time plus one hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
+The numeric username prefix equals `expiresAtUnixSeconds`. The tag is the
+first 22 base64url characters of HMAC-SHA256 under `COTURN_SECRET` of the
+authenticated socket's 32-byte identity public key followed by the expiry as an
+unsigned 64-bit big-endian integer. The identity key therefore never appears in
+the username, and usernames from different hours cannot be linked without the
+secret. `credential` is the base64 HMAC-SHA1 of `username` under
+`COTURN_SECRET` — the coturn REST convention. The expiry is the current time
+plus one hour (`TURN_CREDENTIAL_CONTRACT.lifetimeSeconds` in
 [`src/utils/socketAuth.ts`](src/utils/socketAuth.ts)), rounded up to a whole
 hour, so a credential is valid for at least one hour and less than two. A
 bundle comes with every successful room join, and every join by one identity
@@ -408,11 +412,6 @@ within one such hour receives the identical bundle. coturn's per-username
 allocation quota therefore applies per identity, and one identity holds at most
 two valid usernames at a time. URL normalization follows the `COTURN_URLS`
 limits above.
-
-The username carries the identity public key because `p2party-js` 0.14.10
-rejects a `roomId` response whose username is not `<expiry>:<its own key>`.
-Over plain `turn:` (UDP), that username is readable by anyone on the network
-path; over `turns:` it is inside TLS.
 
 When `COTURN_SECRET` or `COTURN_URLS` is missing, or no URL survives
 normalization, `turnCredentials` is omitted from the `roomId` response entirely
@@ -526,6 +525,12 @@ SDK 0.14.9 requires server 0.1.3 for its membership-driven mesh repair and
 targeted redial behavior. Older servers do not provide this contract; matching
 protocol version 4 alone does not establish support for these repair features.
 
+This release issues TURN usernames of the form `<expiry>:<tag>` (see "Room
+correlation and TURN credentials"). `p2party-js` 0.14.10 and earlier accept
+only `<expiry>:<their own public key>` and reject every `roomId` response that
+carries TURN credentials, so while TURN is configured they cannot join a room
+on this server. They need a client release that accepts the tag.
+
 ## What the server stores
 
 The Postgres schema is [`prisma/schema.prisma`](prisma/schema.prisma): four
@@ -590,16 +595,36 @@ exact `serverId`s. [`tests/deploy.contract.test.ts`](tests/deploy.contract.test.
 pins that ordering.
 
 Production sets `signaling_ports: [3001]` — one process — for the fencing
-reasons above. Caddy terminates TLS, proxies the WebSocket, sets HSTS and a
+reasons above. Where several workers share a database, stop every worker of an
+older release before the first worker of this release starts, and run all
+workers under one database role: a worker counts as live only through its named
+PostgreSQL session, which older releases do not open, so a new worker would
+clear an older worker's routing claims. Caddy terminates TLS, proxies the WebSocket, sets HSTS and a
 content-security policy, and logs with client IPs masked to /24 and /48.
 Request URIs, headers and the duplicate raw `client_ip` field are removed from
 access logs and from Caddy's default logger, which records upstream errors, so
 the public-key query parameter is retained in neither. coturn is configured by
 `playbooks/setup-coturn.yml`; this server only issues credentials for it. coturn
 writes no log (`log-file=/dev/null`, nothing to stdout): its log lines would
-pair each username, and so each identity key, with a client address. The
-playbook deletes the log directory and rotation config of earlier
-provisioning.
+pair each username with a client address, and whoever holds `COTURN_SECRET` can
+link a username to its identity key. The playbook deletes the log directory and
+rotation config of earlier provisioning.
+
+Both playbooks that provision the signaling host install a journald drop-in
+(`templates/journald-retention.conf.j2`, `MaxRetentionSec=7day`) and restart
+journald, so the workers' and Caddy's journal entries are kept for at most
+seven days. Nothing in this repository configures rsyslog: if the host also
+copies the journal into syslog files, their retention follows that host's
+logrotate settings, is not covered by this change, and must be checked on the
+host.
+
+A rendered configuration is checked before it replaces a running one, and a
+failed check fails the play with the running service untouched. Caddyfiles go
+through `caddy validate` (a candidate file in `deploy.yml`, the template's
+`validate` in `initial-setup.yml`). coturn has no configuration check mode, so
+`setup-coturn.yml` renders a candidate and asserts that it has no unrendered
+template text, a shared secret of at least 32 characters, a realm, positive
+quotas and bandwidth limits, and that it logs nowhere, before installing it.
 
 The coturn template sets `coturn_bps_capacity` to 30,000,000 bytes/second and
 `coturn_max_bps` to 625,000 bytes/second per allocation. Input and output are

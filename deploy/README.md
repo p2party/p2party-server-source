@@ -25,13 +25,23 @@ and `prisma/`. No schema migration is added by release 0.1.4.
 
 ## Relay capacity
 
-**The default TURN budget permits about ten ordinary concurrent allocations.**
+**The default TURN budget permits 48 ordinary concurrent allocations.**
 The aggregate budget is 30,000,000 bytes/second and the per-allocation budget is
-3,000,000 bytes/second. Ordinary clients reserve the per-allocation maximum even
+625,000 bytes/second. Ordinary clients reserve the per-allocation maximum even
 when idle; input and output are counted separately. Set the Ansible variable
 `coturn_bps_capacity` higher for larger relay-heavy rooms and apply
 `playbooks/setup-coturn.yml`. Both bandwidth settings must be positive. Allocation
-quotas remain 1,200 total and 12 per credential username.
+quotas remain 1,200 total and 12 per credential username. A credential username
+is stable per identity for one hour and one identity holds at most two valid
+ones, so the playbook refuses settings where 2 × `coturn_user_quota` ×
+`coturn_max_bps` exceeds half of `coturn_bps_capacity`.
+
+## Upgrading to 0.1.5
+
+Where several workers share a database, stop every 0.1.4 worker before the first
+0.1.5 worker starts and run all workers under one database role: a 0.1.5 worker
+counts another as live only through its named PostgreSQL session, which 0.1.4
+does not open, so it would clear a running 0.1.4 worker's routing claims.
 
 This is a capacity and cost guard, not proof of unique users. See the root
 [README](../README.md#admission-and-database-security) for signaling admission
