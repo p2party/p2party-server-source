@@ -1,0 +1,25 @@
+# ============================================================================
+# p2party release rehearsal variables
+# ============================================================================
+# run.sh passes this file as extra vars (-e @deploy/rehearsal/vars.yml). The
+# playbooks load group_vars/all/vars.yml and group_vars/production/vars.yml
+# through vars_files, which outrank every inventory variable, so only extra
+# vars can replace a value from them.
+#
+# Only the public names are replaced. With the production names, Caddy would
+# ask a public CA for signaling.p2party.com, deploy.yml would read
+# https://signaling.p2party.com/health from the VM, and certbot would be asked
+# for turn and stun names. A *.localhost name gets a certificate from Caddy's
+# own local CA without any request leaving the VM, and the guest resolves it to
+# itself.
+#
+# Everything else keeps its production value, including the private network
+# (10.231.0.0/24, PostgreSQL on 10.231.0.2, signaling on 10.231.0.4): run.sh gives
+# the VM those two addresses on a dummy interface.
+# ============================================================================
+
+domains:
+  main: rehearsal.localhost
+  signaling: signaling.rehearsal.localhost
+  turn: turn.rehearsal.localhost
+  stun: stun.rehearsal.localhost

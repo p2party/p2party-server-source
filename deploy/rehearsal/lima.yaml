@@ -1,0 +1,110 @@
+# ============================================================================
+# p2party release rehearsal: Lima template for the instance p2party-rehearsal
+# ============================================================================
+# One local VM stands in for the signaling host and the PostgreSQL host
+# (deploy/rehearsal/README.md). run.sh creates it from this file, and
+# tests/deployRehearsal.contract.test.ts pins the properties below:
+#   * no host directory is visible in the guest (mounts: []);
+#   * no guest port reaches the host except two: the guest's SSH on
+#     127.0.0.1:56022 and the guest's public signaling port (Caddy, 443) on
+#     127.0.0.1:56443. Every other guest port is ignored, so the guest's
+#     PostgreSQL on 5432 is never forwarded to the host's 5432;
+#   * user-mode networking only (no shared or bridged network, no
+#     socket_vmnet, no sudo on the host), and the guest cannot reach services
+#     on the host's loopback (networkOpts.hostLoopback: false);
+#   * the image is pinned by URL and SHA-256 digest.
+# ============================================================================
+minimumLimaVersion: 2.0.0
+
+vmType: vz
+# The machine's native architecture (Apple Silicon). The production host is
+# x86-64: the x86-64 artefact runs here under Rosetta (vmOpts.vz.rosetta).
+arch: aarch64
+
+images:
+  # Ubuntu 24.04 server cloud image, dated release 20261017. The digest is the
+  # value in https://cloud-images.ubuntu.com/releases/noble/release-20261017/SHA256SUMS.
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: aarch64
+    digest: "sha256:50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e"
+
+cpus: 2
+memory: 2GiB
+disk: 12GiB
+
+mounts: []
+
+containerd:
+  system: false
+  user: false
+
+# The Lima user is the production deploy user: cloud-init on the real hosts
+# creates `p2party` (the inventory's ansible_user and the playbooks' app.user)
+# with passwordless sudo and /home/p2party.
+user:
+  name: p2party
+  comment: p2party
+  uid: 1000
+  home: /home/p2party
+  shell: /bin/bash
+
+ssh:
+  localPort: 56022
+  loadDotSSHPubKeys: false
+  forwardAgent: false
+  forwardX11: false
+  forwardX11Trusted: false
+  # Plain TCP on 127.0.0.1:56022, which is what the rehearsal inventory names.
+  overVsock: false
+
+vmOpts:
+  vz:
+    rosetta:
+      enabled: true
+      binfmt: true
+
+networks: []
+
+# Checked in order; the first rule that matches a guest port decides.
+portForwards:
+  - guestPort: 443
+    hostIP: "127.0.0.1"
+    hostPort: 56443
+  - guestIP: "0.0.0.0"
+    guestPortRange: [1, 65535]
+    proto: any
+    ignore: true
+
+networkOpts:
+  hostLoopback: false
+
+propagateProxyEnv: false
+
+# Leave the image's own timezone (UTC, as on the Hetzner image).
+timezone: ""
+
+upgradePackages: false
+
+video:
+  display: none
+
+provision:
+  # Runs at every boot, before the network is up. The image's own background
+  # services that contact Canonical (snap store, MOTD and apt news, Ubuntu Pro,
+  # firmware metadata, entropy seeding, NTP) and the unattended apt timers are
+  # masked: the rehearsal's only outbound traffic is the package mirrors and
+  # what the playbooks themselves fetch (deploy/rehearsal/README.md). The apt
+  # timers would also take the dpkg lock in the middle of a playbook.
+  - mode: boot
+    script: |
+      for unit in snapd.service snapd.socket snapd.seeded.service \
+        motd-news.timer motd-news.service apt-news.service esm-cache.service \
+        ua-timer.timer ua-reboot-cmds.service ubuntu-advantage.service \
+        fwupd-refresh.timer pollinate.service systemd-timesyncd.service \
+        apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service \
+        update-notifier-download.timer update-notifier-motd.timer; do
+        systemctl mask --now "$unit" >/dev/null 2>&1 || true
+      done
+      if [ -f /etc/default/motd-news ]; then
+        sed -i 's/^ENABLED=1/ENABLED=0/' /etc/default/motd-news
+      fi

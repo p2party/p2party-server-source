@@ -1,0 +1,51 @@
+# ============================================================================
+# p2party release rehearsal inventory
+# ============================================================================
+# Every host is the local Lima instance p2party-rehearsal, reached over its
+# SSH forward on 127.0.0.1:56022 (deploy/rehearsal/lima.yaml). The group names
+# are the production ones, so the playbooks run unchanged: one VM is the
+# database host, the signaling host and the TURN host. run.sh refuses to start
+# unless the inventory it is given is this file and every host in it is
+# 127.0.0.1 (tests/deployRehearsal.contract.test.ts).
+# ============================================================================
+
+all:
+  children:
+    production:
+      children:
+        databases_production:
+        signaling_production:
+        turn_production:
+
+    databases_production:
+      hosts:
+        p2party-postgres:
+          ansible_host: 127.0.0.1
+          ansible_port: 56022
+          ansible_user: p2party
+          role: database
+          service: postgres
+
+    signaling_production:
+      hosts:
+        p2party-signaling:
+          ansible_host: 127.0.0.1
+          ansible_port: 56022
+          ansible_user: p2party
+          role: signaling
+          service: server
+          app_port: 3001
+
+    turn_production:
+      hosts:
+        p2party-coturn:
+          ansible_host: 127.0.0.1
+          ansible_port: 56022
+          ansible_user: p2party
+          role: turn
+          service: coturn
+
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_become: true
+    ansible_become_method: sudo
