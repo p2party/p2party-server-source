@@ -720,11 +720,15 @@ and the DNS records for the signaling, TURN and STUN names. Run it through
 
 [`deploy/ansible`](deploy/ansible) configures those hosts
 (`playbooks/site.yml`) and ships releases (`playbooks/deploy.yml`, wrapped by
-`deploy/deploy.sh`). A deploy builds `p2party_linux_x64` from this repo with
-`bun run build:linux` and refuses to continue if the binary is missing. While
-the old release keeps serving, it then installs the audited manifest and frozen
-lockfile into isolated migration tooling, copies the schema and migrations,
-stages the new binary, environment file and units, and validates a candidate
+`deploy/deploy.sh`). Every playbook first requires, on the control machine
+and before contacting any host, the ansible-core the playbooks were tested with
+and the Bun `package.json` pins. A deploy builds `p2party_linux_x64` from this
+repo with `bun run build:linux` and refuses to continue if the binary is
+missing. While the old release keeps serving, it then requires the signaling
+host's Bun to be that pin, installs the audited manifest and frozen lockfile
+into isolated migration tooling, copies the schema and migrations, stages the
+new binary (whose embedded Bun must also be the pin), environment file and
+units, and validates a candidate
 Caddy configuration; a failure there leaves production untouched. Only then does
 it stop and disable every signaling worker, run the Prisma CLI on the host and,
 if that errors, end the play with the recovery steps (deploy/README.md, "A

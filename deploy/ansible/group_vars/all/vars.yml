@@ -67,10 +67,26 @@ app:
   home: /home/p2party
   node_env: production
 
-# Bun runtime
+# The ansible-core these playbooks were tested with. playbooks/local-preflight.yml,
+# the first play of every playbook, requires exactly this version.
+ansible_core_tested: "2.22.0"
+
+# Bun runtime. `version` is read from package.json's packageManager, the one
+# place the pin is written and the version CI tests with. local-preflight.yml
+# requires it on the control machine, whose Bun `bun build --compile` embeds in
+# the binary; deploy.yml requires it of the signaling host's own Bun and of the
+# staged binary (tasks/require-pinned-bun.yml). `release_sha256` is the SHA-256
+# of that release's Linux zips from its signed SHASUMS256.txt, for the install
+# command the host check prints; it changes with the pin (deploy/README.md,
+# "Host software", and tests/deploy.contract.test.ts).
 bun:
-  version: latest
+  version: >-
+    {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../../package.json')
+        | from_json).packageManager | regex_replace('^bun@', '') }}
   install_dir: "{{ app.home }}/.bun"
+  release_sha256:
+    x64: 94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb
+    aarch64: 18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84
 
 # ------------------------------------------------------------------------------
 # Logging Configuration

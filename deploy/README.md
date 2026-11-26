@@ -41,21 +41,6 @@ release's audited `package.json` and frozen `bun.lock` rather than fetched as an
 independent CLI dependency tree. Its working directory remains the server
 directory containing `prisma.config.ts` and `prisma/`.
 
-The migration tooling is installed and run by the signaling host's own Bun,
-`~p2party/.bun/bin/bun`, which `playbooks/initial-setup.yml` installs only when
-it is absent and never upgrades. `bun.lock` is Bun's text lockfile with
-`lockfileVersion` 2. In a local test Bun 1.4.0 installed from it and Bun 1.3.14
-refused it (`UnknownLockfileVersion`); no version in between was tested. On a
-host whose Bun is older, the deploy ends at "Report that preparing the release
-failed" with production untouched. Before deploying, check the host's version
-and, if it is older than 1.4.0, install the version this release was tested
-with:
-
-```bash
-sudo -u p2party /home/p2party/.bun/bin/bun --version
-sudo -u p2party -H bash -c 'curl -fsSL https://bun.com/install | bash -s "bun-v1.4.5"'
-```
-
 The binary also checks the schema itself. Before it opens its listener it reads
 Prisma's migration history, on its own connection, within 8 seconds, and exits
 with one `p2party: refusing to start` line when the database does not answer,
@@ -65,25 +50,95 @@ statement within its own bound of 60 seconds (normally a no-op); a re-key that
 runs past it is cancelled, changes nothing, and ends the start with the same
 kind of line. `Restart=always` then only repeats the refusal.
 
+## Which Bun, and where it is checked
+
+`package.json`'s `packageManager` is the one place the Bun version is written
+(`bun@1.4.5`); CI tests with it, and `group_vars/all/vars.yml` reads it into
+`bun.version`. Bun itself does not enforce `packageManager` or `engines`, so
+the playbooks require that exact version in three places, each before anything
+changes:
+
+1. **On the control machine.** `playbooks/local-preflight.yml`, the first play
+   of every playbook here, requires `bun --version` on `PATH` to equal the pin,
+   because `bun build --compile` embeds the Bun that runs it. It also requires
+   the ansible-core these playbooks were tested with (`ansible_core_tested`,
+   2.22.0). It runs on this machine only, before any host is contacted, also
+   with `--skip-build`.
+2. **The signaling host's own Bun**, `~p2party/.bun/bin/bun`, which installs and
+   runs the migration tooling from `bun.lock`. The first task of the deploy's
+   prepare block requires it to equal the pin, before the tooling is installed
+   and long before any worker is stopped. `playbooks/initial-setup.yml` installs
+   Bun only when it is absent and never upgrades it, so an existing host may
+   fail here; the play then ends at "Report that preparing the release failed"
+   with production untouched, and prints the install command below.
+3. **The staged binary.** Right after it is staged, still in the prepare block,
+   the binary is run with `BUN_BE_BUN=1 --version` (a compiled Bun binary then
+   acts as the Bun CLI and starts nothing) and must report the pin. That also
+   covers `--skip-build`, which ships whatever `builds/p2party_linux_x64`
+   already holds.
+
+To install the pinned Bun on the signaling host, download the release zip for
+its architecture and check it before unpacking. The SHA-256 values for
+`bun-v1.4.5` come from that release's `SHASUMS256.txt.asc`, whose signature is
+good for "Robobun <robobun@oven.sh>", key fingerprint
+`F3DCC08A8572C0749B3E18888EAB4D40A7B22B59` (checked on 2026-11-26 in an empty
+keyring, with the key from <https://github.com/robobun.gpg>; `robobun` is the
+account that publishes the Bun releases, and GitHub lists that key,
+`8EAB4D40A7B22B59`, for it):
+
+| Zip                     | SHA-256                                                            |
+| ----------------------- | ------------------------------------------------------------------ |
+| `bun-linux-x64.zip`     | `94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb` |
+| `bun-linux-aarch64.zip` | `18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84` |
+
+On the signaling host (x86_64; use the `aarch64` zip and hash on an ARM host):
+
+```bash
+sudo -u p2party -H bash -euo pipefail -c '
+  cd "$(mktemp -d)"
+  curl -fsSLO https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-x64.zip
+  echo "94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb  bun-linux-x64.zip" | sha256sum -c -
+  unzip -q bun-linux-x64.zip
+  install -D -m 0755 bun-linux-x64/bun ~/.bun/bin/bun
+  ~/.bun/bin/bun --version'
+```
+
+To check the hashes yourself, download `SHASUMS256.txt.asc` from the same
+release, import the key into an empty keyring
+(`GNUPGHOME="$(mktemp -d)" gpg --import robobun.gpg`) and run
+`gpg --verify SHASUMS256.txt.asc` with the same `GNUPGHOME`: it must report a
+good signature from that fingerprint, and the signed text holds the two lines
+above. The same values are in `bun.release_sha256` in
+`group_vars/all/vars.yml`, which the host check's message uses;
+`tests/deploy.contract.test.ts` checks that both match and that this section
+names the pinned version. They change with the pin.
+
+`bun.lock` is Bun's text lockfile with `lockfileVersion` 2. In a local test Bun
+1.4.0 installed from it and Bun 1.3.14 refused it (`UnknownLockfileVersion`).
+
 ## Host software
 
-None of the software the playbooks install on the hosts has a version pin in
-this repository, and every install uses `state: present` or runs only when the
-program is absent, so a host keeps what it was first given:
+None of the software installed on the hosts, by the playbooks or by the
+Terraform cloud-init, has a version pin in this repository, and every install
+uses `state: present`, runs only when the program is absent, or runs only at
+first boot, so a host keeps what it was first given. Bun is the exception at
+deploy time: the deploy checks it ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
 
-- **Bun** (signaling host): the official installer, without a version, only
-  when `~p2party/.bun/bin/bun` is missing. `bun.version: latest` in
-  `group_vars/all/vars.yml` is read by no task. This release was tested with
-  Bun 1.4.5 and needs at least 1.4.0 on the host (above).
+- **Bun** (signaling host): `playbooks/initial-setup.yml` runs the official
+  installer, without a version, only when `~p2party/.bun/bin/bun` is missing.
+  A deploy requires the host's Bun to equal `package.json`'s pin and stops
+  before changing anything when it does not ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
 - **Caddy** (signaling host): the `caddy` package from Caddy's Cloudsmith
   `stable` repository. Caddy 2.11.9, the latest release on 2026-11-26
   (checksum-verified), accepts the rendered `templates/Caddyfile.j2`
   (`caddy validate`), and a silent WebSocket through its `reverse_proxy` block
   stayed open for 75 seconds on 2.11.9; 2.11.6 introduced one-minute stall
   timeouts. Since 2.11.6 Caddy also answers 431 to request headers over 16 KiB.
-- **coturn** (TURN host): the Ubuntu package. The latest upstream release is
-  4.19.2; installing it would mean installing from upstream instead of the
-  distribution.
+- **coturn** (TURN host): the Ubuntu package, installed at first boot by the
+  Terraform cloud-init (`templates/coturn_cloud_init.yaml.tpl`, `packages`, with
+  `package_upgrade: true`), which `playbooks/setup-coturn.yml` then only
+  requires to be present. The latest upstream release is 4.19.2; installing it
+  would mean installing from upstream instead of the distribution.
 - **PostgreSQL** (database host): `postgresql-17` from the PostgreSQL apt
   repository, in `playbooks/install-postgres.yml` and the Terraform cloud-init.
   PostgreSQL 19 is the newest major; moving to it needs a `pg_upgrade` of the
@@ -94,9 +149,12 @@ program is absent, so a host keeps what it was first given:
 These parts of this release could not be run on the hosts before the deploy,
 only locally as described:
 
-1. The host's Bun installing the migration tooling from `bun.lock` (above).
-   Locally, Bun 1.4.0, 1.4.4 and 1.4.5 installed it and 1.3.14 refused it.
-2. That install now includes TypeScript 7, a native compiler shipped as one
+1. The host and staged-binary Bun checks
+   ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
+   Locally they ran against a scratch home and staging directory, and the
+   pre-flight against this machine, each passing for 1.4.5 and refusing 1.4.4
+   and a missing Bun; on the signaling host they have not run.
+2. The migration tooling install now includes TypeScript 7, a native compiler shipped as one
    package per platform (`@typescript/typescript-linux-x64` on the host), since
    the tooling installs development dependencies.
 3. Prisma 7.10.1's `migrate deploy`, run by the host's Bun, on a database whose
@@ -104,16 +162,18 @@ only locally as described:
    applied this release's three migrations after 7.9.0 had applied 0.1.4's two,
    and `migrate resolve --applied` and `--rolled-back` behaved as described
    below; the host runs PostgreSQL 17.
-4. The `p2party_linux_x64` binary from Bun 1.4.5. It was built locally with the
-   `build:linux` flags but not started; a macOS build with the same flags
-   passed its schema check and answered `/health`.
+4. The `p2party_linux_x64` binary. The deploy builds it with the control
+   machine's Bun, which the pre-flight requires to be the pin, and checks the
+   staged binary's embedded Bun on the host. A linux-x64 build with the
+   `build:linux` flags was made locally with Bun 1.4.5 but not started; a macOS
+   build with the same flags passed its schema check and answered `/health`.
 5. `caddy validate` and the reload on the host's own Caddy version.
 6. On the operator's machine: `prisma generate` inside `bun run build:linux`
    runs under the `node` on `PATH` when there is one (Prisma's command starts
    with `#!/usr/bin/env node`; without one, Bun runs it). Prisma 7.10.1 needs
    Node 20.19 or a later 20.x, 22.12 or a later 22.x, or 24.0 or newer; this
-   release was built with Node 26.13.1. `site.yml` now requires ansible-core
-   2.22.0.
+   release was built with Node 26.13.1. Every playbook now requires exactly
+   ansible-core 2.22.0 (the pre-flight).
 7. The next `./deploy/tf init -upgrade` and plan against the real state, with
    hcloud 1.70.2 and Cloudflare 4.52.10; only the mocked tests have run.
 

@@ -17,6 +17,11 @@
 #   ansible-playbook -i inventory/production.yml playbooks/deploy.yml
 #   ansible-playbook ... -e "skip_build=true"          # ship an existing binary
 # ============================================================================
+# The local pre-flight comes first: it checks this machine's ansible-core and
+# Bun (the Bun that builds the binary) before any host is contacted.
+- name: Check this machine's toolchain before any host is contacted
+  import_playbook: local-preflight.yml
+
 - name: Provision verified PostgreSQL TLS
   import_playbook: postgres-tls.yml
 
@@ -139,6 +144,14 @@
     # still running the previous release, untouched.
     - name: Prepare the release without touching the running workers
       block:
+        # The host's own Bun installs and runs the migration tooling; it must
+        # be package.json's pin before anything on the host changes. A
+        # mismatch ends the play in the rescue below, workers untouched.
+        - name: Require the pinned Bun on the signaling host
+          import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml"
+          vars:
+            pinned_bun_check: host
+
         - name: Ensure the journald drop-in directory exists
           file:
             path: /etc/systemd/journald.conf.d
@@ -250,6 +263,13 @@
             owner: "{{ app.user }}"
             group: "{{ app.group }}"
             mode: "0755"
+
+        # The Bun the service will run is the one embedded in the binary: the
+        # build machine's, or an older build's after --skip-build.
+        - name: Require the pinned Bun in the staged binary
+          import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml"
+          vars:
+            pinned_bun_check: binary
 
         # The binary and its environment are a matched pair: this release
         # requires COTURN_SECRET and a postgresql:// DATABASE_URL, and a binary

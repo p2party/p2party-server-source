@@ -1,0 +1,57 @@
+# ============================================================================
+# Local pre-flight
+# ============================================================================
+# Imported as the first play of every playbook in this directory
+# (tests/deploy.contract.test.ts checks), so it runs before any host is
+# contacted. It runs on the control machine only, with no connection to any
+# host, and stops the run unless this machine has:
+#   * the ansible-core these playbooks were tested with (ansible_core_tested);
+#   * the Bun package.json pins (packageManager), which CI tests with and which
+#     `bun build --compile` embeds in the binary deploy.yml builds here. Bun
+#     itself does not enforce `engines` or `packageManager`.
+# deploy.yml also checks the signaling host's Bun and the staged binary's.
+# ============================================================================
+---
+- name: Check this machine's toolchain before any host is contacted
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tags: [always]
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+  vars:
+    # An inventory may set ansible_become for every host; the connection
+    # variable outranks the play keyword, and nothing here needs root.
+    ansible_become: false
+
+  tasks:
+    - name: Require the ansible-core these playbooks were tested with
+      assert:
+        that:
+          - ansible_version.full == ansible_core_tested
+        fail_msg: >-
+          These playbooks were tested with ansible-core {{ ansible_core_tested }}
+          (ansible_core_tested in group_vars/all/vars.yml); this is ansible-core
+          {{ ansible_version.full }}. Run them with ansible-core
+          {{ ansible_core_tested }}.
+
+    - name: Find the Bun on PATH
+      shell: command -v bun && bun --version
+      register: local_bun
+      changed_when: false
+      failed_when: false
+
+    - name: Require the Bun package.json pins
+      assert:
+        that:
+          - bun.version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+          - local_bun.rc == 0
+          - (local_bun.stdout_lines | last | default('')) == bun.version
+        fail_msg: >-
+          package.json pins Bun {{ bun.version }} (packageManager), and the
+          binary deploy.yml builds embeds the bun on this machine's PATH, but
+          {% if local_bun.rc == 0 %}{{ local_bun.stdout_lines | first }} is Bun
+          {{ local_bun.stdout_lines | last }}{% else %}there is no bun on
+          PATH{% endif %}. Put Bun {{ bun.version }} first on PATH, from
+          https://github.com/oven-sh/bun/releases/tag/bun-v{{ bun.version }}.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +59,10 @@ const journaldRetention = () =>
 
 interface PlaybookTask {
   name: string;
+  import_tasks?: string;
+  environment?: unknown;
+  become_user?: string;
+  failed_when?: unknown;
   block?: PlaybookTask[];
   rescue?: PlaybookTask[];
   always?: PlaybookTask[];
@@ -916,5 +920,221 @@ describe("production deployment contract", () => {
     // The file is only consulted if the playbook still ships it beside the
     // schema; without it the Prisma 7 CLI has no datasource at all.
     expect(deploy).toContain('dest: "{{ app.home }}/server/prisma.config.ts"');
+  });
+});
+
+/** package.json's Bun pin, the one place the version is written. */
+const bunPin = (() => {
+  const { packageManager } = JSON.parse(
+    readFileSync(join(repoRoot, "package.json"), "utf8"),
+  ) as { packageManager: string };
+  const match = /^bun@(\d+\.\d+\.\d+)$/.exec(packageManager);
+  if (!match)
+    throw new Error(`packageManager is not bun@x.y.z: ${packageManager}`);
+  return match[1]!;
+})();
+const ansibleDir = join(repoRoot, "deploy", "ansible");
+const playbooksDir = join(ansibleDir, "playbooks");
+const readAnsible = (path: string) =>
+  readFileSync(join(ansibleDir, path), "utf8");
+const localPreflight = () => readAnsible("playbooks/local-preflight.yml");
+const pinnedBunTasks = () => readAnsible("tasks/require-pinned-bun.yml");
+const allVars = Bun.YAML.parse(readAnsible("group_vars/all/vars.yml")) as {
+  ansible_core_tested: string;
+  bun: { version: string; release_sha256: Record<string, string> };
+};
+const deployReadme = readFileSync(
+  join(repoRoot, "deploy", "README.md"),
+  "utf8",
+);
+
+interface PreflightPlay {
+  hosts: string;
+  connection: string;
+  gather_facts: boolean;
+  become: boolean;
+  tags: string[];
+  tasks: (PlaybookTask & { delegate_to?: string })[];
+}
+
+const preflightTask = (name: string) => {
+  const [play] = Bun.YAML.parse(localPreflight()) as PreflightPlay[];
+  const found = play!.tasks.find((t) => t.name === name);
+  if (!found) throw new Error(`no pre-flight task named ${name}`);
+  return found;
+};
+
+describe("toolchain pins", () => {
+  test("the playbook reads the pin from package.json", () => {
+    // One source: group_vars/all/vars.yml derives bun.version from
+    // packageManager; no Ansible file writes the number itself.
+    expect(allVars.bun.version).toContain(
+      "lookup('ansible.builtin.file', playbook_dir ~ '/../../../package.json')",
+    );
+    expect(allVars.bun.version).toContain(
+      ".packageManager | regex_replace('^bun@', '')",
+    );
+    // Only tracked Ansible files, named explicitly: the ignored vault and the
+    // real inventory sit beside them in a working tree and must never be read.
+    const ansibleYaml = [
+      ...readdirSync(playbooksDir)
+        .filter((f) => f.endsWith(".yml"))
+        .map((f) => `playbooks/${f}`),
+      ...readdirSync(join(ansibleDir, "tasks"))
+        .filter((f) => f.endsWith(".yml"))
+        .map((f) => `tasks/${f}`),
+      "group_vars/all/vars.yml",
+      "group_vars/production/vars.yml",
+      "group_vars/all/vault.yml.example",
+      "inventory/production.yml.example",
+    ];
+    for (const file of ansibleYaml)
+      expect(readAnsible(file), file).not.toContain(bunPin);
+  });
+
+  test("the build refuses a Bun other than the pinned one", () => {
+    const [play, ...others] = Bun.YAML.parse(
+      localPreflight(),
+    ) as PreflightPlay[];
+    expect(others).toEqual([]);
+    expect(play!.hosts).toBe("localhost");
+    expect(play!.connection).toBe("local");
+    expect(play!.gather_facts).toBe(false);
+    expect(play!.tags).toContain("always");
+    expect(localPreflight()).toContain(
+      '"{{ playbook_dir }}/../group_vars/all/vars.yml"',
+    );
+    expect(preflightTask("Find the Bun on PATH").shell).toBe(
+      "command -v bun && bun --version",
+    );
+    expect(
+      (
+        preflightTask("Require the Bun package.json pins").assert as {
+          that: string[];
+        }
+      ).that,
+    ).toContain("(local_bun.stdout_lines | last | default('')) == bun.version");
+    // deploy.yml runs the pre-flight before every play, so before the build.
+    const plays = Bun.YAML.parse(deploy) as {
+      import_playbook?: string;
+      tasks?: PlaybookTask[];
+    }[];
+    expect(plays[0]!.import_playbook).toBe("local-preflight.yml");
+    const builds = plays.flatMap((p, i) =>
+      flatten(p.tasks ?? [])
+        .filter((t) => String(t.shell ?? "").includes("build_command"))
+        .map(() => i),
+    );
+    expect(builds.length).toBeGreaterThan(0);
+    for (const index of builds) expect(index).toBeGreaterThan(0);
+  });
+
+  test("the host's Bun is checked before the service is stopped", () => {
+    const play = playWithTask(deploy, "Apply migrations against Postgres");
+    const prepare = task(
+      play,
+      "Prepare the release without touching the running workers",
+    );
+    const inBlock = (prepare.block ?? []).map((t) => t.name);
+    const host = "Require the pinned Bun on the signaling host";
+    const binary = "Require the pinned Bun in the staged binary";
+    // First in the block whose rescue reports that production is untouched,
+    // so nothing on the host changes before it.
+    expect(inBlock[0]).toBe(host);
+    expect(inBlock.indexOf(host)).toBeLessThan(
+      inBlock.indexOf("Install exactly the audited migration dependencies"),
+    );
+    expect(inBlock.indexOf(binary)).toBe(
+      inBlock.indexOf("Stage the compiled binary") + 1,
+    );
+    expect((prepare.rescue ?? []).map((t) => t.name)).toContain(
+      "Report that preparing the release failed",
+    );
+    for (const later of [
+      "Stop and disable every signaling worker before migrating",
+      "Apply migrations against Postgres",
+    ]) {
+      expect(position(play, host)).toBeLessThan(position(play, later));
+      expect(position(play, binary)).toBeLessThan(position(play, later));
+    }
+    for (const [name, check] of [
+      [host, "host"],
+      [binary, "binary"],
+    ] as const) {
+      const imported = task(play, name);
+      expect(imported.import_tasks).toBe(
+        "{{ playbook_dir }}/../tasks/require-pinned-bun.yml",
+      );
+      expect(imported.vars).toEqual({ pinned_bun_check: check });
+    }
+    // The imported tasks compare with the pin and report rather than crash.
+    const [read, require] = Bun.YAML.parse(pinnedBunTasks()) as PlaybookTask[];
+    expect(read!.failed_when).toBe(false);
+    expect(JSON.stringify(read!.command)).toContain(
+      "bun.install_dir ~ '/bin/bun'",
+    );
+    expect(JSON.stringify(read!.command)).toContain(
+      "release_staging ~ '/p2party-server'",
+    );
+    expect(String(read!.environment)).toContain("'BUN_BE_BUN': '1'");
+    expect((require!.assert as { that: string[] }).that).toContain(
+      "(pinned_bun_found.stdout | trim) == bun.version",
+    );
+  });
+
+  test("every playbook starts with the local pre-flight before any host is contacted", () => {
+    const playbooks = readdirSync(playbooksDir).filter(
+      (f) => f.endsWith(".yml") && f !== "local-preflight.yml",
+    );
+    expect(playbooks.sort()).toEqual([
+      "deploy.yml",
+      "initial-setup.yml",
+      "install-postgres.yml",
+      "postgres-tls.yml",
+      "setup-coturn.yml",
+      "setup-wireguard.yml",
+      "site.yml",
+    ]);
+    for (const file of playbooks) {
+      const [first] = Bun.YAML.parse(
+        readFileSync(join(playbooksDir, file), "utf8"),
+      ) as { import_playbook?: string }[];
+      expect(first?.import_playbook, file).toBe("local-preflight.yml");
+    }
+    const [play] = Bun.YAML.parse(localPreflight()) as PreflightPlay[];
+    for (const t of play!.tasks) expect(t.delegate_to, t.name).toBeUndefined();
+    expect(
+      (
+        preflightTask(
+          "Require the ansible-core these playbooks were tested with",
+        ).assert as { that: string[] }
+      ).that,
+    ).toEqual(["ansible_version.full == ansible_core_tested"]);
+    expect(allVars.ansible_core_tested).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("the README's host Bun instructions name the pinned release", () => {
+    const section = deployReadme.slice(
+      deployReadme.indexOf("## Which Bun, and where it is checked"),
+      deployReadme.indexOf("## Host software"),
+    );
+    expect(section).toContain(`\`bun@${bunPin}\``);
+    // Every release the section names is the pinned one.
+    const named = [...section.matchAll(/bun-v(\d+\.\d+\.\d+)/g)].map(
+      (m) => m[1],
+    );
+    expect(named.length).toBeGreaterThan(0);
+    expect(new Set(named)).toEqual(new Set([bunPin]));
+    // The hashes the host check prints are the ones the README records.
+    for (const [arch, sha256] of Object.entries(allVars.bun.release_sha256)) {
+      expect(sha256, arch).toMatch(/^[0-9a-f]{64}$/);
+      expect(section).toContain(`\`bun-linux-${arch}.zip\``);
+      expect(section).toContain(sha256);
+    }
+    expect(Object.keys(allVars.bun.release_sha256).sort()).toEqual([
+      "aarch64",
+      "x64",
+    ]);
+    expect(section).toContain("F3DCC08A8572C0749B3E18888EAB4D40A7B22B59");
   });
 });

@@ -1,0 +1,64 @@
+# ============================================================================
+# Require the pinned Bun on the signaling host
+# ============================================================================
+# Imported twice by playbooks/deploy.yml, inside "Prepare the release without
+# touching the running workers", so a mismatch ends the play in that block's
+# rescue: no worker stopped, nothing migrated (tests/deploy.contract.test.ts
+# checks the placement). `pinned_bun_check` is
+#   host:   the signaling host's own Bun, which installs and runs the
+#           migration tooling; checked before that install;
+#   binary: the Bun embedded in the staged binary, which the service runs;
+#           checked right after staging, so a --skip-build deploy is checked too.
+# Both must equal bun.version, package.json's packageManager pin. A binary
+# from `bun build --compile` run with BUN_BE_BUN=1 acts as the bun CLI instead
+# of its entry point (Bun 1.2.16 and later), so `--version` prints its Bun and
+# starts nothing.
+# ============================================================================
+---
+- name: Read the Bun version of the {{ 'signaling host' if pinned_bun_check == 'host' else 'staged binary' }}
+  command:
+    argv:
+      - "{{ (bun.install_dir ~ '/bin/bun') if pinned_bun_check == 'host' else (release_staging ~ '/p2party-server') }}"
+      - --version
+  environment: "{{ {'BUN_BE_BUN': '1'} if pinned_bun_check == 'binary' else {} }}"
+  become_user: "{{ app.user if pinned_bun_check == 'host' else 'root' }}"
+  register: pinned_bun_found
+  changed_when: false
+  failed_when: false
+
+- name: Require Bun {{ bun.version }} in the {{ 'signaling host' if pinned_bun_check == 'host' else 'staged binary' }}
+  assert:
+    that:
+      - pinned_bun_check in ['host', 'binary']
+      - pinned_bun_found.rc == 0
+      - (pinned_bun_found.stdout | trim) == bun.version
+    fail_msg: "{{ pinned_bun_messages[pinned_bun_check] }}"
+  vars:
+    pinned_bun_arch: >-
+      {{ 'aarch64' if (ansible_facts['architecture'] | default('')) in ['aarch64', 'arm64'] else 'x64' }}
+    pinned_bun_zip: bun-linux-{{ pinned_bun_arch }}.zip
+    pinned_bun_seen: >-
+      {{ ('Bun ' ~ (pinned_bun_found.stdout | trim)) if pinned_bun_found.rc == 0
+         else ('no Bun (' ~ ((pinned_bun_found.msg | default('')) ~ ' ' ~ (pinned_bun_found.stderr | default(''))) | trim ~ ')') }}
+    pinned_bun_messages:
+      host: >-
+        package.json pins Bun {{ bun.version }}, but the signaling host's
+        {{ bun.install_dir }}/bin/bun, which installs and runs the migration
+        tooling, is {{ pinned_bun_seen }}. No worker has been stopped and
+        nothing migrated. Install the pinned release for {{ app.user }},
+        checking the download against the SHA-256 from the release's signed
+        SHASUMS256.txt (deploy/README.md, "Host software"), then run
+        deploy/deploy.sh again:
+        sudo -u {{ app.user }} -H bash -euo pipefail -c 'cd "$(mktemp -d)" &&
+        curl -fsSLO https://github.com/oven-sh/bun/releases/download/bun-v{{ bun.version }}/{{ pinned_bun_zip }} &&
+        echo "{{ bun.release_sha256[pinned_bun_arch] }}  {{ pinned_bun_zip }}" | sha256sum -c - &&
+        unzip -q {{ pinned_bun_zip }} &&
+        install -D -m 0755 bun-linux-{{ pinned_bun_arch }}/bun {{ bun.install_dir }}/bin/bun'
+      binary: >-
+        package.json pins Bun {{ bun.version }}, but the staged binary
+        ({{ release_staging }}/p2party-server, run with BUN_BE_BUN=1 --version)
+        embeds {{ pinned_bun_seen }}. `bun build --compile` embeds the Bun that
+        ran it, and a --skip-build deploy ships whatever
+        deploy/ansible/builds/p2party_linux_x64 holds. No worker has been
+        stopped and nothing migrated. Run deploy/deploy.sh without
+        --skip-build on a control machine whose bun is {{ bun.version }}.

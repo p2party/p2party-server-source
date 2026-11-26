@@ -1,4 +1,9 @@
 ---
+# The local pre-flight comes first: it checks this machine's ansible-core and
+# Bun before any host is contacted (local-preflight.yml).
+- name: Check this machine's toolchain before any host is contacted
+  import_playbook: local-preflight.yml
+
 - name: Provision PostgreSQL server identity
   hosts: databases_production
   become: true

@@ -11,6 +11,11 @@
 #   WireGuard:    ansible-playbook playbooks/site.yml --tags wireguard --vault-id production@vault_pass_production.sh
 # ============================================================================
 ---
+# The local pre-flight comes first: it checks this machine's ansible-core and
+# Bun before any host is contacted (local-preflight.yml).
+- name: Check this machine's toolchain before any host is contacted
+  import_playbook: local-preflight.yml
+
 # ============================================================================
 # Pre-flight Health Check
 # ============================================================================
@@ -20,15 +25,6 @@
   tags: [always]
 
   tasks:
-    - name: Verify Ansible version
-      assert:
-        that:
-          - ansible_version.full is version('2.22.0', '>=')
-        fail_msg: "This playbook requires ansible-core 2.22.0 or newer"
-      run_once: true
-      delegate_to: localhost
-      connection: local
-
     - name: Display host info
       debug:
         msg: "{{ inventory_hostname }} ({{ ansible_host }}) - {{ role | default('unknown') }}"
