@@ -147,6 +147,91 @@ describe("concurrent room joins", () => {
     );
   });
 
+  test("nine simultaneous rejoins succeed", async () => {
+    const members = Array.from({ length: 9 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${(0x100 + i).toString(16).padStart(12, "0")}`,
+      publicKey: (0x10 + i).toString(16).repeat(32),
+    }));
+    let releaseRoom = () => {};
+    const roomHeld = new Promise<void>((resolve) => {
+      releaseRoom = resolve;
+    });
+    let upserts = 0;
+    const database = {
+      peer: {
+        findUnique: async ({ where }: { where: { id: string } }) => {
+          const member = members.find(({ id }) => id === where.id);
+          // Every requester is already a member: a pure rejoin after restart.
+          return member
+            ? { ...member, rooms: [{ id: ROOM_ID }], _count: { rooms: 1 } }
+            : null;
+        },
+      },
+      room: {
+        upsert: async () => {
+          upserts++;
+          // The first holder keeps the room lock until every rejoin queued.
+          await roomHeld;
+          return { id: ROOM_ID, _count: { peers: members.length } };
+        },
+        update: async () => ({ id: ROOM_ID }),
+      },
+    } as unknown as Parameters<typeof createHandleRoom>[0];
+
+    const frames: Array<{ type: string; roomRequestId?: string }> = [];
+    const clients = new Map<string, P2PartyWSClient>();
+    const sockets = members.map((member) => {
+      const ws = {
+        data: {
+          peerId: member.id,
+          publicKey: member.publicKey,
+          challengeNonce: "",
+          challengeId: "",
+          socketGeneration: "",
+          isVerified: true,
+          isAuthenticating: false,
+          isAlive: true,
+        } satisfies P2PartyWSData,
+        readyState: 1,
+        send: (serialized: string) => {
+          frames.push(JSON.parse(serialized));
+        },
+        terminate: () => {
+          throw new Error("healthy rejoin terminated");
+        },
+      } as unknown as P2PartyWSClient;
+      clients.set(member.id, ws);
+      return ws;
+    });
+
+    const handleRoom = createHandleRoom(database, clients);
+    const consoleError = console.error;
+    const errors: unknown[] = [];
+    console.error = (error: unknown) => errors.push(error);
+    try {
+      const rejoins = sockets.map((ws, i) =>
+        handleRoom(
+          ws.data.peerId,
+          ws,
+          ROOM_TOKEN,
+          `00000000-0000-4000-8000-${(0x200 + i).toString(16).padStart(12, "0")}`,
+        ),
+      );
+      // Let every request reach the room lock while the first one holds it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(upserts).toBe(1);
+      releaseRoom();
+      await Promise.all(rejoins);
+    } finally {
+      console.error = consoleError;
+    }
+
+    expect(errors).toEqual([]);
+    expect(frames.filter(({ type }) => type === "error")).toEqual([]);
+    expect(frames.filter(({ type }) => type === "roomId")).toHaveLength(9);
+    expect(upserts).toBe(9);
+  });
+
   test("configured TURN credentials are nested only in the room response", async () => {
     const peer = PEERS[0];
     const previousTurnSecret = process.env.COTURN_SECRET;
