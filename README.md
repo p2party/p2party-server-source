@@ -197,9 +197,11 @@ small local functions with boundary tests; `class-validator` is no longer a
 runtime dependency. Prisma's CLI packages pin their own dependencies to exact
 versions, and none of those packages is in the compiled binary; the host installs
 them as migration tooling. `tests/dependencyFloors.test.ts` holds a security
-floor, with its advisories, for each Prisma CLI dependency that has had one, and
-fails when `bun.lock` resolves a package below its floor or when an override has
-no recorded reason. There is one override: `@prisma/config` 7.10.1 pins `effect`
+floor, with its advisories, for each Prisma CLI dependency that has had one. It
+fails when `bun.lock` resolves a package below its floor, when `bun.lock` and
+`package.json` disagree on overrides or dependency ranges, or when an override
+has no recorded reason or is no longer needed because its dependent's range
+reaches the floor. There is one override: `@prisma/config` 7.10.1 pins `effect`
 3.20.0, below the fix for GHSA-7589-6fvf-x4pw (a ReDoS in
 `Schema.TemplateLiteral`, fixed in 3.22.1), so `effect` is lifted to 3.22.5, the
 newest patch of that line. Remove it once Prisma's pin reaches the fix.
