@@ -941,7 +941,10 @@ const localPreflight = () => readAnsible("playbooks/local-preflight.yml");
 const pinnedBunTasks = () => readAnsible("tasks/require-pinned-bun.yml");
 const allVars = Bun.YAML.parse(readAnsible("group_vars/all/vars.yml")) as {
   ansible_core_tested: string;
-  bun: { version: string; release_sha256: Record<string, string> };
+  bun: {
+    version: string;
+    release_sha256: Record<string, Record<string, string>>;
+  };
 };
 const deployReadme = readFileSync(
   join(repoRoot, "deploy", "README.md"),
@@ -989,7 +992,13 @@ describe("toolchain pins", () => {
       "inventory/production.yml.example",
     ];
     for (const file of ansibleYaml)
-      expect(readAnsible(file), file).not.toContain(bunPin);
+      expect(
+        file === "group_vars/all/vars.yml"
+          ? // The one exception: the version keys its recorded hashes.
+            readAnsible(file).replace(`"${bunPin}":`, "")
+          : readAnsible(file),
+        file,
+      ).not.toContain(bunPin);
   });
 
   test("the build refuses a Bun other than the pinned one", () => {
@@ -1259,16 +1268,50 @@ describe("toolchain pins", () => {
     );
     expect(named.length).toBeGreaterThan(0);
     expect(new Set(named)).toEqual(new Set([bunPin]));
-    // The hashes the host check prints are the ones the README records.
-    for (const [arch, sha256] of Object.entries(allVars.bun.release_sha256)) {
-      expect(sha256, arch).toMatch(/^[0-9a-f]{64}$/);
-      expect(section).toContain(`\`bun-linux-${arch}.zip\``);
-      expect(section).toContain(sha256);
-    }
-    expect(Object.keys(allVars.bun.release_sha256).sort()).toEqual([
-      "aarch64",
-      "x64",
-    ]);
     expect(section).toContain("F3DCC08A8572C0749B3E18888EAB4D40A7B22B59");
+  });
+
+  test("bumping the pin without its hashes fails", () => {
+    // vars.yml keys the recorded SHA-256 values by Bun version, and so does the
+    // README's table; the pinned version must have both Linux zips in each,
+    // with the same values. (The pre-flight refuses a pin with no entry.)
+    const recorded = allVars.bun.release_sha256[bunPin];
+    expect(recorded, `no hashes recorded for Bun ${bunPin}`).toBeDefined();
+    expect(Object.keys(recorded!).sort()).toEqual(["aarch64", "x64"]);
+    const rows = [
+      ...deployReadme.matchAll(
+        /^\| `(\d+\.\d+\.\d+)` +\| `bun-linux-(\w+)\.zip` +\| `([0-9a-f]{64})` +\|$/gm,
+      ),
+    ].map(([, version, arch, sha256]) => ({ version, arch, sha256 }));
+    for (const [arch, sha256] of Object.entries(recorded!)) {
+      expect(sha256, arch).toMatch(/^[0-9a-f]{64}$/);
+      expect(rows).toContainEqual({ version: bunPin, arch, sha256 });
+    }
+    expect(localPreflight()).toContain("bun.version in bun.release_sha256");
+    expect(pinnedBunTasks()).toContain(
+      "bun.release_sha256[bun.version][pinned_bun_arch]",
+    );
+  });
+
+  test("CI installs the Bun that package.json pins", () => {
+    // setup-bun at the pinned commit reads package.json's packageManager for
+    // bun-version-file (src/utils.ts, FILE_VERSION_READERS["package.json"]).
+    const workflow = Bun.YAML.parse(
+      readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"),
+    ) as {
+      jobs: Record<
+        string,
+        { steps: { uses?: string; with?: Record<string, string> }[] }
+      >;
+    };
+    const setups = Object.values(workflow.jobs).flatMap((job) =>
+      job.steps.filter((step) => step.uses?.startsWith("oven-sh/setup-bun@")),
+    );
+    expect(setups.length).toBeGreaterThan(0);
+    for (const step of setups)
+      expect(step.with).toEqual({ "bun-version-file": "package.json" });
+    expect(
+      readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"),
+    ).not.toMatch(/bun-version:/);
   });
 });

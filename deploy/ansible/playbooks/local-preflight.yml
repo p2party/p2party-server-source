@@ -46,12 +46,17 @@
       assert:
         that:
           - bun.version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+          - bun.version in bun.release_sha256
           - local_bun.rc == 0
           - (local_bun.stdout_lines | last | default('')) == bun.version
         fail_msg: >-
-          package.json pins Bun {{ bun.version }} (packageManager), and the
+          {% if bun.version not in bun.release_sha256 %}package.json pins Bun
+          {{ bun.version }}, but group_vars/all/vars.yml records no SHA-256 for
+          that release (bun.release_sha256): add both Linux zips' hashes from
+          its signed SHASUMS256.txt, as deploy/README.md describes, and update
+          the README's table. {% else %}package.json pins Bun {{ bun.version }} (packageManager), and the
           binary deploy.yml builds embeds the bun on this machine's PATH, but
           {% if local_bun.rc == 0 %}{{ local_bun.stdout_lines | first }} is Bun
           {{ local_bun.stdout_lines | last }}{% else %}there is no bun on
           PATH{% endif %}. Put Bun {{ bun.version }} first on PATH, from
-          https://github.com/oven-sh/bun/releases/tag/bun-v{{ bun.version }}.
+          https://github.com/oven-sh/bun/releases/tag/bun-v{{ bun.version }}.{% endif %}

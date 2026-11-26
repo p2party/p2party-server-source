@@ -40,7 +40,7 @@
       deploy/deploy.sh again:
       sudo -u {{ app.user }} -H bash -euo pipefail -c 'cd "$(mktemp -d)" &&
       curl -fsSLO https://github.com/oven-sh/bun/releases/download/bun-v{{ bun.version }}/{{ pinned_bun_zip }} &&
-      echo "{{ bun.release_sha256[pinned_bun_arch] }}  {{ pinned_bun_zip }}" | sha256sum -c - &&
+      echo "{{ bun.release_sha256[bun.version][pinned_bun_arch] }}  {{ pinned_bun_zip }}" | sha256sum -c - &&
       unzip -q {{ pinned_bun_zip }} &&
       install -D -m 0755 bun-linux-{{ pinned_bun_arch }}/bun {{ bun.install_dir }}/bin/bun'
   vars:

@@ -95,10 +95,10 @@ keyring, with the key from <https://github.com/robobun.gpg>; `robobun` is the
 account that publishes the Bun releases, and GitHub lists that key,
 `8EAB4D40A7B22B59`, for it):
 
-| Zip                     | SHA-256                                                            |
-| ----------------------- | ------------------------------------------------------------------ |
-| `bun-linux-x64.zip`     | `94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb` |
-| `bun-linux-aarch64.zip` | `18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84` |
+| Bun     | Zip                     | SHA-256                                                            |
+| ------- | ----------------------- | ------------------------------------------------------------------ |
+| `1.4.5` | `bun-linux-x64.zip`     | `94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb` |
+| `1.4.5` | `bun-linux-aarch64.zip` | `18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84` |
 
 On the signaling host (x86_64; use the `aarch64` zip and hash on an ARM host):
 
@@ -118,9 +118,11 @@ release, import the key into an empty keyring
 `gpg --verify SHASUMS256.txt.asc` with the same `GNUPGHOME`: it must report a
 good signature from that fingerprint, and the signed text holds the two lines
 above. The same values are in `bun.release_sha256` in
-`group_vars/all/vars.yml`, which the host check's message uses;
-`tests/deploy.contract.test.ts` checks that both match and that this section
-names the pinned version. They change with the pin.
+`group_vars/all/vars.yml`, keyed by the Bun version, which the host check's
+message uses. When the pin changes, add the new release's two hashes there and
+in this table: the pre-flight refuses a pin with no entry, and
+`tests/deploy.contract.test.ts` fails unless both list the pinned version with
+the same hashes.
 
 `bun.lock` is Bun's text lockfile with `lockfileVersion` 2. In a local test Bun
 1.4.0 installed from it and Bun 1.3.14 refused it (`UnknownLockfileVersion`).
