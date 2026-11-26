@@ -15,8 +15,8 @@ import {
 } from "./utils/socketMessageQueue";
 import { handleSocketMessageIngress } from "./utils/socketMessageIngress";
 import {
-  unregisterSocketIfCurrent,
   isCurrentVerifiedSocket,
+  retireClosedSocket,
 } from "./utils/socketAuth";
 import { releasePeer, SERVER_ID } from "./pubsub";
 import { PROTOCOL_VERSION } from "./utils/protocolV4";
@@ -95,11 +95,11 @@ export class P2PartyWS {
           if (ws.data.pongTimeout) clearTimeout(ws.data.pongTimeout);
           if (ws.data.pingInterval) clearInterval(ws.data.pingInterval);
           // A reconnect can replace this peer's registry entry before the old
-          // socket's close event runs. Never evict that authenticated successor.
+          // socket's close event runs, or be committing its own claim while it
+          // does. Never evict that successor or clear its claim.
           // releasePeer is guarded on SERVER_ID for the same reason: it must not
           // clear a claim another instance has already taken.
-          if (unregisterSocketIfCurrent(wsClients, ws))
-            await releasePeer(ws.data.peerId);
+          await retireClosedSocket(wsClients, ws, releasePeer);
           ws.terminate();
           events.close(ws);
         },

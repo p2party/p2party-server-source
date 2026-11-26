@@ -52,25 +52,31 @@ describe("cross-instance signal routing", () => {
     expect(/\n\s{2,}throw new Error/.test(body)).toBe(false);
   });
 
-  test("a peer is claimed only after its socket is verified", () => {
+  test("a peer is claimed only after its socket is verified, and registered only after its claim", () => {
     const handleMessage = readFileSync(
       join(utilsDir, "handleMessage.ts"),
       "utf8",
     );
     const authenticated = handleMessage.indexOf("if (authenticated)");
     const activation = handleMessage.indexOf("activateVerifiedSocket(");
+    const claimed = handleMessage.indexOf("claimPeer(peerId)");
     expect(authenticated).toBeGreaterThan(-1);
     expect(activation).toBeGreaterThan(authenticated);
+    expect(claimed).toBeGreaterThan(activation);
 
-    // registerVerifiedSocket is the gate: it returns false unless isVerified.
+    // activateVerifiedSocket refuses an unverified socket before it commits,
+    // and makes the socket routable here (and closes its predecessor) only
+    // after the commit. Behaviour: tests/utils/socketActivation.test.ts.
     const body =
       /export const activateVerifiedSocket[\s\S]*?\n\};/.exec(
         socketAuth,
       )?.[0] ?? "";
-    const gate = body.indexOf("registerVerifiedSocket(clients, ws)");
-    const claim = body.indexOf("claimPeer(ws.data.peerId)");
+    const gate = body.indexOf("!ws.data.isVerified");
+    const commit = body.indexOf("await commit(peerId)");
+    const register = body.indexOf("registerVerifiedSocket(clients, ws)");
     expect(gate).toBeGreaterThan(-1);
-    expect(claim).toBeGreaterThan(gate);
+    expect(commit).toBeGreaterThan(gate);
+    expect(register).toBeGreaterThan(commit);
   });
 
   test("release is guarded on this instance's id", () => {

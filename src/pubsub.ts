@@ -6,7 +6,10 @@ import { postgresConnection } from "./db/ssl";
 import { prisma } from "./prismaClient";
 import { wsClients } from "./wsServer";
 import { peerLogTag } from "./utils/logTag";
-import { isCurrentVerifiedSocket } from "./utils/socketAuth";
+import {
+  hasPendingActivation,
+  isCurrentVerifiedSocket,
+} from "./utils/socketAuth";
 
 import type { ProcessPrismaClient } from "./prismaClient";
 import type { P2PartyWSClient } from "./wsServer";
@@ -88,14 +91,17 @@ export const deliverPendingSignalsLocally = (
   for (const signal of signals) {
     const target = clients.get(signal.targetPeerId);
     if (!target) {
+      // A proved socket is registered only once its routing claim commits.
+      // Retain the row while one is activating rather than delete the only
+      // queued copy.
+      if (hasPendingActivation(clients, signal.targetPeerId)) continue;
       // This process no longer has the addressed socket; the row cannot become
       // deliverable here and must not replay forever.
       settled.push(signal.id);
       continue;
     }
-    // A cryptographically verified socket is inserted before its routing
-    // claim completes. Retain the row until activation rather than disclose
-    // SDP/ICE early or delete the only queued copy.
+    // A registered socket that is not current (one closing, or one replaced)
+    // keeps the row rather than disclose SDP/ICE to it.
     if (!isCurrentVerifiedSocket(clients, target)) continue;
     if (target.send(signal.payload) !== 0) settled.push(signal.id);
   }
@@ -384,18 +390,46 @@ export const sendToPeer = async (
     // No row, or no owner: the peer is not connected to any instance.
     if (!peer?.serverId) return false;
 
-    await prisma.pendingSignal.create({
-      data: {
-        targetServerId: peer.serverId,
-        targetPeerId: toPeerId,
-        payload,
-      },
+    return await sendToPeerOnServer(toPeerId, peer.serverId, payload);
+  } catch (error) {
+    console.error(
+      "p2party: failed to route signal to peer",
+      peerLogTag(toPeerId),
+      error,
+    );
+    return false;
+  }
+};
+
+/** A server id as claimPeer writes it: SERVER_ID, a lowercase UUID. */
+const SERVER_ID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Queue a frame for the process whose id is `serverId`, for a caller that has
+ * already read the target's routing claim (the relay's membership query
+ * returns it), so no second lookup is needed. Never throws, like sendToPeer.
+ *
+ * `store` and `notifier` default to this process's Prisma client and LISTEN
+ * connection; without the latter nothing is queued, as in sendToPeer.
+ */
+export const sendToPeerOnServer = async (
+  toPeerId: string,
+  serverId: string,
+  payload: string,
+  store: Pick<RoutingStore, "pendingSignal"> = prisma,
+  notifier: ActivityClient | undefined = listenClient,
+): Promise<boolean> => {
+  if (!notifier || !SERVER_ID_SHAPE.test(serverId)) return false;
+  try {
+    await store.pendingSignal.create({
+      data: { targetServerId: serverId, targetPeerId: toPeerId, payload },
     });
 
     // The NOTIFY carries no payload: the channel name alone tells the owner to
     // drain. That keeps the signal out of Postgres's notification queue and
     // clear of its 8000-byte payload limit.
-    await listenClient.query(`NOTIFY "server_${peer.serverId}"`);
+    await notifier.query(`NOTIFY "server_${serverId}"`);
     return true;
   } catch (error) {
     console.error(

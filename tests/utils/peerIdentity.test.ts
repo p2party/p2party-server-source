@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createHandleConnection } from "../../src/utils/handleConnection";
+import handleConnection from "../../src/utils/handleConnection";
 import {
   createPersistVerifiedIdentity,
   provisionalPeerId,
@@ -90,15 +90,20 @@ const peerTable = (rows: PeerRow[]) => {
     },
     upsert: async ({
       where,
+      update,
       create,
     }: {
       where: { publicKey: string };
+      update: { id?: string };
       create: { id: string; publicKey: string };
     }) => {
       const existing = rows.find(
         ({ publicKey }) => publicKey === where.publicKey,
       );
       if (existing) {
+        // A new id keeps the row's memberships, as ON UPDATE CASCADE on
+        // _PeerRooms does.
+        if (update.id !== undefined) existing.id = update.id;
         existing.updatedAt = new Date(NOW);
         return existing;
       }
@@ -164,35 +169,16 @@ const outcome = (attempt: Promise<boolean>) =>
   );
 
 describe("proof-gated durable identity", () => {
-  test("repeated unproved connections only read, and their stable candidate survives a new process", async () => {
-    let reads = 0;
-    const bootstrap = createHandleConnection({
-      peer: {
-        findUnique: async () => {
-          reads++;
-          return null;
-        },
-        upsert: () => {
-          throw new Error("unauthenticated write attempted");
-        },
-      },
-    } as never);
+  test("repeated unproved connections get one id derived from the key alone", async () => {
+    // No database is involved before the proof (see preAuthUniformity), so
+    // the id survives a new process.
     const ids = await Promise.all(
-      Array.from({ length: 12 }, () => bootstrap(key, socket())),
+      Array.from({ length: 12 }, () => handleConnection(key, socket())),
     );
-    expect(reads).toBe(12);
     expect(new Set(ids).size).toBe(1);
     expect(ids[0]).toBe(provisionalPeerId(key));
     expect(isUUID(ids[0], 4)).toBe(true);
     expect(provisionalPeerId("cd".repeat(32))).not.toBe(ids[0]);
-  });
-
-  test("existing pre-release random peer IDs are preserved", async () => {
-    const oldId = "00000000-0000-4000-8000-000000000001";
-    const bootstrap = createHandleConnection({
-      peer: { findUnique: async () => ({ id: oldId }) },
-    } as never);
-    expect(await bootstrap(key, socket())).toBe(oldId);
   });
 
   test("invalid proof or closed socket cannot start a persistence transaction", async () => {
@@ -240,23 +226,45 @@ describe("proof-gated durable identity", () => {
     expect(writes).toBe(1);
   });
 
-  test("a rollout race with a different persisted ID refuses activation", async () => {
-    let writes = 0;
+  test("a socket bound to an id not derived from its key persists nothing", async () => {
     const persist = createPersistVerifiedIdentity({
-      $transaction: async (run: (tx: unknown) => unknown) =>
-        run({
-          peer: {
-            findUnique: async () => ({
-              id: "00000000-0000-4000-8000-000000000001",
-            }),
-            upsert: async () => {
-              writes++;
-            },
-          },
-        }),
+      $transaction: () => {
+        throw new Error("unexpected database call");
+      },
     } as never);
-    await expect(persist(socket(true))).rejects.toThrow("reconnect required");
-    expect(writes).toBe(0);
+    await expect(
+      persist(socket(true, "00000000-0000-4000-8000-000000000001")),
+    ).rejects.toThrow("not derived from its key");
+  });
+
+  test("a pre-0.1.4 random peer id is re-keyed to the key's derived id at its next proof", async () => {
+    // Servers before 0.1.4 gave every key a random id. Answering with that id
+    // before the signature would tell anyone holding the public key that it
+    // is known, so every socket is bound to the derived id and the old row
+    // takes it at the first proof, keeping its rooms.
+    const legacyId = "0b5e0f2a-7d0c-4c55-9a3e-1f0d2c3b4a59";
+    const table = peerTable([
+      {
+        ...existingRow(legacyId, 30 * DAY, 2 * DAY, { rooms: 3 }),
+        publicKey: key,
+      },
+    ]);
+    const persist = createPersistVerifiedIdentity(
+      table.database,
+      () => {
+        throw new Error("re-keying an identity is not a new identity");
+      },
+      10,
+      () => NOW,
+    );
+
+    expect(await outcome(persist(provedSocket(key)))).toBe("persisted");
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows[0]).toMatchObject({
+      id: provisionalPeerId(key),
+      publicKey: key,
+      rooms: 3,
+    });
   });
 
   test("identity creation is charged to the socket's source key", async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import handleChallenge from "../../src/utils/handleChallenge";
 import { createFreshSocketChallenge } from "../../src/utils/socketAuth";
@@ -241,17 +241,23 @@ describe("WebSocket-bound challenge verification", () => {
       CHALLENGE_ID,
     );
 
-    const authenticated = await handleChallenge(
-      PEER_ID,
-      socket.ws,
-      challenge,
-      "ef".repeat(64),
-      {
-        verifySignature: async () => {
-          throw new Error("verifier crashed");
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    let authenticated: Awaited<ReturnType<typeof handleChallenge>>;
+    try {
+      authenticated = await handleChallenge(
+        PEER_ID,
+        socket.ws,
+        challenge,
+        "ef".repeat(64),
+        {
+          verifySignature: async () => {
+            throw new Error("verifier crashed");
+          },
         },
-      },
-    );
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
 
     expect(authenticated).toBe(false);
     // A thrown exception from the verification library is not evidence the
@@ -259,5 +265,44 @@ describe("WebSocket-bound challenge verification", () => {
     expect(socket.wasTerminated()).toBe(false);
     expect(socket.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
     expect(socket.ws.data.isAuthenticating).toBe(false);
+  });
+
+  test("a verification-library exception's text never reaches the client", async () => {
+    const socket = fakeSocket();
+    const challenge = "cd".repeat(32);
+    createFreshSocketChallenge(
+      socket.ws.data,
+      PEER_ID,
+      "ab".repeat(32),
+      challenge,
+      CHALLENGE_ID,
+    );
+
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await handleChallenge(PEER_ID, socket.ws, challenge, "ef".repeat(64), {
+        verifySignature: async () => {
+          throw new Error("libsodium: sodium_init failed at 0x7ffd");
+        },
+      });
+      // The operator log keeps the cause.
+      expect(consoleError).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(socket.sent).toHaveLength(1);
+    const frame = JSON.parse(socket.sent[0]!) as {
+      type: string;
+      fromAction: string;
+      error: { message: string };
+    };
+    expect(frame).toEqual({
+      type: "error",
+      fromAction: "sendChallengeResponse",
+      error: { message: "Challenge response could not be verified" },
+    });
+    expect(socket.sent[0]).not.toContain("libsodium");
+    expect(socket.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
   });
 });

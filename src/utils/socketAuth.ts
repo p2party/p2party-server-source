@@ -58,6 +58,10 @@ export interface ReplaceableSocketAuthClient extends CurrentSocketAuthClient {
  */
 export const PERMANENT_CLOSE_CODE = 1008;
 
+/** The reason sent with PERMANENT_CLOSE_CODE to a socket a newer session replaced. */
+export const REPLACED_SESSION_CLOSE_REASON =
+  "Replaced by a newer session for this identity";
+
 /**
  * Close code for a message that is well-formed JSON, declares a protocol
  * version the server matches, but violates the exact protocol-v4 wire shape
@@ -66,14 +70,16 @@ export const PERMANENT_CLOSE_CODE = 1008;
  * protocolV4.ts). Retrying changes nothing: the same bytes fail the same
  * validator forever, so this is the SDK's 1003 ("unsupported data") case --
  * a build mismatch, not PERMANENT_CLOSE_CODE's "you were refused or
- * superseded" case.
+ * superseded" case. A frame that declares another protocol version, or none,
+ * is the other build mismatch: it closes with this same code and the reason
+ * PROTOCOL_VERSION_MISMATCH_REASON (protocolV4.ts). The server speaks one
+ * version with no fallback, so the same build is refused on every socket.
  *
  * This must never be applied to a throw a healthy client can hit from a
  * transient or server-side cause: a stale/evicted socket sending a post-auth
- * frame, a protocolVersion mismatch (a rolling deploy can make this resolve
- * on the next socket, so it is not provably the client's fault), an
- * oversized frame, or a database fault surfaced as an exception. Those keep
- * closing with no code so the SDK's reconnect ladder keeps retrying.
+ * frame, an oversized frame, or a database fault surfaced as an exception.
+ * Those keep closing with no code so the SDK's reconnect ladder keeps
+ * retrying.
  */
 export const MALFORMED_PROTOCOL_CLOSE_CODE = 1003;
 
@@ -364,27 +370,56 @@ export const registerVerifiedSocket = <T extends ReplaceableSocketAuthClient>(
     // predecessor's client "do not retry, another session has taken over
     // this identity" -- correct even though this socket was never invalid,
     // only superseded.
-    predecessor.close(
-      PERMANENT_CLOSE_CODE,
-      "Replaced by a newer session for this identity",
-    );
+    predecessor.close(PERMANENT_CLOSE_CODE, REPLACED_SESSION_CLOSE_REASON);
   }
   return true;
 };
 
+/**
+ * Proved sockets of this process whose activation (identity persistence and
+ * routing claim) is in flight, per registry and peer id. They are not in the
+ * registry: the identity's current socket, if any, keeps working until one of
+ * them commits.
+ */
+const pendingActivations = new WeakMap<object, Map<string, Set<object>>>();
+/** The order in which sockets began activation in this process. */
+const activationOrder = new WeakMap<object, number>();
+let activationsBegun = 0;
+
+const isPendingActivation = (
+  clients: Map<string, unknown>,
+  ws: SocketAuthClient,
+): boolean =>
+  pendingActivations.get(clients)?.get(ws.data.peerId)?.has(ws) ?? false;
+
+/** Whether a socket for `peerId` is activating in this process. */
+export const hasPendingActivation = (
+  clients: Map<string, unknown>,
+  peerId: string,
+): boolean => (pendingActivations.get(clients)?.get(peerId)?.size ?? 0) > 0;
+
+/**
+ * A proved socket that owns its identity here, or is activating to. Such a
+ * socket's exact pong is accepted, so the transport stays alive while its
+ * routing claim commits; it may send nothing else until it is current.
+ */
 export const isCurrentProofOwnerSocket = <T extends CurrentSocketAuthClient>(
   clients: Map<string, T>,
   ws: T,
 ): boolean =>
   ws.readyState === 1 &&
   ws.data.isVerified === true &&
-  clients.get(ws.data.peerId) === ws;
+  (clients.get(ws.data.peerId) === ws || isPendingActivation(clients, ws));
 
+/** The registered, fully activated socket of its identity: the only one that may signal. */
 export const isCurrentVerifiedSocket = <T extends CurrentSocketAuthClient>(
   clients: Map<string, T>,
   ws: T,
 ): boolean =>
-  isCurrentProofOwnerSocket(clients, ws) && ws.data.isAuthenticating === false;
+  ws.readyState === 1 &&
+  ws.data.isVerified === true &&
+  ws.data.isAuthenticating === false &&
+  clients.get(ws.data.peerId) === ws;
 
 export const unregisterSocketIfCurrent = <T extends SocketAuthClient>(
   clients: Map<string, T>,
@@ -395,56 +430,105 @@ export const unregisterSocketIfCurrent = <T extends SocketAuthClient>(
 };
 
 /**
- * Register, claim routing ownership, then re-check the exact socket before any
- * caller subscribes it or emits an open event. A same-process replacement can
- * happen while claimPeer awaits PostgreSQL; only the map owner may activate.
+ * Remove a closed socket and release this process's routing claim when it was
+ * the last socket of its identity here.
+ *
+ * Every socket of one identity in this process shares one claim
+ * (Peer.serverId). A replaced socket is no longer registered and releases
+ * nothing. A current socket whose successor is still activating releases
+ * nothing either: the successor's claim write may already be in flight, and
+ * a release landing after it would clear it. That successor releases the
+ * claim itself if it then fails.
+ */
+export const retireClosedSocket = async <T extends SocketAuthClient>(
+  clients: Map<string, T>,
+  ws: T,
+  releasePeer: (peerId: string) => Promise<void>,
+): Promise<void> => {
+  if (
+    unregisterSocketIfCurrent(clients, ws) &&
+    !hasPendingActivation(clients, ws.data.peerId)
+  )
+    await releasePeer(ws.data.peerId);
+};
+
+/**
+ * Commit a proved socket's identity and routing claim, then make it the
+ * identity's current socket, closing any older one.
+ *
+ * Until `commit` succeeds the socket is not registered, so a failure at any
+ * step leaves the existing socket for this identity working and untouched.
+ * When two sockets of one identity activate at once, the one that began
+ * activating later wins: if it is already current when the earlier one
+ * commits, the earlier one closes as replaced. No await separates the final
+ * checks from registration, so exactly one socket ends up current.
+ *
+ * On failure the socket is closed bare (retryable) and its routing claim is
+ * released unless another socket of the identity holds or is activating it
+ * here, since those share the same claim.
  */
 export const activateVerifiedSocket = async <
   T extends ReplaceableSocketAuthClient,
 >(
   clients: Map<string, T>,
   ws: T,
-  claimPeer: (peerId: string) => Promise<boolean>,
+  commit: (peerId: string) => Promise<boolean>,
   releasePeer: (peerId: string) => Promise<void>,
 ): Promise<boolean> => {
-  // Cryptographic proof is complete, but the socket is not authorized to send
-  // post-auth frames until its cross-instance routing claim also succeeds.
-  ws.data.isAuthenticating = true;
-  if (ws.readyState !== 1 || !registerVerifiedSocket(clients, ws)) {
+  const { peerId } = ws.data;
+  if (
+    ws.readyState !== 1 ||
+    !ws.data.isVerified ||
+    !isCanonicalPublicKey(ws.data.publicKey) ||
+    !isUuid(peerId)
+  ) {
     ws.data.isVerified = false;
     ws.data.isAuthenticating = false;
     ws.close();
     return false;
   }
 
-  let claimed = false;
+  // Cryptographic proof is complete, but the socket is not authorized to send
+  // post-auth frames until its identity and routing claim have committed.
+  ws.data.isAuthenticating = true;
+  const order = ++activationsBegun;
+  activationOrder.set(ws, order);
+  let byPeer = pendingActivations.get(clients);
+  if (!byPeer) pendingActivations.set(clients, (byPeer = new Map()));
+  let pending = byPeer.get(peerId);
+  if (!pending) byPeer.set(peerId, (pending = new Set()));
+  pending.add(ws);
+
+  let committed = false;
   try {
-    claimed = await claimPeer(ws.data.peerId);
+    committed = await commit(peerId);
   } catch {
-    claimed = false;
+    committed = false;
+  } finally {
+    pending.delete(ws);
+    if (pending.size === 0 && byPeer.get(peerId) === pending)
+      byPeer.delete(peerId);
   }
 
-  const ownerAfterClaim = clients.get(ws.data.peerId);
-  if (
-    claimed &&
-    ws.readyState === 1 &&
-    ws.data.isVerified &&
-    ownerAfterClaim === ws
-  ) {
+  const owner = clients.get(peerId);
+  const replaced =
+    owner !== undefined &&
+    owner !== ws &&
+    (activationOrder.get(owner) ?? 0) > order;
+  if (committed && !replaced && ws.readyState === 1 && ws.data.isVerified) {
+    registerVerifiedSocket(clients, ws);
     ws.data.isAuthenticating = false;
     return true;
   }
 
-  const wasCurrent = unregisterSocketIfCurrent(clients, ws);
   ws.data.isVerified = false;
   ws.data.isAuthenticating = false;
-  ws.close();
-  // If close cleanup removed this socket before the awaited claim committed,
-  // the successful late write must be undone. A distinct local successor owns
-  // the same SERVER_ID claim, so releasing in that case would fence the winner.
-  const hasLocalSuccessor =
-    ownerAfterClaim !== undefined && ownerAfterClaim !== ws;
-  if (wasCurrent || (claimed && !hasLocalSuccessor))
-    await releasePeer(ws.data.peerId);
+  // A newer session took over while this one committed: final, like the
+  // eviction it would otherwise have suffered. Any other failure may retry.
+  if (committed && replaced)
+    ws.close(PERMANENT_CLOSE_CODE, REPLACED_SESSION_CLOSE_REASON);
+  else ws.close();
+  if (!clients.has(peerId) && !hasPendingActivation(clients, peerId))
+    await releasePeer(peerId);
   return false;
 };

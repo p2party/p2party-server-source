@@ -184,7 +184,7 @@ describe("verified socket registry", () => {
     expect(releases).toEqual([PEER_ID]);
   });
 
-  test("claim completion cannot activate a socket replaced during the await", async () => {
+  test("claim completion cannot activate a socket a later one replaced during the await", async () => {
     const clients = new Map<string, ReplaceableSocketAuthClient>();
     const displaced = replaceableSocket();
     const replacement = replaceableSocket();
@@ -207,18 +207,32 @@ describe("verified socket registry", () => {
         releases.push(peerId);
       },
     );
-    expect(clients.get(PEER_ID)).toBe(displaced);
+    // Proved and claiming: its pong is accepted, but it owns nothing yet.
+    expect(clients.has(PEER_ID)).toBe(false);
     expect(displaced.data.isAuthenticating).toBe(true);
     expect(isCurrentProofOwnerSocket(clients, displaced)).toBe(true);
     expect(isCurrentVerifiedSocket(clients, displaced)).toBe(false);
 
-    expect(registerVerifiedSocket(clients, replacement)).toBe(true);
-    expect(displaced.data.isVerified).toBe(false);
+    // A socket that began activating later commits first.
+    expect(
+      await activateVerifiedSocket(
+        clients,
+        replacement,
+        async () => true,
+        async (peerId) => {
+          releases.push(peerId);
+        },
+      ),
+    ).toBe(true);
     resolveClaim(true);
 
     expect(await activation).toBe(false);
-    expect(displaced.closeCalls).toBe(2);
+    expect(displaced.data.isVerified).toBe(false);
+    expect(displaced.closeArgs).toEqual([
+      { code: 1008, reason: "Replaced by a newer session for this identity" },
+    ]);
     expect(isCurrentVerifiedSocket(clients, replacement)).toBe(true);
+    expect(replacement.closeCalls).toBe(0);
     // The successor owns the same process claim; displaced cleanup must not
     // release it.
     expect(releases).toEqual([]);

@@ -13,7 +13,11 @@ const IDENTITY_PRUNE_MIN_AGE_MS = DAY_MS;
  */
 const IDENTITY_PRUNE_BATCH = 1000;
 
-/** A stable candidate for identities that have never proved ownership. */
+/**
+ * The peer id of an identity public key, derived from the key alone: every
+ * socket is bound to it before its proof, so the pre-authentication answer
+ * is the same whether or not the key has an identity row.
+ */
 export const provisionalPeerId = (publicKey: string): string => {
   if (!/^[0-9a-f]{64}$/.test(publicKey))
     throw new Error("Invalid identity public key");
@@ -32,7 +36,11 @@ export const provisionalPeerId = (publicKey: string): string => {
 const admitIdentityCreation = (ws: P2PartyWSClient): boolean =>
   ws.data.admission ? ws.data.admission.newIdentity() : admission.newIdentity();
 
-/** Persist only after signature verification, before the routing claim goes live. */
+/**
+ * Persist only after signature verification, before the routing claim goes
+ * live. A row that a server before 0.1.4 created with a random id is re-keyed
+ * to the derived id here; ON UPDATE CASCADE on `_PeerRooms` keeps its rooms.
+ */
 export const createPersistVerifiedIdentity =
   (
     prisma: Pick<ProcessPrismaClient, "$transaction">,
@@ -43,6 +51,8 @@ export const createPersistVerifiedIdentity =
   async (ws: P2PartyWSClient): Promise<boolean> => {
     if (!ws.data.isVerified || ws.readyState !== 1) return false;
     const { peerId, publicKey } = ws.data;
+    if (provisionalPeerId(publicKey) !== peerId)
+      throw new Error("Socket peer id is not derived from its key");
     const at = now();
     // Offline identities in no room, created over a day ago. Any last-seen
     // time qualifies, however old, except one inside the activation deadline:
@@ -61,12 +71,8 @@ export const createPersistVerifiedIdentity =
           where: { publicKey },
           select: { id: true },
         });
-        if (existing && existing.id !== peerId)
-          throw new Error(
-            "Identity changed during authentication; reconnect required",
-          );
         if (!existing) {
-          if (provisionalPeerId(publicKey) !== peerId || !admitCreation(ws))
+          if (!admitCreation(ws))
             throw new Error("Identity admission capacity reached");
           // A hard cap on every Peer row, whatever its age: nothing else
           // deletes identities, so rows past any retention window still count.
@@ -96,7 +102,8 @@ export const createPersistVerifiedIdentity =
           throw new Error("Authentication socket closed");
         await transaction.peer.upsert({
           where: { publicKey },
-          update: { lastPing: at },
+          // `id` changes only on a row with a pre-0.1.4 random id.
+          update: { id: peerId, lastPing: at },
           create: { id: peerId, publicKey, lastPing: at },
         });
       },

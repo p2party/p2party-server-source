@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
-import { createHandleConnection } from "../../src/utils/handleConnection";
+import handleConnection from "../../src/utils/handleConnection";
+import { provisionalPeerId } from "../../src/utils/peerIdentity";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
@@ -54,23 +55,19 @@ const errorFrame = (raw: string) =>
     error: { message: string };
   };
 
-describe("the identity-bootstrap socket survives a server-side fault", () => {
-  test("a peer-lookup fault closes with 1011 (retryable), not a bare terminate", async () => {
-    // Pool exhaustion or a replica hiccup is a server fault, not evidence the
-    // public key is bad. The old catch called ws.terminate(): no close code
-    // at all, so the client's reconnect ladder could not tell this apart
-    // from a permanent refusal, and terminate() also risks dropping the
-    // error frame ws.send() just queued.
+describe("identity bootstrap", () => {
+  test("a key that cannot be bound closes with 1011 (retryable), not a bare terminate", async () => {
+    // The upgrade handler admits only 64 lowercase hex characters, so this is
+    // a server-side invariant failing, not evidence about the client: a
+    // generic error frame, then a graceful close the client may retry.
     const ws = socket();
-    const handleConnection = createHandleConnection({
-      peer: {
-        findUnique: async () => {
-          throw new Error("connection pool exhausted");
-        },
-      },
-    } as never);
-
-    const peerId = await handleConnection(PUBLIC_KEY, ws);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    let peerId: string;
+    try {
+      peerId = await handleConnection("AB".repeat(32), ws);
+    } finally {
+      consoleError.mockRestore();
+    }
 
     expect(peerId).toBe("");
     expect(ws.wasTerminated()).toBe(false);
@@ -83,20 +80,13 @@ describe("the identity-bootstrap socket survives a server-side fault", () => {
     expect(frame.fromAction).toBe("requestPeerId");
   });
 
-  test("a successful lookup never closes the socket", async () => {
+  test("a valid key is bound to its derived id and never closed", async () => {
     const ws = socket();
-    const handleConnection = createHandleConnection({
-      peer: {
-        findUnique: async () => ({
-          id: "00000000-0000-4000-8000-000000000001",
-          publicKey: PUBLIC_KEY,
-        }),
-      },
-    } as never);
 
     const peerId = await handleConnection(PUBLIC_KEY, ws);
 
-    expect(peerId).toBe("00000000-0000-4000-8000-000000000001");
+    expect(peerId).toBe(provisionalPeerId(PUBLIC_KEY));
+    expect(ws.data.peerId).toBe(peerId);
     expect(ws.wasTerminated()).toBe(false);
     expect(ws.closeArgs).toEqual([]);
   });

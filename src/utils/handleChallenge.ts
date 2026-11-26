@@ -109,11 +109,12 @@ const handleChallenge = async (
     } satisfies WebSocketMessageSuccessfulChallenge;
   } catch (error) {
     ws.data.isAuthenticating = false;
+    // The library's own text stays in the operator log: it describes the
+    // server, not the client's proof.
+    console.error("Challenge verification failed", error);
     return rejectAuthentication(
       ws,
-      error instanceof Error
-        ? error.message
-        : "Challenge response could not be verified",
+      "Challenge response could not be verified",
       false,
     );
   }
