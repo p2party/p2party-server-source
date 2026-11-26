@@ -65,6 +65,58 @@ statement within its own bound of 60 seconds (normally a no-op); a re-key that
 runs past it is cancelled, changes nothing, and ends the start with the same
 kind of line. `Restart=always` then only repeats the refusal.
 
+## Host software
+
+None of the software the playbooks install on the hosts has a version pin in
+this repository, and every install uses `state: present` or runs only when the
+program is absent, so a host keeps what it was first given:
+
+- **Bun** (signaling host): the official installer, without a version, only
+  when `~p2party/.bun/bin/bun` is missing. `bun.version: latest` in
+  `group_vars/all/vars.yml` is read by no task. This release was tested with
+  Bun 1.4.5 and needs at least 1.4.0 on the host (above).
+- **Caddy** (signaling host): the `caddy` package from Caddy's Cloudsmith
+  `stable` repository. Caddy 2.11.9, the latest release on 2026-11-26
+  (checksum-verified), accepts the rendered `templates/Caddyfile.j2`
+  (`caddy validate`), and a silent WebSocket through its `reverse_proxy` block
+  stayed open for 75 seconds on 2.11.9; 2.11.6 introduced one-minute stall
+  timeouts. Since 2.11.6 Caddy also answers 431 to request headers over 16 KiB.
+- **coturn** (TURN host): the Ubuntu package. The latest upstream release is
+  4.19.2; installing it would mean installing from upstream instead of the
+  distribution.
+- **PostgreSQL** (database host): `postgresql-17` from the PostgreSQL apt
+  repository, in `playbooks/install-postgres.yml` and the Terraform cloud-init.
+  PostgreSQL 19 is the newest major; moving to it needs a `pg_upgrade` of the
+  live data directory, which no playbook here does.
+
+### First exercised at the release deploy
+
+These parts of this release could not be run on the hosts before the deploy,
+only locally as described:
+
+1. The host's Bun installing the migration tooling from `bun.lock` (above).
+   Locally, Bun 1.4.0, 1.4.4 and 1.4.5 installed it and 1.3.14 refused it.
+2. That install now includes TypeScript 7, a native compiler shipped as one
+   package per platform (`@typescript/typescript-linux-x64` on the host), since
+   the tooling installs development dependencies.
+3. Prisma 7.10.1's `migrate deploy`, run by the host's Bun, on a database whose
+   migration history Prisma 7.9.0 wrote. Locally, on PostgreSQL 18.7, 7.10.1
+   applied this release's three migrations after 7.9.0 had applied 0.1.4's two,
+   and `migrate resolve --applied` and `--rolled-back` behaved as described
+   below; the host runs PostgreSQL 17.
+4. The `p2party_linux_x64` binary from Bun 1.4.5. It was built locally with the
+   `build:linux` flags but not started; a macOS build with the same flags
+   passed its schema check and answered `/health`.
+5. `caddy validate` and the reload on the host's own Caddy version.
+6. On the operator's machine: `prisma generate` inside `bun run build:linux`
+   runs under the `node` on `PATH` when there is one (Prisma's command starts
+   with `#!/usr/bin/env node`; without one, Bun runs it). Prisma 7.10.1 needs
+   Node 20.19 or a later 20.x, 22.12 or a later 22.x, or 24.0 or newer; this
+   release was built with Node 26.13.1. `site.yml` now requires ansible-core
+   2.22.0.
+7. The next `./deploy/tf init -upgrade` and plan against the real state, with
+   hcloud 1.70.2 and Cloudflare 4.52.10; only the mocked tests have run.
+
 ## A failed or interrupted migration
 
 When `prisma migrate deploy` fails or is interrupted, the play ends with
