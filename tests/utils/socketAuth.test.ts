@@ -286,17 +286,91 @@ describe("TURN REST credentials", () => {
 
   test("derives credentials only from the supplied secret", () => {
     // The HMAC is unchanged by carrying the URLs: username stays the sole
-    // signed input, so existing coturn deployments keep verifying.
+    // signed input, so existing coturn deployments keep verifying. The vector
+    // is base64(HMAC-SHA1("s" x 32, username)) computed with openssl.
     expect(
       createTurnCredentials("ab".repeat(32), "s".repeat(32), 1_000, [
         "turns:turn.example.com:443?transport=tcp",
       ]),
     ).toEqual({
       urls: ["turns:turn.example.com:443?transport=tcp"],
-      username: `3601:${"ab".repeat(32)}`,
-      credential: "XY6V5LzRrbIFUOH5w0qdZ90iYuQ=",
-      expiresAtUnixSeconds: 3601,
+      username: `7200:${"ab".repeat(32)}`,
+      credential: "cQMbwalXfQkx+olsBoQDRecL5yM=",
+      expiresAtUnixSeconds: 7200,
     });
+  });
+
+  const LIFETIME = TURN_CREDENTIAL_CONTRACT.lifetimeSeconds;
+  const issueAt = (unixSeconds: number, publicKey = "ab".repeat(32)) =>
+    createTurnCredentials(publicKey, "s".repeat(32), unixSeconds * 1_000, [
+      "turns:turn.example.com:443?transport=tcp",
+    ])!;
+
+  test("turn username is stable within a lifetime", () => {
+    // Every instant of one lifetime window, (k - 1)L exclusive to kL inclusive.
+    const k = 493_000;
+    const window = [
+      (k - 1) * LIFETIME + 1,
+      (k - 1) * LIFETIME + 2,
+      (k - 1) * LIFETIME + 1_799,
+      k * LIFETIME - 1,
+      k * LIFETIME,
+    ];
+    const usernames = new Set(window.map((now) => issueAt(now).username));
+    expect([...usernames]).toEqual([
+      `${String((k + 1) * LIFETIME)}:${"ab".repeat(32)}`,
+    ]);
+    // The next window rotates the username.
+    expect(issueAt(k * LIFETIME + 1).username).toBe(
+      `${String((k + 2) * LIFETIME)}:${"ab".repeat(32)}`,
+    );
+    // Rounding never shortens a credential below one lifetime, and stays
+    // inside the SDK's accepted range (30 s to 24 h remaining).
+    for (const now of [...window, k * LIFETIME + 1]) {
+      const remaining = issueAt(now).expiresAtUnixSeconds - now;
+      expect(remaining).toBeGreaterThanOrEqual(LIFETIME);
+      expect(remaining).toBeLessThan(2 * LIFETIME);
+      expect(remaining).toBeGreaterThanOrEqual(30);
+      expect(remaining).toBeLessThanOrEqual(24 * 60 * 60);
+    }
+  });
+
+  test("fifth issuance in a lifetime returns the same credential", () => {
+    // Five joins at five different seconds of one window: on BASE each
+    // carried a different expiry second, so each was a new coturn username
+    // with its own user-quota.
+    const start = 493_000 * LIFETIME + 7;
+    const issued = [0, 1, 60, 900, 3_000].map((offset) =>
+      issueAt(start + offset),
+    );
+    expect(issued[4]).toEqual(issued[0]!);
+    expect(new Set(issued.map((c) => c.username)).size).toBe(1);
+    expect(new Set(issued.map((c) => c.credential)).size).toBe(1);
+    // A different identity in the same window gets its own username.
+    expect(issueAt(start, "cd".repeat(32)).username).not.toBe(
+      issued[0]!.username,
+    );
+  });
+
+  test("an identity holds at most two distinct usernames in any lifetime-long interval", () => {
+    // Sample every minute over three windows; any interval one lifetime long
+    // sees at most the current and the previous window's username, so the
+    // per-username coturn quota bounds one identity at twice its value.
+    const start = 493_000 * LIFETIME - 2 * LIFETIME;
+    const samples = Array.from({ length: (3 * LIFETIME) / 60 }, (_, i) => {
+      const now = start + i * 60;
+      return { now, username: issueAt(now).username };
+    });
+    let widest = 0;
+    for (const first of samples) {
+      const seen = new Set(
+        samples
+          .filter(({ now }) => now >= first.now && now < first.now + LIFETIME)
+          .map(({ username }) => username),
+      );
+      widest = Math.max(widest, seen.size);
+    }
+    expect(widest).toBe(2);
   });
 
   test("issues nothing when no relay endpoint is configured", () => {
@@ -393,7 +467,7 @@ describe("TURN REST credentials", () => {
     expect(credentials!.credential.length).toBeLessThanOrEqual(
       TURN_CREDENTIAL_CONTRACT.maxCredentialChars,
     );
-    expect(credentials!.expiresAtUnixSeconds).toBe(3601);
+    expect(credentials!.expiresAtUnixSeconds).toBe(7200);
   });
 
   test("rejects identities and times that cannot satisfy the SDK contract", () => {

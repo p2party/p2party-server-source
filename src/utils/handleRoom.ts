@@ -123,7 +123,9 @@ const handleRoomWithClient = async (
 
         // The relay endpoint travels with the room response because that is
         // where the client builds its RTCConfiguration. Credentials are
-        // short-lived and socket-identity-bound, so they are issued per join.
+        // short-lived and identity-bound and are issued with every join; all
+        // joins of one identity inside one credential lifetime receive the
+        // same credential (see createTurnCredentials).
         const turnCredentials = createTurnCredentials(
           ws.data.publicKey,
           process.env.COTURN_SECRET,

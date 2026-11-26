@@ -216,6 +216,22 @@ export const consumeSocketChallenge = (state: SocketAuthState): string => {
   return challengeId;
 };
 
+/**
+ * coturn REST credentials for one identity.
+ *
+ * The expiry is `now + lifetime` rounded up to a whole multiple of the
+ * lifetime, so it is the same for every issuance inside one lifetime window
+ * and a credential stays valid for at least one lifetime and less than two.
+ * coturn's `user-quota` counts allocations per username, so a stable username
+ * makes that quota a per-identity bound: repeated joins inside one window
+ * return the identical credential instead of a fresh username each second.
+ * At any instant one identity holds at most two valid usernames, this
+ * window's and the previous one's.
+ *
+ * The username still ends in the identity public key. SDK 0.14.10 rejects the
+ * whole `roomId` response unless the username is `<expiry>:<its own key>`, so
+ * an opaque username needs a client release that accepts it first.
+ */
 export const createTurnCredentials = (
   publicKey: string,
   secret: string | undefined,
@@ -231,9 +247,10 @@ export const createTurnCredentials = (
   if (!isCanonicalPublicKey(publicKey))
     throw new Error("TURN username public key is not canonical Ed25519 hex");
 
+  const lifetime = TURN_CREDENTIAL_CONTRACT.lifetimeSeconds;
   const nowUnixSeconds = Math.floor(now / 1000);
   const unixTimeStamp =
-    nowUnixSeconds + TURN_CREDENTIAL_CONTRACT.lifetimeSeconds;
+    Math.ceil((nowUnixSeconds + lifetime) / lifetime) * lifetime;
   if (
     !Number.isSafeInteger(nowUnixSeconds) ||
     nowUnixSeconds < 0 ||
