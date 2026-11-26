@@ -937,6 +937,7 @@ const ansibleDir = join(repoRoot, "deploy", "ansible");
 const playbooksDir = join(ansibleDir, "playbooks");
 const readAnsible = (path: string) =>
   readFileSync(join(ansibleDir, path), "utf8");
+
 /**
  * Tracked files under deploy/ansible/<prefix>, relative to deploy/ansible,
  * from `git ls-files`. No test lists a directory under deploy/: an ignored
@@ -979,19 +980,42 @@ const deployReadme = readFileSync(
 
 interface PreflightPlay {
   hosts: string;
-  connection: string;
+  connection?: string;
   gather_facts: boolean;
   become: boolean;
+  any_errors_fatal: boolean;
   tags: string[];
-  tasks: (PlaybookTask & { delegate_to?: string })[];
+  vars: Record<string, unknown>;
+  tasks: (PlaybookTask & {
+    delegate_to?: string;
+    run_once?: boolean;
+  })[];
 }
 
+const preflightPlay = () => {
+  const plays = Bun.YAML.parse(localPreflight()) as PreflightPlay[];
+  expect(plays.length).toBe(1);
+  return plays[0]!;
+};
+
 const preflightTask = (name: string) => {
-  const [play] = Bun.YAML.parse(localPreflight()) as PreflightPlay[];
-  const found = play!.tasks.find((t) => t.name === name);
+  const found = flatten(preflightPlay().tasks).find((t) => t.name === name);
   if (!found) throw new Error(`no pre-flight task named ${name}`);
   return found;
 };
+
+/** deploy.yml's entries: imported playbooks and plays, in order. */
+const deployEntries = () =>
+  Bun.YAML.parse(deploy) as {
+    name: string;
+    import_playbook?: string;
+    hosts?: string;
+    gather_facts?: boolean;
+    become?: boolean;
+    any_errors_fatal?: boolean;
+    vars?: Record<string, unknown>;
+    tasks?: PlaybookTask[];
+  }[];
 
 type Raw = Record<string, unknown>;
 
@@ -1090,14 +1114,7 @@ describe("toolchain pins", () => {
   });
 
   test("the build refuses a Bun other than the pinned one", () => {
-    const [play, ...others] = Bun.YAML.parse(
-      localPreflight(),
-    ) as PreflightPlay[];
-    expect(others).toEqual([]);
-    expect(play!.hosts).toBe("localhost");
-    expect(play!.connection).toBe("local");
-    expect(play!.gather_facts).toBe(false);
-    expect(play!.tags).toContain("always");
+    const play = preflightPlay();
     expect(localPreflight()).toContain(
       '"{{ playbook_dir }}/../group_vars/all/vars.yml"',
     );
@@ -1111,69 +1128,159 @@ describe("toolchain pins", () => {
         }
       ).that,
     ).toContain("(local_bun.stdout_lines | last | default('')) == bun.version");
-    // deploy.yml runs the pre-flight before every play, so before the build.
-    const plays = Bun.YAML.parse(deploy) as {
-      import_playbook?: string;
-      tasks?: PlaybookTask[];
-    }[];
-    expect(plays[0]!.import_playbook).toBe("local-preflight.yml");
-    const builds = plays.flatMap((p, i) =>
+    expect(play.any_errors_fatal).toBe(true);
+    // deploy.yml runs the pre-flight first, so before the build.
+    const entries = deployEntries();
+    expect(entries[0]!.import_playbook).toBe("local-preflight.yml");
+    const builds = entries.flatMap((p, i) =>
       flatten(p.tasks ?? [])
         .filter((t) => String(t.shell ?? "").includes("build_command"))
         .map(() => i),
     );
-    expect(builds.length).toBeGreaterThan(0);
-    for (const index of builds) expect(index).toBeGreaterThan(0);
+    expect(builds).toEqual([1]);
+  });
+
+  test("the pre-flight runs under a limit that excludes localhost", () => {
+    const play = preflightPlay();
+    // Every host of the run plus localhost: a --limit that leaves localhost
+    // out still matches the play. Its work runs once, on localhost.
+    expect(play.hosts).toBe("all:localhost");
+    expect(play.connection).toBeUndefined();
+    expect(play.gather_facts).toBe(false);
+    expect(play.tags).toContain("always");
+    expect(play.vars.ansible_become).toBe(false);
+    expect(play.tasks.length).toBe(1);
+    const [only] = play.tasks;
+    expect(only!.run_once).toBe(true);
+    expect(only!.delegate_to).toBe("localhost");
+    expect(only!.block!.map((t) => t.name)).toEqual([
+      "Require the ansible-core these playbooks were tested with",
+      "Find the Bun on PATH",
+      "Require the Bun package.json pins",
+    ]);
+    for (const t of flatten(only!.block!))
+      expect(
+        (t as { delegate_to?: string }).delegate_to ?? "localhost",
+        t.name,
+      ).toBe("localhost");
+  });
+
+  test("a later patch release of ansible-core is accepted and the next minor is refused", () => {
+    expect(allVars.ansible_core_tested).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(preflightPlay().vars.ansible_core_below).toBe(
+      "{{ ansible_core_tested.split('.')[0] }}.{{ (ansible_core_tested.split('.')[1] | int) + 1 }}",
+    );
+    expect(
+      (
+        preflightTask(
+          "Require the ansible-core these playbooks were tested with",
+        ).assert as { that: string[] }
+      ).that,
+    ).toEqual([
+      "ansible_version.full is version(ansible_core_tested, '>=')",
+      "ansible_version.full is version(ansible_core_below, '<')",
+    ]);
   });
 
   test("the host's Bun is checked before the service is stopped", () => {
-    const play = playWithTask(deploy, "Apply migrations against Postgres");
-    const prepare = task(
-      play,
-      "Prepare the release without touching the running workers",
+    // Its own play, after the local pre-flight and the build-record play and
+    // before postgres-tls.yml: before this run changes anything on a host.
+    const entries = deployEntries();
+    const at = (name: string) => entries.findIndex((e) => e.name === name);
+    const hostPlay = at("Require the pinned Bun on the signaling hosts");
+    expect(hostPlay).toBe(2);
+    expect(hostPlay).toBeGreaterThan(
+      at("Build the binary and check its build record on this machine"),
     );
-    const inBlock = (prepare.block ?? []).map((t) => t.name);
-    const host = "Require the pinned Bun on the signaling host";
-    // First in the block whose rescue reports that production is untouched,
-    // so nothing on the host changes before it.
-    expect(inBlock[0]).toBe(host);
-    expect(inBlock.indexOf(host)).toBeLessThan(
-      inBlock.indexOf("Install exactly the audited migration dependencies"),
-    );
-    expect((prepare.rescue ?? []).map((t) => t.name)).toContain(
-      "Report that preparing the release failed",
-    );
-    for (const later of [
-      "Stop and disable every signaling worker before migrating",
-      "Apply migrations against Postgres",
-    ])
-      expect(position(play, host)).toBeLessThan(position(play, later));
-    expect(task(play, host).import_tasks).toBe(
-      "{{ playbook_dir }}/../tasks/require-pinned-bun.yml",
-    );
-    // The imported tasks run the host's own Bun as the app account, compare
-    // it with the pin, and report rather than crash.
-    const [read, require] = Bun.YAML.parse(pinnedBunTasks()) as PlaybookTask[];
-    expect(read!.command).toEqual({
+    expect(hostPlay).toBeLessThan(at("Provision verified PostgreSQL TLS"));
+    expect(hostPlay).toBeLessThan(at("Deploy p2party signaling server"));
+    expect(
+      entries[at("Provision verified PostgreSQL TLS")]!.import_playbook,
+    ).toBe("postgres-tls.yml");
+    const play = entries[hostPlay]!;
+    expect(play.hosts).toBe("signaling_production");
+    expect(play.gather_facts).toBe(false);
+    expect(play.any_errors_fatal).toBe(true);
+    expect(play.tasks).toEqual([
+      {
+        name: "Require the pinned Bun on the signaling host",
+        import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml",
+      },
+    ]);
+    // The imported tasks only read: the host's own Bun as the app account,
+    // and the architecture for the message; then the comparison.
+    const tasks = Bun.YAML.parse(pinnedBunTasks()) as PlaybookTask[];
+    expect(
+      tasks.map((t) =>
+        Object.keys(t).find((k) => k === "command" || k === "assert"),
+      ),
+    ).toEqual(["command", "command", "assert"]);
+    expect(tasks[0]!.command).toEqual({
       argv: ["{{ bun.install_dir }}/bin/bun", "--version"],
     });
-    expect(read!.become_user).toBe("{{ app.user }}");
-    expect(read!.failed_when).toBe(false);
-    expect((require!.assert as { that: string[] }).that).toContain(
+    for (const t of tasks.slice(0, 2)) {
+      expect(t.become_user, t.name).toBe("{{ app.user }}");
+      expect(t.failed_when, t.name).toBe(false);
+      expect((t as { changed_when?: unknown }).changed_when, t.name).toBe(
+        false,
+      );
+    }
+    expect((tasks[2]!.assert as { that: string[] }).that).toContain(
       "(pinned_bun_found.stdout | trim) == bun.version",
     );
+    // Nothing of the deploy play's prepare block checks it any more.
+    const deployPlay = playWithTask(
+      deploy,
+      "Apply migrations against Postgres",
+    );
+    expect(
+      flatten(deployPlay.tasks).some(
+        (t) => t.name === "Require the pinned Bun on the signaling host",
+      ),
+    ).toBe(false);
   });
 
   test("a binary is deployed only with a build record naming the pinned Bun, and staged byte for byte", () => {
-    const play = playWithTask(deploy, "Apply migrations against Postgres");
-    const at = (name: string) => position(play, name);
-    const record = task(play, "Record how the binary was built");
+    const entries = deployEntries();
+    const buildAt = entries.findIndex(
+      (e) =>
+        e.name ===
+        "Build the binary and check its build record on this machine",
+    );
+    expect(buildAt).toBe(1);
+    const build = entries[buildAt]!;
+    expect(build.hosts).toBe("signaling_production");
+    expect(build.gather_facts).toBe(false);
+    expect(build.any_errors_fatal).toBe(true);
+    expect(build.vars?.ansible_become).toBe(false);
+    expect(build.tasks!.length).toBe(1);
+    const [wrapper] = build.tasks! as (PlaybookTask & {
+      run_once?: boolean;
+      delegate_to?: string;
+    })[];
+    expect(wrapper!.run_once).toBe(true);
+    expect(wrapper!.delegate_to).toBe("localhost");
+    const names = flatten(wrapper!.block!).map((t) => t.name);
+    const order = [
+      "Build the Linux binary from this repo",
+      "Write the build record beside the binary",
+      "Confirm the binary exists before touching the host",
+      "Parse the build record",
+      "Require a build record that matches the binary and the pinned Bun",
+    ];
+    for (let i = 1; i < order.length; i++)
+      expect(names.indexOf(order[i - 1]!), order[i]).toBeLessThan(
+        names.indexOf(order[i]!),
+      );
+    const record = flatten(wrapper!.block!).find(
+      (t) => t.name === "Record how the binary was built",
+    )!;
     expect(record.when).toBe("not (skip_build | default(false) | bool)");
-    expect(
-      (record.vars as Record<string, unknown> | undefined)?.ansible_become,
-    ).toBe(false);
-    const write = task(play, "Write the build record beside the binary");
-    expect(write.copy?.dest).toBe(
+    const write = flatten(wrapper!.block!).find(
+      (t) => t.name === "Write the build record beside the binary",
+    )!;
+    expect(write.copy?.dest).toBe("{{ build_record_path }}");
+    expect(build.vars?.build_record_path).toBe(
       "{{ repo_path }}/{{ binary_name }}.build.json",
     );
     expect(
@@ -1181,30 +1288,29 @@ describe("toolchain pins", () => {
         (write.vars as unknown as { build_record: object }).build_record,
       ),
     ).toEqual(["artefact", "sha256", "bun", "commit", "dirty"]);
-    // The record check has no `when`: it also guards --skip-build, before
-    // anything is staged.
-    const check = task(
-      play,
-      "Require a build record that matches the binary and the pinned Bun",
-    );
+    // A missing or damaged record parses to nothing instead of failing the
+    // parse, so the check names it.
+    const read = flatten(wrapper!.block!).find(
+      (t) => t.name === "Read the build record",
+    )!;
+    expect(read.rescue?.map((t) => t.name)).toEqual([
+      "Treat a missing or unreadable build record as none",
+    ]);
+    // The record check has no `when`: it also guards --skip-build.
+    const check = flatten(wrapper!.block!).find(
+      (t) =>
+        t.name ===
+        "Require a build record that matches the binary and the pinned Bun",
+    )!;
     expect(check.when).toBeUndefined();
     expect((check.assert as { that: string[] }).that).toEqual([
       "build_record.sha256 | default('') == built_binary.stat.checksum",
       "build_record.bun | default('') == bun.version",
     ]);
-    expect(at("Build the Linux binary from this repo")).toBeLessThan(
-      at("Write the build record beside the binary"),
-    );
-    expect(at("Write the build record beside the binary")).toBeLessThan(
-      at("Require a build record that matches the binary and the pinned Bun"),
-    );
-    expect(
-      at("Require a build record that matches the binary and the pinned Bun"),
-    ).toBeLessThan(
-      at("Prepare the release without touching the running workers"),
-    );
     // After staging, inside the prepare block, before any worker stops: the
     // staged file is read (not run) and must be the built one.
+    const play = playWithTask(deploy, "Apply migrations against Postgres");
+    const at = (name: string) => position(play, name);
     const prepare = task(
       play,
       "Prepare the release without touching the running workers",
@@ -1379,16 +1485,11 @@ describe("toolchain pins", () => {
       }[];
       expect(first?.import_playbook, file).toBe("local-preflight.yml");
     }
-    const [play] = Bun.YAML.parse(localPreflight()) as PreflightPlay[];
-    for (const t of play!.tasks) expect(t.delegate_to, t.name).toBeUndefined();
-    expect(
-      (
-        preflightTask(
-          "Require the ansible-core these playbooks were tested with",
-        ).assert as { that: string[] }
-      ).that,
-    ).toEqual(["ansible_version.full == ansible_core_tested"]);
-    expect(allVars.ansible_core_tested).toMatch(/^\d+\.\d+\.\d+$/);
+    // No facts, and every task delegated to localhost: no host is contacted.
+    const play = preflightPlay();
+    expect(play.gather_facts).toBe(false);
+    for (const t of play.tasks)
+      expect([t.delegate_to, t.run_once], t.name).toEqual(["localhost", true]);
   });
 
   test("the README's host Bun instructions name the pinned release", () => {

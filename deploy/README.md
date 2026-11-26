@@ -53,38 +53,44 @@ kind of line. `Restart=always` then only repeats the refusal.
 ## Which Bun, and where it is checked
 
 `package.json`'s `packageManager` is the one place the Bun version is written
-(`bun@1.4.5`); CI tests with it, and `group_vars/all/vars.yml` reads it into
-`bun.version`. Bun itself does not enforce `packageManager` or `engines`, so
-the playbooks require that exact version in three places, each before anything
-changes:
+(`bun@1.4.5`); CI's `setup-bun` reads it from there (`bun-version-file`), and
+`group_vars/all/vars.yml` reads it into `bun.version`. Bun itself does not
+enforce `packageManager` or `engines`, so `deploy.yml` requires that exact
+version in three checks that run before it changes anything on any host, in
+this order, and compares the staged binary afterwards:
 
 1. **On the control machine.** `playbooks/local-preflight.yml`, the first play
    of every playbook here, requires `bun --version` on `PATH` to equal the pin,
-   because `bun build --compile` embeds the Bun that runs it. It also requires
-   the ansible-core these playbooks were tested with (`ansible_core_tested`,
-   2.22.0). It runs on this machine only, before any host is contacted, also
-   with `--skip-build`.
-2. **The signaling host's own Bun**, `~p2party/.bun/bin/bun`, which installs and
-   runs the migration tooling from `bun.lock`. The first task of the deploy's
-   prepare block requires it to equal the pin, before the tooling is installed
-   and long before any worker is stopped. `playbooks/initial-setup.yml` installs
-   Bun only when it is absent and never upgrades it, so an existing host may
-   fail here; the play then ends at "Report that preparing the release failed"
-   with production untouched, and prints the install command below.
-3. **The binary.** The deploy's build step writes a build record beside it,
-   `builds/p2party_linux_x64.build.json`: the Bun that built it (the
-   pre-flight has just required the pin), the commit, whether the tree had
-   changes (`dirty`), and the binary's SHA-256. Every deploy, `--skip-build`
-   included, then requires on the control machine, before anything is staged,
-   that the record exists, matches the binary's SHA-256 and names the pin; a
-   binary built by hand, rebuilt after its record, or built with another Bun
-   is refused. After staging, the staged file's SHA-256 (read with `stat`,
-   symlinks not followed) must equal the built binary's. Nothing staged is
-   executed on the host: a worker's account owns the staging directory's
-   parent, so running it, as root above all, would run whatever was put
-   there. The record's commit and dirty flag are there to prove later that a
-   `--skip-build` binary is the build of the tree being deployed; nothing
-   compares them yet.
+   because `bun build --compile` embeds the Bun that runs it, and refuses a pin
+   for which `bun.release_sha256` records no hashes. It also requires the
+   ansible-core these playbooks were tested with: `ansible_core_tested`
+   (2.22.0) or a later patch release of that minor line, below 2.23. Its tasks
+   run once, on this machine only, without facts; the play also matches every
+   host of the run, so a `--limit` that leaves `localhost` out does not skip
+   it. It runs with `--skip-build` too.
+2. **The binary's build record**, `deploy.yml`'s second play, also on this
+   machine only. The build (skipped with `--skip-build`) writes a record beside
+   the binary, `builds/p2party_linux_x64.build.json`: the Bun that built it
+   (the pre-flight has just required the pin), the commit, whether the tree
+   had changes (`dirty`), and the binary's SHA-256. Every deploy then requires
+   that the record exists and is valid JSON, matches the binary's SHA-256 and
+   names the pin; a binary built by hand, rebuilt after its record, or built
+   with another Bun is refused, and so is a missing or damaged record. The
+   commit and dirty flag are there to prove later that a `--skip-build` binary
+   is the build of the tree being deployed; nothing compares them yet.
+3. **The signaling host's own Bun**, `~p2party/.bun/bin/bun`, which installs
+   and runs the migration tooling from `bun.lock`. `deploy.yml`'s third play
+   only reads: it runs that Bun's `--version` as `p2party` and requires the
+   pin, before `postgres-tls.yml` and the deploy play change anything.
+   `playbooks/initial-setup.yml` installs Bun only when it is absent and never
+   upgrades it, so an existing host may fail here; the message prints the
+   install command below.
+
+Then, in the deploy play's prepare block, after the binary is staged and before
+any worker is stopped, the staged file's SHA-256 (read with `stat`, symlinks not
+followed) must equal the built binary's. Nothing staged is executed on the
+host: a worker's account owns the staging directory's parent, so running it,
+as root above all, would run whatever was put there.
 
 To install the pinned Bun on the signaling host, download the release zip for
 its architecture and check it before unpacking. The SHA-256 values for
@@ -160,14 +166,14 @@ deploy time: the deploy checks it ([Which Bun, and where it is checked](#which-b
 These parts of this release could not be run on the hosts before the deploy,
 only locally as described:
 
-1. The host's Bun check, the build record and the staged-binary hash
-   ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
-   Locally, the host check ran against a scratch home (passing for 1.4.5,
-   refusing 1.4.4 and a missing Bun), the pre-flight against this machine, and
-   the build-record and staged-hash tasks, taken verbatim from `deploy.yml`,
-   against a scratch repository and staging directory (refusing a missing
-   record, a binary changed after its record, a binary built with 1.4.4 and a
-   staged symlink); on the signaling host they have not run.
+1. The checks above. Locally, the pre-flight ran against this machine (also
+   under a `--limit` that leaves `localhost` out, with a stand-in host that
+   was never contacted), the host check against a scratch home (passing for
+   1.4.5, refusing 1.4.4 and a missing Bun), and the build-record and
+   staged-hash tasks, taken verbatim from `deploy.yml`, against a scratch
+   repository and staging directory (refusing a missing, truncated or stale
+   record, a binary built with 1.4.4 and a staged symlink); on the signaling
+   host they have not run.
 2. The migration tooling install now includes TypeScript 7, a native compiler shipped as one
    package per platform (`@typescript/typescript-linux-x64` on the host), since
    the tooling installs development dependencies.
@@ -187,8 +193,8 @@ only locally as described:
    runs under the `node` on `PATH` when there is one (Prisma's command starts
    with `#!/usr/bin/env node`; without one, Bun runs it). Prisma 7.10.1 needs
    Node 20.19 or a later 20.x, 22.12 or a later 22.x, or 24.0 or newer; this
-   release was built with Node 26.13.1. Every playbook now requires exactly
-   ansible-core 2.22.0 (the pre-flight).
+   release was built with Node 26.13.1. Every playbook now requires
+   ansible-core 2.22.0 or a later 2.22 patch release (the pre-flight).
 7. The next `./deploy/tf init -upgrade` and plan against the real state, with
    hcloud 1.70.2 and Cloudflare 4.52.10; only the mocked tests have run. See
    [Terraform after this release](#terraform-after-this-release) first.

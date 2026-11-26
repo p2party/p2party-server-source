@@ -3,20 +3,25 @@
 # ============================================================================
 # Imported as the first play of every playbook in this directory
 # (tests/deploy.contract.test.ts checks), so it runs before any host is
-# contacted. It runs on the control machine only, with no connection to any
-# host, and stops the run unless this machine has:
-#   * the ansible-core these playbooks were tested with (ansible_core_tested);
-#   * the Bun package.json pins (packageManager), which CI tests with and which
-#     `bun build --compile` embeds in the binary deploy.yml builds here. Bun
-#     itself does not enforce `engines` or `packageManager`.
-# deploy.yml also checks the signaling host's Bun and the staged binary's.
+# contacted. Its tasks run on the control machine only, and it stops the run
+# unless this machine has:
+#   * the ansible-core these playbooks were tested with: ansible_core_tested or
+#     a later patch release of the same minor line;
+#   * exactly the Bun package.json pins (packageManager), which CI installs
+#     and which `bun build --compile` embeds in the binary deploy.yml builds
+#     here. Bun itself does not enforce `engines` or `packageManager`.
+# The play targets every host of the run plus localhost, so a --limit that
+# leaves localhost out does not skip it, and runs its tasks once, delegated to
+# localhost, without gathering facts, so no host is contacted. deploy.yml then
+# builds the binary and checks its build record, also on this machine, and
+# reads the signaling host's Bun, all before any host is changed.
 # ============================================================================
 ---
 - name: Check this machine's toolchain before any host is contacted
-  hosts: localhost
-  connection: local
+  hosts: all:localhost
   gather_facts: false
   become: false
+  any_errors_fatal: true
   tags: [always]
   vars_files:
     - "{{ playbook_dir }}/../group_vars/all/vars.yml"
@@ -24,39 +29,49 @@
     # An inventory may set ansible_become for every host; the connection
     # variable outranks the play keyword, and nothing here needs root.
     ansible_become: false
+    # The first release of the next minor line, which is not accepted.
+    ansible_core_below: >-
+      {{ ansible_core_tested.split('.')[0] }}.{{ (ansible_core_tested.split('.')[1] | int) + 1 }}
 
   tasks:
-    - name: Require the ansible-core these playbooks were tested with
-      assert:
-        that:
-          - ansible_version.full == ansible_core_tested
-        fail_msg: >-
-          These playbooks were tested with ansible-core {{ ansible_core_tested }}
-          (ansible_core_tested in group_vars/all/vars.yml); this is ansible-core
-          {{ ansible_version.full }}. Run them with ansible-core
-          {{ ansible_core_tested }}.
+    - name: Check the toolchain on this machine only
+      run_once: true
+      delegate_to: localhost
+      block:
+        - name: Require the ansible-core these playbooks were tested with
+          assert:
+            that:
+              - ansible_version.full is version(ansible_core_tested, '>=')
+              - ansible_version.full is version(ansible_core_below, '<')
+            fail_msg: >-
+              These playbooks were tested with ansible-core
+              {{ ansible_core_tested }} (ansible_core_tested in
+              group_vars/all/vars.yml) and accept it or a later patch release
+              of its minor line, below {{ ansible_core_below }}; this is
+              ansible-core {{ ansible_version.full }}.
 
-    - name: Find the Bun on PATH
-      shell: command -v bun && bun --version
-      register: local_bun
-      changed_when: false
-      failed_when: false
+        - name: Find the Bun on PATH
+          shell: command -v bun && bun --version
+          register: local_bun
+          changed_when: false
+          failed_when: false
 
-    - name: Require the Bun package.json pins
-      assert:
-        that:
-          - bun.version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
-          - bun.version in bun.release_sha256
-          - local_bun.rc == 0
-          - (local_bun.stdout_lines | last | default('')) == bun.version
-        fail_msg: >-
-          {% if bun.version not in bun.release_sha256 %}package.json pins Bun
-          {{ bun.version }}, but group_vars/all/vars.yml records no SHA-256 for
-          that release (bun.release_sha256): add both Linux zips' hashes from
-          its signed SHASUMS256.txt, as deploy/README.md describes, and update
-          the README's table. {% else %}package.json pins Bun {{ bun.version }} (packageManager), and the
-          binary deploy.yml builds embeds the bun on this machine's PATH, but
-          {% if local_bun.rc == 0 %}{{ local_bun.stdout_lines | first }} is Bun
-          {{ local_bun.stdout_lines | last }}{% else %}there is no bun on
-          PATH{% endif %}. Put Bun {{ bun.version }} first on PATH, from
-          https://github.com/oven-sh/bun/releases/tag/bun-v{{ bun.version }}.{% endif %}
+        - name: Require the Bun package.json pins
+          assert:
+            that:
+              - bun.version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+              - bun.version in bun.release_sha256
+              - local_bun.rc == 0
+              - (local_bun.stdout_lines | last | default('')) == bun.version
+            fail_msg: >-
+              {% if bun.version not in bun.release_sha256 %}package.json pins Bun
+              {{ bun.version }}, but group_vars/all/vars.yml records no SHA-256 for
+              that release (bun.release_sha256): add both Linux zips' hashes from
+              its signed SHASUMS256.txt, as deploy/README.md describes, and update
+              the README's table. {% else %}package.json pins Bun {{ bun.version }}
+              (packageManager), and the binary deploy.yml builds embeds the bun
+              on this machine's PATH, but {% if local_bun.rc == 0 %}{{
+              local_bun.stdout_lines | first }} is Bun {{ local_bun.stdout_lines
+              | last }}{% else %}there is no bun on PATH{% endif %}. Put Bun
+              {{ bun.version }} first on PATH, from
+              https://github.com/oven-sh/bun/releases/tag/bun-v{{ bun.version }}.{% endif %}
