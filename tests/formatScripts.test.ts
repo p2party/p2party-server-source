@@ -56,6 +56,7 @@ test(
         join(work, "node_modules"),
       );
       writeFileSync(join(work, "tracked.ts"), "export const tracked = 1;\n");
+      writeFileSync(join(work, "deleted.ts"), "export const deleted = 1;\n");
       writeFileSync(join(work, "x.tfstate"), UNTRACKED_STATE);
       mkdirSync(join(work, "deploy", "ansible", "group_vars", "all"), {
         recursive: true,
@@ -94,6 +95,7 @@ test(
           ".prettierignore",
           ".prettierrc",
           "tracked.ts",
+          "deleted.ts",
           "deploy/ansible/.gitignore",
         ).exitCode,
       ).toBe(0);
@@ -136,6 +138,14 @@ test(
       expect(readFileSync(join(vault, "vault.yml"), "utf8")).toBe(
         IGNORED_VAULT,
       );
+
+      // A tracked file deleted in the work tree (still in the index) is
+      // skipped, not an error.
+      rmSync(join(work, "deleted.ts"));
+      expect(run("git", "ls-files").output).toContain("deleted.ts");
+      const afterDelete = run(bun, "run", "format:check");
+      expect(afterDelete.exitCode, afterDelete.output).toBe(0);
+      expect(run(bun, "run", "format").exitCode).toBe(0);
 
       // The scripts do check and rewrite a tracked file.
       writeFileSync(join(work, "tracked.ts"), "export const tracked=1\n");
