@@ -107,3 +107,41 @@ run "previously_managed_rule_can_be_enabled" {
     error_message = "The reviewed, previously managed rule must remain updatable."
   }
 }
+
+# The rule has been live on the apex since 2026-09-09 with both flags enabled.
+# Without a new opt-in, a plan must leave its match and HSTS value unchanged.
+run "live_rule_keeps_its_apex_match_and_hsts_value" {
+  command = plan
+
+  variables {
+    manage_frontend_response_headers  = true
+    frontend_response_headers_enabled = true
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].expression == "(http.host eq \"p2party.com\")"
+    error_message = "Extending the rule beyond the apex must be an explicit opt-in."
+  }
+
+  assert {
+    condition = one([
+      for header in cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters[0].headers :
+      header.value if header.name == "Strict-Transport-Security"
+    ]) == "max-age=63072000; includeSubDomains; preload"
+    error_message = "The HSTS value served since 2026-09-09 must not change as a side effect."
+  }
+}
+
+run "header_rule_covers_every_app_hostname_after_opt_in" {
+  command = plan
+
+  variables {
+    manage_frontend_response_headers        = true
+    frontend_response_headers_all_app_hosts = true
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].expression == "(http.host in {\"p2party.com\" \"www.p2party.com\" \"dev.p2party.com\"})"
+    error_message = "The security headers must reach the apex, www and dev, and not the SDK CDN."
+  }
+}

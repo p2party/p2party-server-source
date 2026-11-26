@@ -21,9 +21,20 @@ locals {
     ])
     "Permissions-Policy"        = "camera=(), geolocation=(), payment=(), usb=(), microphone=(self)"
     "Referrer-Policy"           = "no-referrer"
-    "Strict-Transport-Security" = "max-age=63072000; includeSubDomains; preload"
+    "Strict-Transport-Security" = local.frontend_hsts_header # p2party_frontend_tls.tf
     "X-Content-Type-Options"    = "nosniff"
   }
+
+  # Every hostname that serves the app or redirects to it. cdn is left out: it
+  # serves SDK files to other sites, where nosniff and this CSP do not belong.
+  frontend_app_hosts = ["p2party.com", "www.p2party.com", "dev.p2party.com"]
+
+  # Until the opt-in, the expression stays byte-identical to the live rule.
+  frontend_response_headers_expression = (
+    var.frontend_response_headers_all_app_hosts
+    ? "(http.host in {${join(" ", [for host in local.frontend_app_hosts : jsonencode(host)])}})"
+    : "(http.host eq \"p2party.com\")"
+  )
 }
 
 # A permission failure stops an opted-in plan. Missing API access must never be
@@ -53,7 +64,7 @@ resource "cloudflare_ruleset" "frontend_response_headers" {
   rules {
     ref         = local.frontend_response_rule_ref
     description = "p2party.com frontend security headers"
-    expression  = "(http.host eq \"p2party.com\")"
+    expression  = local.frontend_response_headers_expression
     action      = "rewrite"
     enabled     = var.frontend_response_headers_enabled
 

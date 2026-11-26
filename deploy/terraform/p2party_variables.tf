@@ -35,7 +35,7 @@ variable "deploy_wireguard" {
 # ============================================================================
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token with Zone:Edit and DNS:Edit; frontend response headers also require Zone Transform Rules:Edit"
+  description = "Cloudflare API token with Zone:Edit and DNS:Edit; frontend response headers also require Zone Transform Rules:Edit, edge TLS settings Zone Settings:Edit, and the www redirect Single Redirect:Edit"
   type        = string
   sensitive   = true
 }
@@ -53,6 +53,30 @@ variable "manage_frontend_response_headers" {
 
 variable "frontend_response_headers_enabled" {
   description = "Activate frontend headers only after the CSP-compatible frontend build is deployed and tested"
+  type        = bool
+  default     = false
+}
+
+variable "frontend_response_headers_all_app_hosts" {
+  description = "Extend the frontend header rule from p2party.com to www and dev only after dev serves a CSP-compatible build; see deploy/README.md"
+  type        = bool
+  default     = false
+}
+
+variable "manage_frontend_tls_settings" {
+  description = "Enforce Always Use HTTPS, minimum TLS 1.2 and HSTS on the proxied frontend hostnames; see deploy/README.md"
+  type        = bool
+  default     = false
+}
+
+variable "manage_frontend_www_redirect" {
+  description = "Manage the single-redirect ruleset for www after checking existing phase ownership; see deploy/README.md"
+  type        = bool
+  default     = false
+}
+
+variable "frontend_www_redirect_enabled" {
+  description = "Activate the www to https://p2party.com redirect only after the disabled rule has been created and reviewed"
   type        = bool
   default     = false
 }

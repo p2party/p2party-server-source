@@ -26,6 +26,7 @@ deploy_wireguard = true
 # Get API token: https://dash.cloudflare.com/profile/api-tokens
 # Required permissions: Zone:Edit, DNS:Edit
 # Managing frontend headers also requires Zone Transform Rules:Edit for this zone.
+# Edge TLS settings require Zone Settings:Edit; the www redirect Single Redirect:Edit.
 # Prefer environment variables instead:
 #   export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
 #   export TF_VAR_cloudflare_zone_id_p2party="your-zone-id-for-p2party.com"
@@ -38,6 +39,15 @@ deploy_wireguard = true
 # See ../README.md#frontend-response-headers for the rollout and ownership checks.
 # manage_frontend_response_headers = false
 # frontend_response_headers_enabled = false
+# Extend the header rule to www and dev only after dev serves a CSP-compatible build.
+# frontend_response_headers_all_app_hosts = false
+
+# Frontend HTTPS and TLS, also explicit opt-ins. The redirect follows the same
+# create-disabled-then-enable steps; the TLS settings take effect on apply.
+# See ../README.md#frontend-https-and-tls for the order and the checks.
+# manage_frontend_www_redirect  = false
+# frontend_www_redirect_enabled = false
+# manage_frontend_tls_settings  = false
 
 # ============================================================================
 # Optional Overrides (defaults shown)

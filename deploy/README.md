@@ -56,10 +56,14 @@ Schedule that rollout accordingly. Local development uses the explicit
 [`terraform/p2party_frontend_headers.tf`](terraform/p2party_frontend_headers.tf)
 manages the five response headers documented by the frontend: CSP,
 Permissions-Policy, Referrer-Policy, HSTS and X-Content-Type-Options. The rule
-matches only `p2party.com`; signaling continues to set its own headers in Caddy.
-Both management and activation default to `false`, so an ordinary server deploy
-does not change the frontend edge policy. The apex DNS record must be proxied
-through Cloudflare for the rule to run.
+matches only `p2party.com` until `frontend_response_headers_all_app_hosts` is
+set (see [Frontend HTTPS and TLS](#frontend-https-and-tls)); signaling continues
+to set its own headers in Caddy. Both management and activation default to
+`false`, so an ordinary server deploy does not change the frontend edge policy.
+The apex DNS record must be proxied through Cloudflare for the rule to run. The
+HSTS value comes from `local.frontend_hsts` in
+[`terraform/p2party_frontend_tls.tf`](terraform/p2party_frontend_tls.tf), which
+the zone HSTS setting also uses.
 
 Terraform 1.2+ is required for the ownership precondition. With Terraform 1.7+,
 run `terraform -chdir=deploy/terraform test` for the offline provider-mock plans
@@ -123,3 +127,95 @@ file retained, and same-identity tab replacement under the actual edge policy.
 
 See Cloudflare's [response-transform API workflow](https://developers.cloudflare.com/rules/transform/response-header-modification/create-api/)
 and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.0/docs/resources/ruleset).
+
+## Frontend HTTPS and TLS
+
+On 2026-09-09 the apex and dev answered 200 over plain HTTP, www redirected
+both HTTP and HTTPS requests to `http://p2party.com/`, and apex, www, cdn and dev
+accepted TLS 1.0 and 1.1. On 2026-11-26 the apex still answered 200 over HTTP
+and `https://www.p2party.com/` still redirected to `http://p2party.com/`. The www
+redirect comes from the www S3 bucket, not from Cloudflare.
+[`terraform/p2party_frontend_tls.tf`](terraform/p2party_frontend_tls.tf) and
+the header rule above declare the fix in three opt-ins, each defaulting to
+`false` so an ordinary server deploy changes none of it:
+
+- `manage_frontend_www_redirect`, then `frontend_www_redirect_enabled`: a
+  single-redirect rule sends every `www.p2party.com` request to
+  `https://p2party.com` with the same path and query (301), at the edge, before
+  the request reaches the bucket. Browsers keep the URL fragment, so an
+  invitation's capability survives the redirect. The rule is created disabled;
+  the second flag activates it.
+- `manage_frontend_tls_settings`: zone settings for every proxied hostname
+  (apex, www, dev, cdn): Always Use HTTPS on, minimum TLS 1.2, and HSTS with the
+  same policy as the header rule
+  (`max-age=63072000; includeSubDomains; preload`). Takes effect on apply.
+- `frontend_response_headers_all_app_hosts`: the existing header rule matches
+  `p2party.com`, `www.p2party.com` and `dev.p2party.com` instead of the apex
+  only. cdn is excluded: it serves SDK files to other sites.
+
+**What this does not fix.** The four proxied hostnames are CNAMEs to S3 website
+endpoints, which serve HTTP only. Cloudflare therefore fetches every page and
+script from S3 over unauthenticated HTTP across the internet, and anyone on that
+path can read or replace the app's JavaScript before Cloudflare serves it over
+HTTPS. These settings protect only the hop between the visitor and Cloudflare.
+Closing the other hop needs an origin that terminates TLS with a certificate
+Cloudflare verifies, and then the zone SSL mode set to Full (strict). The
+options are a CDN or load balancer with a certificate in front of the bucket
+(for example CloudFront with origin access), or serving the static files from
+Cloudflare itself (R2 with a custom domain, or Pages) so that no public origin
+hop remains. This Terraform does not manage the SSL mode; do not switch it to
+Full (strict) while the origin is an S3 website endpoint, or the site will fail.
+
+Before enabling any of them:
+
+1. Give the existing zone-scoped token **Zone → Zone Settings → Edit** and
+   **Zone → Single Redirect → Edit**. On 2026-09-09 the token returned 403 for
+   zone settings and Page Rules. Keep the token in ignored `deploy/.env`.
+2. Inspect the `http_request_dynamic_redirect` phase (Rules → Redirect Rules)
+   and every Terraform state that might own it. On 2026-09-09 the zone had no
+   ruleset in that phase. As with the header rule, the opt-in data source
+   refuses a differently named ruleset or any additional rule, and a 403 is an
+   unresolved ownership check. Also look for a Page Rule that forwards www; it
+   was unreadable on 2026-09-09.
+3. Deploy a CSP-compatible build to dev, or remove the dev record and bucket,
+   before step 7. The dev page recorded on 2026-09-09 was a January 2025 build.
+
+Roll out one opt-in per reviewed plan, from the repository root, after
+`./deploy/tf init -lockfile=readonly` and `./deploy/tf validate`. Each plan
+must show only the change named, apart from drift you have reviewed:
+
+4. Set `manage_frontend_www_redirect = true` in ignored `terraform.tfvars`, then
+   `./deploy/tf plan -out=tfplan` and `./deploy/tf apply tfplan`. One ruleset
+   is added with its rule disabled.
+5. Set `frontend_www_redirect_enabled = true`, plan, apply (one ruleset updated
+   in place). Check that `https://www.p2party.com/r?x=1` and
+   `http://www.p2party.com/r?x=1` answer 301 with
+   `location: https://p2party.com/r?x=1`.
+6. Set `manage_frontend_tls_settings = true`, plan, apply (one
+   `cloudflare_zone_settings_override` added). Check that
+   `http://p2party.com/`, `http://dev.p2party.com/` and `http://cdn.p2party.com/`
+   answer 301 to HTTPS; that a TLS 1.1 handshake to each of the four hostnames
+   is refused (allow legacy ciphers locally, for example
+   `openssl s_client -tls1_1 -cipher 'DEFAULT:@SECLEVEL=0'`, so a local refusal
+   is not mistaken for the server's); and that HTTPS responses on all four carry
+   `strict-transport-security: max-age=63072000; includeSubDomains; preload`
+   and no other HSTS value.
+7. Set `frontend_response_headers_all_app_hosts = true`, plan, apply (the header
+   ruleset updated in place). Verify all five headers on dev pages, record which
+   headers the edge-generated www redirect carries, then repeat the header
+   rule's browser checks on dev.
+
+For rollback, set `frontend_www_redirect_enabled = false` or
+`frontend_response_headers_all_app_hosts = false` and apply the reviewed plan;
+`prevent_destroy` protects the redirect phase as it does the header phase.
+Browsers cache the 301. Setting `manage_frontend_tls_settings = false` destroys
+the override, which restores the values the provider recorded when it was
+created; read them first with
+`./deploy/tf state show 'cloudflare_zone_settings_override.frontend_tls[0]'`.
+Browsers that received HSTS keep it until it expires. Fix the www bucket's own
+redirect to `https` as well, so disabling the edge rule does not bring the
+downgrade back.
+
+`terraform -chdir=deploy/terraform test` (Terraform 1.7+) covers these defaults,
+the disabled first redirect, the redirect phase ownership checks, the single
+HSTS policy and the host list, offline against provider mocks.
