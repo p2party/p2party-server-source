@@ -1,6 +1,5 @@
 import { P2PartyWS } from "./wsServer";
-import { prisma } from "./prismaClient";
-import { readSchemaRefusal, rekeyStoredIdentities } from "./db/schemaCheck";
+import { startupDatabaseCheck } from "./db/schemaCheck";
 import { assertSecureTurnSecret } from "./utils/socketAuth";
 import { peerLogTag } from "./utils/logTag";
 import { describeError } from "./utils/logError";
@@ -39,26 +38,19 @@ const events: P2PartyWSEvents = {
 
 // The database must be at exactly the schema this binary was built for before
 // anything else touches it: on an empty, older, newer or half-migrated
-// database the process exits with one line saying what it found and what to
-// run, and never opens the listener. systemd's Restart=always then only
-// repeats that refusal.
-try {
-  const refusal = await readSchemaRefusal(prisma);
-  if (refusal) {
-    console.error(refusal);
-    process.exit(1);
-  }
-  const rekeyed = await rekeyStoredIdentities(prisma);
-  if (rekeyed > 0)
-    console.warn(
-      `p2party: startup re-keyed ${String(rekeyed)} identity row(s) to their derived id`,
-    );
-} catch (error) {
-  console.error(
-    `p2party: refusing to start: the migration history could not be read (${describeError(error)})`,
-  );
+// database, or one that does not answer within the startup bound, the process
+// exits with one line saying what it found and what to run, and never opens
+// the listener. systemd's Restart=always then only repeats that refusal. The
+// check runs on its own bounded connection, not on the Prisma pool.
+const startup = await startupDatabaseCheck(process.env.DATABASE_URL ?? "");
+if (startup.refusal) {
+  console.error(startup.refusal);
   process.exit(1);
 }
+if (startup.rekeyed)
+  console.warn(
+    `p2party: startup re-keyed ${String(startup.rekeyed)} identity row(s) to their derived id`,
+  );
 
 // Cross-instance routing must be live before the first socket is accepted:
 // a peer that connects before this process can be reached by the others is a

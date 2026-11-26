@@ -24,9 +24,10 @@ export const describeError = (error: unknown): string => {
   const name = error.constructor?.name || error.name || "Error";
   const { code, errorCode } = error as { code?: unknown; errorCode?: unknown };
   const databaseCode = typeof code === "string" ? code : errorCode;
-  // Prisma codes (P2034) and SQLSTATEs (40001) are short and carry no data.
+  // Prisma codes (P2034), SQLSTATEs (40001) and system error codes
+  // (ECONNREFUSED) are short upper-case words and carry no data.
   return typeof databaseCode === "string" &&
-    /^[A-Z0-9]{1,8}$/.test(databaseCode)
+    /^[A-Z0-9_]{1,24}$/.test(databaseCode)
     ? `${name} ${databaseCode}`
     : name;
 };

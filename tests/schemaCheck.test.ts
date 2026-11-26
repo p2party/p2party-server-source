@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 import {
-  NEWEST_MIGRATION,
+  BUILD_MIGRATIONS,
   schemaRefusal,
   type MigrationRecord,
 } from "../src/db/schemaCheck";
+
+const NEWEST_MIGRATION = BUILD_MIGRATIONS.at(-1)!;
 
 const migrations = readdirSync(
   join(dirname(fileURLToPath(import.meta.url)), "..", "prisma", "migrations"),
@@ -24,10 +26,10 @@ const finished = (migration_name: string): MigrationRecord => ({
 });
 
 describe("the schema a build starts on", () => {
-  test("the newest migration constant names the newest migration directory", () => {
-    // A migration added without updating NEWEST_MIGRATION would let this
-    // build start on a database that lacks it.
-    expect(NEWEST_MIGRATION).toBe(migrations.at(-1)!);
+  test("the build's migration list is exactly the migration directories", () => {
+    // A migration added, removed or renamed without updating BUILD_MIGRATIONS
+    // would let this build start on a database that lacks it or has another.
+    expect(BUILD_MIGRATIONS).toEqual(migrations);
   });
 
   test("exactly this build's schema is accepted", () => {
@@ -57,6 +59,19 @@ describe("the schema a build starts on", () => {
       ]),
     ).toBe(
       `p2party: refusing to start: migration ${NEWEST_MIGRATION} failed or did not finish; run \`prisma migrate resolve --rolled-back ${NEWEST_MIGRATION}\`, then \`prisma migrate deploy\` (see deploy/README.md, "A failed or interrupted migration")`,
+    );
+    expect(
+      schemaRefusal(migrations.filter((_, index) => index !== 2).map(finished)),
+    ).toBe(
+      `p2party: refusing to start: the database lacks migration ${migrations[2]!}, which this build ships, though it has ${NEWEST_MIGRATION}; run \`prisma migrate deploy\`, then start again`,
+    );
+    expect(
+      schemaRefusal([
+        ...migrations.map(finished),
+        finished("20261127000050_from_another_build"),
+      ]),
+    ).toBe(
+      "p2party: refusing to start: the database has migration 20261127000050_from_another_build, which this build does not ship; deploy the build that applied it",
     );
     expect(
       schemaRefusal([

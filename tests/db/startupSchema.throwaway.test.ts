@@ -3,7 +3,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import pg from "pg";
 
-import { NEWEST_MIGRATION } from "../../src/db/schemaCheck";
+import { BUILD_MIGRATIONS } from "../../src/db/schemaCheck";
 import { provisionalPeerId } from "../../src/utils/peerIdentity";
 import {
   describeWithThrowawayPostgres,
@@ -65,6 +65,8 @@ const start = async (databaseUrl: string) => {
   const stderr = await new Response(child.stderr).text();
   return { exitCode: listening ? undefined : exitCode, listening, stderr };
 };
+
+const NEWEST_MIGRATION = BUILD_MIGRATIONS.at(-1)!;
 
 const refusalLine = (stderr: string) =>
   stderr.split("\n").find((line) => line.startsWith("p2party: refusing"));
@@ -138,6 +140,36 @@ describeWithThrowawayPostgres("the schema the server starts on", () => {
     expect(newer.exitCode).toBe(1);
     expect(refusalLine(newer.stderr)).toContain(
       `the database is at 29991231000000_from_a_newer_build, newer than this build's ${NEWEST_MIGRATION}`,
+    );
+  }, 60_000);
+
+  test("the server refuses to start when an intermediate migration is missing", async () => {
+    database = await freshDatabase();
+    const intermediate = migrationNames[2]!;
+    await database.client.query(
+      `DELETE FROM "_prisma_migrations" WHERE migration_name = $1`,
+      [intermediate],
+    );
+    const missing = await start(database.url);
+    expect(missing.listening).toBe(false);
+    expect(missing.exitCode).toBe(1);
+    expect(refusalLine(missing.stderr)).toContain(
+      `the database lacks migration ${intermediate}, which this build ships`,
+    );
+  }, 60_000);
+
+  test("the server refuses to start on an unknown migration that sorts before its newest", async () => {
+    database = await freshDatabase();
+    await database.client.query(
+      `INSERT INTO "_prisma_migrations"
+         (id, checksum, finished_at, migration_name, started_at, applied_steps_count)
+       VALUES (gen_random_uuid()::text, 'other', now(), '20261127000050_from_another_build', now(), 1)`,
+    );
+    const unknown = await start(database.url);
+    expect(unknown.listening).toBe(false);
+    expect(unknown.exitCode).toBe(1);
+    expect(refusalLine(unknown.stderr)).toBe(
+      "p2party: refusing to start: the database has migration 20261127000050_from_another_build, which this build does not ship; deploy the build that applied it",
     );
   }, 60_000);
 
