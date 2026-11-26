@@ -39,7 +39,7 @@
     # the repository root.
     binary_name: deploy/ansible/builds/p2party_linux_x64
     # Tooling is isolated from the compiled service and installed from the same
-    # manifest/lockfile that passed the release audit, including security overrides.
+    # manifest/lockfile that passed the release audit.
     migration_tooling: "{{ app.home }}/server/migration-tooling"
     # The new binary, environment and units wait here until the migration has
     # succeeded. Root-only; nothing reads it but the install tasks.
@@ -169,7 +169,7 @@
             mode: "0755"
 
         # Tooling is installed from the same manifest and lockfile as the
-        # release, including its security overrides.
+        # release.
         - name: Create an isolated directory for audited migration tooling
           file:
             path: "{{ migration_tooling }}"

@@ -3,7 +3,7 @@ import { deepmerge } from "deepmerge-ts";
 import { loadConfigFromFile } from "@prisma/config";
 import { resolve } from "node:path";
 
-test("the reviewed deepmerge override preserves the plain-object Prisma configuration contract", () => {
+test("the deepmerge-ts Prisma's configuration loader uses preserves the plain-object configuration contract", () => {
   expect(
     deepmerge(
       { schema: "schema.prisma", migrations: { path: "migrations" } },
@@ -20,7 +20,7 @@ test("the reviewed deepmerge override preserves the plain-object Prisma configur
   expect(() => deepmerge(left, right)).not.toThrow();
 });
 
-test("Prisma's actual configuration loader still accepts this repository after the override", async () => {
+test("Prisma's actual configuration loader accepts this repository's configuration", async () => {
   const result = await loadConfigFromFile({
     configRoot: resolve(import.meta.dir, ".."),
   });

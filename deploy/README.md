@@ -36,10 +36,10 @@ TLS, then on the signaling host:
 With several signaling hosts, a failure on one ends the play on all of them
 (`any_errors_fatal`), so no migration runs while a worker anywhere still serves.
 Clients are cut off from step 2 until the new workers start. The migration CLI
-lives in a separate `migration-tooling` directory; it uses the same audited
-dependency overrides as the release rather than fetching an independent CLI
-dependency tree. Its working directory remains the server directory containing
-`prisma.config.ts` and `prisma/`.
+lives in a separate `migration-tooling` directory; it is installed from the
+release's audited `package.json` and frozen `bun.lock` rather than fetched as an
+independent CLI dependency tree. Its working directory remains the server
+directory containing `prisma.config.ts` and `prisma/`.
 
 The migration tooling is installed and run by the signaling host's own Bun,
 `~p2party/.bun/bin/bun`, which `playbooks/initial-setup.yml` installs only when

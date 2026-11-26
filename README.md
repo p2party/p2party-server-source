@@ -194,11 +194,17 @@ rotation. Keep the database CA key in protected operational backups, never Git.
 The server retains `@ondemos/core` for Ed25519 proof verification and the
 PostgreSQL/Prisma libraries for persistence. UUID and hexadecimal checks are
 small local functions with boundary tests; `class-validator` is no longer a
-runtime dependency. Exact security overrides patch Prisma CLI transitive
-packages. The `deepmerge-ts` 8 override is covered by plain-object configuration,
-recursive-input and actual Prisma configuration-loader tests; its changed Map
-and custom-merger behavior is not used by this repository. Run `bun audit`
-alongside the release checks and revisit overrides when Prisma updates its pins.
+runtime dependency. There are no dependency overrides: every transitive package
+resolves to what its dependent declares, and Prisma's CLI packages pin their own
+dependencies to exact versions. `tests/dependencyCompatibility.test.ts` checks
+the `deepmerge-ts` that Prisma's configuration loader uses with plain-object,
+recursive-input and real configuration-loader tests. Run `bun audit` alongside
+the release checks. On
+2026-11-26 it reports one advisory, GHSA-7589-6fvf-x4pw (a ReDoS in effect's
+`Schema.TemplateLiteral`, fixed in 3.22.1), for the `effect` 3.20.0 that
+`@prisma/config` 7.10.1 pins. That package decodes this repository's own
+`prisma.config.ts`, with no `Schema.TemplateLiteral`; a fix would mean forcing
+`effect` outside Prisma's pin, so it waits for a Prisma release.
 The TLS handshake regressions also require the `openssl` command.
 
 ## Health and version
