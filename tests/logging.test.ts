@@ -32,6 +32,38 @@ const callArguments = (source: string, callee: RegExp): string[] => {
   return found;
 };
 
+/**
+ * Names that must never reach an info-level log except through peerLogTag:
+ * peer ids and public keys, room identifiers and locators (the room URL or
+ * capability), client addresses, and TURN usernames and credentials.
+ */
+const SENSITIVE_NAME =
+  /peerid|publickey|room(url|id|token|identifier)|\bidentifier\b|capability|locator|address|\bip\b|requestip|real-?ip|username|credential|secret/i;
+
+/**
+ * The info-level calls in `source` whose arguments name something sensitive.
+ * String literals are dropped first (their text is the message, not data),
+ * except the `${...}` expressions inside template literals.
+ */
+const sensitiveLogCalls = (source: string): string[] => {
+  // Whole-line comments hold disabled code, not log calls.
+  const code = source
+    .split("\n")
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join("\n");
+  return callArguments(code, /\bconsole\.(?:log|info|warn|debug)\(/g).filter(
+    (args) => {
+      const expressions = args
+        .replace(/peerLogTag\([^()]*\)/g, "")
+        .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, "")
+        .replace(/`(?:[^`\\]|\\.)*`/g, (literal) =>
+          [...literal.matchAll(/\$\{([^}]*)\}/g)].map(([, e]) => e).join(" "),
+        );
+      return SENSITIVE_NAME.test(expressions);
+    },
+  );
+};
+
 const FROM = "00000000-0000-4000-8000-0000000000f1";
 const TO = "00000000-0000-4000-8000-0000000000f2";
 const ROOM = "00000000-0000-4000-8000-0000000000f3";
@@ -92,25 +124,36 @@ describe("operator logs", () => {
     expect(pair![1]).not.toBe(pair![2]);
     expect(lines[1]).toBe(lines[0]!);
 
-    // Structure: every info-level call in src passes peer ids and public
-    // keys only through peerLogTag.
-    const leaks: string[] = [];
-    for (const file of sourceFiles(srcRoot)) {
-      // Whole-line comments hold disabled code, not log calls.
-      const source = readFileSync(file, "utf8")
-        .split("\n")
-        .filter((line) => !/^\s*\/\//.test(line))
-        .join("\n");
-      for (const args of callArguments(
-        source,
-        /\bconsole\.(?:log|info|warn|debug)\(/g,
-      )) {
-        const withoutTags = args.replace(/peerLogTag\([^()]*\)/g, "");
-        if (/peerid|publickey/i.test(withoutTags))
-          leaks.push(`${relative(srcRoot, file)}: ${args.trim()}`);
-      }
-    }
+    // Structure: no info-level call in src names a peer id, public key, room
+    // identifier or locator, address or TURN credential, except peer ids
+    // through peerLogTag.
+    const leaks = sourceFiles(srcRoot).flatMap((file) =>
+      sensitiveLogCalls(readFileSync(file, "utf8")).map(
+        (args) => `${relative(srcRoot, file)}: ${args.trim()}`,
+      ),
+    );
     expect(leaks).toEqual([]);
+  });
+
+  test("the log scan flags each kind of sensitive argument", () => {
+    // The scan above is only as good as this: each line must be caught.
+    for (const leaking of [
+      'console.log("joined", roomUrl);',
+      "console.info(`room ${room.identifier}`);",
+      'console.warn("from", ws.remoteAddress);',
+      'console.log("ip", server.requestIP(req));',
+      "console.log(`turn ${turnCredentials.username}`);",
+      'console.debug("key", ws.data.publicKey);',
+      'console.log("peer", fromPeerId);',
+    ])
+      expect(sensitiveLogCalls(leaking), leaking).toHaveLength(1);
+    for (const clean of [
+      'console.log("Client has connected", peerLogTag(ws.data.peerId));',
+      'console.warn("room id and address are words in a message");',
+      "console.info(`cleared ${String(cleared.length)} server id(s)`);",
+      'console.error("failed", roomUrl);',
+    ])
+      expect(sensitiveLogCalls(clean), clean).toEqual([]);
   });
 
   test("a peer log tag is eight hex digits that do not reveal the id", async () => {
