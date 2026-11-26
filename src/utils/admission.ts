@@ -186,6 +186,8 @@ export interface AdmissionLease {
   roomMutation(): boolean;
   /** Charge one new durable identity to this socket's source key and /48, then the process. */
   newIdentity(): boolean;
+  /** Whether newMembership() would succeed now. Charges nothing. */
+  canAddMembership(): boolean;
   /** Charge one new room membership to this socket's source key and /48, then the process. */
   newMembership(): boolean;
 }
@@ -267,12 +269,19 @@ export class AdmissionController {
           this.limits.roomMutationsPerIdentityPerMinute,
       // Creation needs a proved socket; unproved ones only read.
       newIdentity: () => !released && !!key && this.create("identity", sources),
+      canAddMembership: () =>
+        !released && !!key && this.create("membership", sources, false),
       newMembership: () =>
         !released && !!key && this.create("membership", sources),
     };
   }
 
-  private create(kind: Creation, sources?: AdmissionSources): boolean {
+  /** With `charge` false, only reports whether the creation would be admitted. */
+  private create(
+    kind: Creation,
+    sources?: AdmissionSources,
+    charge = true,
+  ): boolean {
     const now = this.now();
     const budget =
       kind === "identity"
@@ -303,6 +312,7 @@ export class AdmissionController {
     for (const [source, limit] of charges)
       if ((window.bySource.get(source) ?? 0) >= limit) return false;
     if (window.count >= budget) return false;
+    if (!charge) return true;
     for (const [source] of charges)
       window.bySource.set(source, (window.bySource.get(source) ?? 0) + 1);
     window.count++;
@@ -314,6 +324,11 @@ export class AdmissionController {
     return this.create("identity");
   }
 
+  /** Process-wide budget only, for callers that hold no socket lease. Charges nothing. */
+  canAddMembership(): boolean {
+    return this.create("membership", undefined, false);
+  }
+
   /** Process-wide budget only, for callers that hold no socket lease. */
   newMembership(): boolean {
     return this.create("membership");
@@ -322,7 +337,23 @@ export class AdmissionController {
 
 export const admission = new AdmissionController();
 
-/** Only a loopback proxy may supply the address; arbitrary forwarded headers never win. */
+/**
+ * The bracketed canonical form of an IPv6 address, or undefined when URL
+ * parsing rejects it. node:net accepts some forms URL does not, such as a zone
+ * id (`fe80::1%en0`) or a dotted IPv4 tail after `::` in a non-mapped address.
+ */
+const canonicalIpv6 = (address: string): string | undefined => {
+  try {
+    return new URL(`http://[${address}]`).hostname;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Only a loopback proxy may supply the address; arbitrary forwarded headers
+ * never win. Undefined refuses the upgrade, for unparseable input of any kind.
+ */
 export const admissionAddress = (
   remote: string | undefined,
   forwarded: string | null,
@@ -333,7 +364,5 @@ export const admissionAddress = (
     remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
   const address = trustLocalProxy && loopback ? forwarded : remote;
   if (!address || !isIP(address)) return undefined;
-  return isIP(address) === 6
-    ? new URL(`http://[${address}]`).hostname
-    : address;
+  return isIP(address) === 6 ? canonicalIpv6(address) : address;
 };

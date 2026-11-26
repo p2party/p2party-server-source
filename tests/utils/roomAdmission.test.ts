@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { createHandleRoom } from "../../src/utils/handleRoom";
+import { deriveRoomIdentifier } from "../../src/utils/roomIdentifier";
 import {
   AdmissionController,
   admissionAddress,
@@ -67,11 +68,35 @@ const fixture = (
   return { frames, sockets, handle, writes: () => writes };
 };
 
+/**
+ * Runs `body` with handleRoom's console.error captured and returns the logged
+ * error messages, so a test asserts its expected refusals instead of printing
+ * them and an unexpected error still fails the test.
+ */
+const loggedErrors = async (
+  body: () => Promise<unknown>,
+): Promise<string[]> => {
+  const messages: string[] = [];
+  const spy = spyOn(console, "error").mockImplementation((error: unknown) => {
+    messages.push(error instanceof Error ? error.message : String(error));
+  });
+  try {
+    await body();
+  } finally {
+    spy.mockRestore();
+  }
+  return messages;
+};
+
 test("concurrent joins cannot exceed the room-member cap on the supported worker", async () => {
   const f = fixture(admissionLimits.peersPerRoom - 1, 0);
-  await Promise.all(
-    f.sockets.map((ws) => f.handle(ws.data.peerId, ws, roomUrl, requestId)),
-  );
+  expect(
+    await loggedErrors(() =>
+      Promise.all(
+        f.sockets.map((ws) => f.handle(ws.data.peerId, ws, roomUrl, requestId)),
+      ),
+    ),
+  ).toEqual(["Room member capacity reached"]);
   expect(f.writes()).toBe(1);
   expect(f.frames.filter((frame) => frame.type === "roomId")).toHaveLength(1);
   expect(f.frames.filter((frame) => frame.type === "error")).toHaveLength(1);
@@ -79,12 +104,16 @@ test("concurrent joins cannot exceed the room-member cap on the supported worker
 
 test("per-identity cap refuses a new membership but preserves an existing membership reconnect", async () => {
   const full = fixture(0, admissionLimits.roomsPerIdentity);
-  await full.handle(
-    full.sockets[0]!.data.peerId,
-    full.sockets[0]!,
-    roomUrl,
-    requestId,
-  );
+  expect(
+    await loggedErrors(() =>
+      full.handle(
+        full.sockets[0]!.data.peerId,
+        full.sockets[0]!,
+        roomUrl,
+        requestId,
+      ),
+    ),
+  ).toEqual(["Room membership capacity reached"]);
   expect(full.writes()).toBe(0);
   expect(full.frames[0]?.type).toBe("error");
   const existing = fixture(
@@ -92,12 +121,16 @@ test("per-identity cap refuses a new membership but preserves an existing member
     admissionLimits.roomsPerIdentity,
     true,
   );
-  await existing.handle(
-    existing.sockets[0]!.data.peerId,
-    existing.sockets[0]!,
-    roomUrl,
-    requestId,
-  );
+  expect(
+    await loggedErrors(() =>
+      existing.handle(
+        existing.sockets[0]!.data.peerId,
+        existing.sockets[0]!,
+        roomUrl,
+        requestId,
+      ),
+    ),
+  ).toEqual([]);
   expect(existing.frames[0]?.type).toBe("roomId");
 });
 
@@ -170,21 +203,20 @@ test("new memberships are charged to the requesting socket's source key", async 
     socket("a2", "2001:db8:aaaa:bbbb::2"),
   ];
   const victim = socket("b1", "198.51.100.7");
-  const consoleError = spyOn(console, "error").mockImplementation(() => {});
-  try {
-    for (let room = 0; room < 31; room++) {
-      const ws = attackers[room % 2]!;
-      await handle(
-        ws.data.peerId,
-        ws,
-        room.toString(16).padStart(64, "0"),
-        requestId,
-      );
-    }
-    await handle(victim.data.peerId, victim, "ff".repeat(32), requestId);
-  } finally {
-    consoleError.mockRestore();
-  }
+  expect(
+    await loggedErrors(async () => {
+      for (let room = 0; room < 31; room++) {
+        const ws = attackers[room % 2]!;
+        await handle(
+          ws.data.peerId,
+          ws,
+          room.toString(16).padStart(64, "0"),
+          requestId,
+        );
+      }
+      await handle(victim.data.peerId, victim, "ff".repeat(32), requestId);
+    }),
+  ).toEqual(["Room membership capacity reached"]);
   const attackerFrames = frames.filter(({ peer }) => peer !== "b1");
   // 5% of 600 new memberships per minute.
   expect(attackerFrames.filter(({ type }) => type === "roomId")).toHaveLength(
@@ -194,4 +226,85 @@ test("new memberships are charged to the requesting socket's source key", async 
   expect(frames.filter(({ peer }) => peer === "b1")).toEqual([
     expect.objectContaining({ peer: "b1", type: "roomId" }),
   ]);
+});
+
+test("a refused join to a full room spends no membership budget", async () => {
+  // 5% of 20 new memberships per minute: this source key may add one.
+  const guard = new AdmissionController(
+    { ...admissionLimits, newMembershipsPerMinute: 20 },
+    () => 100000,
+  );
+  const publicKey = "e1".repeat(32);
+  const lease = guard.reserve(
+    admissionAddress("198.51.100.9", null, false)!,
+    publicKey,
+  )!;
+  expect(lease.authenticate()).toBe(true);
+  const frames: Record<string, unknown>[] = [];
+  const ws = {
+    data: {
+      peerId: "00000000-0000-4000-8000-0000000000e1",
+      publicKey,
+      isVerified: true,
+      isAuthenticating: false,
+      challengeNonce: "",
+      challengeId: "",
+      socketGeneration: requestId,
+      admission: lease,
+    },
+    readyState: 1,
+    send: (frame: string) => {
+      frames.push(JSON.parse(frame));
+      return frame.length;
+    },
+    terminate: () => {
+      throw new Error("healthy socket terminated");
+    },
+  } as unknown as P2PartyWSClient;
+  const clients = new Map([[ws.data.peerId, ws]]);
+  const fullRoomUrl = "f0".repeat(32);
+  const joins: string[] = [];
+  const handle = createHandleRoom(
+    {
+      peer: {
+        findUnique: async () => ({
+          id: ws.data.peerId,
+          publicKey,
+          rooms: [],
+          _count: { rooms: joins.length },
+        }),
+      },
+      room: {
+        upsert: async ({ where }: { where: { identifier: string } }) => ({
+          id: roomId,
+          _count: {
+            peers:
+              where.identifier === deriveRoomIdentifier(fullRoomUrl)
+                ? admissionLimits.peersPerRoom
+                : 0,
+          },
+        }),
+        update: async ({
+          data,
+        }: {
+          data: { peers: { connect: { id: string } } };
+        }) => {
+          joins.push(data.peers.connect.id);
+          return { id: roomId };
+        },
+      },
+    } as never,
+    clients,
+  );
+
+  expect(
+    await loggedErrors(async () => {
+      await handle(ws.data.peerId, ws, fullRoomUrl, requestId);
+      await handle(ws.data.peerId, ws, roomUrl, requestId);
+    }),
+  ).toEqual(["Room member capacity reached"]);
+  expect(frames.map(({ type }) => type)).toEqual(["error", "roomId"]);
+  expect(joins).toEqual([ws.data.peerId]);
+  // The one unit was spent by the join that happened.
+  expect(lease.newMembership()).toBe(false);
 });

@@ -64,13 +64,15 @@ const handleRoomWithClient = async (
         );
 
       const wasMember = peer.rooms.length > 0;
+      // A new membership is charged to the socket's source key and /48 before
+      // the process, but only once the join is about to be written: a refusal
+      // below (full room, replaced socket) must not spend it. Checking here
+      // first keeps a source with no budget left from creating room rows.
+      const membershipBudget = ws.data.admission ?? admission;
       if (
         !wasMember &&
         ((peer._count?.rooms ?? 0) >= admissionLimits.roomsPerIdentity ||
-          // Charged to the socket's source key and /48 before the process.
-          !(ws.data.admission
-            ? ws.data.admission.newMembership()
-            : admission.newMembership()))
+          !membershipBudget.canAddMembership())
       )
         throw new Error("Room membership capacity reached");
 
@@ -94,6 +96,8 @@ const handleRoomWithClient = async (
           (room._count?.peers ?? 0) >= admissionLimits.peersPerRoom
         )
           throw new Error("Room member capacity reached");
+        if (!wasMember && !membershipBudget.newMembership())
+          throw new Error("Room membership capacity reached");
         await prisma.room.update({
           where: { id: room.id },
           data: {

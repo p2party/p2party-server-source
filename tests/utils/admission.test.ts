@@ -354,4 +354,37 @@ describe("bounded signaling admission", () => {
     ).toBeUndefined();
     expect(admissionAddress(undefined, "198.51.100.5", true)).toBeUndefined();
   });
+
+  test("an unparseable client address is refused, not thrown", () => {
+    // node:net isIP accepts both forms; URL canonicalization rejects them.
+    const unsupported = [
+      "fe80::1%en0",
+      "fe80::1%25en0",
+      "2001:db8:aaaa:bbbb::192.0.2.1",
+    ];
+    for (const address of unsupported) {
+      // As the socket's own address, and as the trusted proxy's header.
+      for (const [remote, forwarded] of [
+        [address, null],
+        ["127.0.0.1", address],
+        ["::1", address],
+      ] as const) {
+        let result: string | undefined = "not called";
+        expect(() => {
+          result = admissionAddress(remote, forwarded, true);
+        }).not.toThrow();
+        expect(result).toBeUndefined();
+      }
+    }
+    // The same refusal as other unparseable input.
+    expect(admissionAddress("not-an-address", null, false)).toBeUndefined();
+    expect(
+      admissionAddress("127.0.0.1", "not-an-address", true),
+    ).toBeUndefined();
+    // Neighbouring forms that canonicalize still resolve to their key.
+    expect(admissionAddress("::ffff:192.0.2.1", null, false)).toBe(
+      "[::ffff:c000:201]",
+    );
+    expect(admissionAddress("2001:DB8::1", null, false)).toBe("[2001:db8::1]");
+  });
 });
