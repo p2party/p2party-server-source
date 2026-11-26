@@ -175,7 +175,8 @@ only locally as described:
    release was built with Node 26.13.1. Every playbook now requires exactly
    ansible-core 2.22.0 (the pre-flight).
 7. The next `./deploy/tf init -upgrade` and plan against the real state, with
-   hcloud 1.70.2 and Cloudflare 4.52.10; only the mocked tests have run.
+   hcloud 1.70.2 and Cloudflare 4.52.10; only the mocked tests have run. See
+   [Terraform after this release](#terraform-after-this-release) first.
 
 ## A failed or interrupted migration
 
@@ -403,6 +404,36 @@ file retained, and same-identity tab replacement under the actual edge policy.
 
 See Cloudflare's [response-transform API workflow](https://developers.cloudflare.com/rules/transform/response-header-modification/create-api/)
 and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.10/docs/resources/ruleset).
+
+## Terraform after this release
+
+This release requires Terraform 1.17.2 or newer, moves hcloud to `~> 1.70` and
+Cloudflare to `~> 4.52`, and no longer names the `hashicorp/null` provider,
+which no resource here uses. Before the first `./deploy/tf init -upgrade`:
+
+1. Back up the state (`deploy/terraform/terraform.tfstate`) to private storage.
+2. Check that the state holds no instance of that provider:
+
+   ```bash
+   ./deploy/tf state list | grep -E '(^|\.)null_'
+   ```
+
+   If this prints nothing, continue with `./deploy/tf init -upgrade` and a
+   reviewed plan. If it prints anything, stop, and do not plan or apply: those
+   instances are in the state but in no configuration. Terraform keeps the
+   `null` provider required by the state, installs it without a version
+   constraint, and the next plan destroys them. A `null_*` resource has nothing
+   outside Terraform, and with its resource block gone none of its destroy-time
+   provisioners run (Terraform's provisioner documentation, "Remove a resource
+   block containing a destroy-time provisioner"), so the deliberate way out is
+   to remove each one from the state, address by address, after reading it:
+
+   ```bash
+   ./deploy/tf state show '<address>'
+   ./deploy/tf state rm '<address>'
+   ```
+
+   Then list the state again (it must print nothing) and continue.
 
 ## Cloudflare provider 5
 
