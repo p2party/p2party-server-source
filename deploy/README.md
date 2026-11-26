@@ -290,7 +290,42 @@ WebRTC text and byte-exact file delivery, reload recovery with the received
 file retained, and same-identity tab replacement under the actual edge policy.
 
 See Cloudflare's [response-transform API workflow](https://developers.cloudflare.com/rules/transform/response-header-modification/create-api/)
-and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.0/docs/resources/ruleset).
+and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.10/docs/resources/ruleset).
+
+## Cloudflare provider 5
+
+This configuration stays on the newest 4.x provider (`~> 4.52`; 4.52.10 on
+2026-11-26) although 5.29.0 is out. Version 5 changes every Cloudflare
+resource used here, and on 2026-11-26 the move could not keep two things this
+README relies on:
+
+- **The ownership checks' tests.** In version 5, `cloudflare_rulesets` lists a
+  zone's rulesets without their rules and has no `filter` or `include_rules`,
+  so each check has to read every ruleset of its phase again by id
+  (`data.cloudflare_ruleset`). The configuration rewritten that way validates,
+  but Terraform 1.17.2's test mocks cannot fill the nested-attribute
+  collections these data sources return
+  ([hashicorp/terraform#38369](https://github.com/hashicorp/terraform/issues/38369),
+  open): "incompatible types; expected object type, found tuple". The runs
+  that show a foreign ruleset or a dashboard-added rule stopping the plan
+  could not run (2 failed and 7 were skipped of 14).
+- **The TLS rollback.** Version 5 removes `cloudflare_zone_settings_override`.
+  Its replacement, one `cloudflare_zone_setting` per setting, keeps no
+  `initial_settings`, and its delete does nothing (provider 5.29.0 source), so
+  setting `manage_frontend_tls_settings = false` would no longer restore the
+  earlier values as described under [Frontend HTTPS and TLS](#frontend-https-and-tls).
+
+The move itself, once those are solved: rename the six `cloudflare_record`
+resources to `cloudflare_dns_record` with a `moved` block each (the provider
+moves their state; Terraform 1.8 or newer); write both rulesets in attribute
+syntax (`rules = [{ ... }]`, `action_parameters = { ... }`, `headers` as a
+map), whose state the provider upgrades on the first plan; and, if
+`./deploy/tf state list` shows `cloudflare_zone_settings_override.frontend_tls[0]`,
+remove it from state with the 4.x provider (`./deploy/tf state rm`, which leaves
+the settings at Cloudflare as they are) before switching, then import each new
+`cloudflare_zone_setting` as `<zone-id>/<setting-id>`. Back up the state first,
+and expect the first plan to show no replacement or destroy; `prevent_destroy`
+on both rulesets stops a plan that would replace one.
 
 ## Frontend HTTPS and TLS
 

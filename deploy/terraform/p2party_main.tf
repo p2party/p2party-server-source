@@ -18,9 +18,11 @@ terraform {
       version = "~> 1.70"
     }
 
+    # Held on the newest 4.x line; deploy/README.md, "Cloudflare provider 5",
+    # says why and what the move needs.
     cloudflare = {
       source  = "cloudflare/cloudflare"
-      version = "~> 4.0"
+      version = "~> 4.52"
     }
   }
 }
