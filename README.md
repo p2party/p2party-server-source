@@ -66,8 +66,13 @@ loopback address and a port above 5000 other than 5432, or the tests refuse to
 run. Each test file creates its own `p2party_test_<random>` database there,
 applies the migrations with the Prisma CLI as a deploy does (no `.env` is read
 and the CLI's version check is off), and drops the database afterwards. The
-two-worker test also starts two server processes on that database. For
-example:
+two-worker test also starts two server processes on that database.
+
+No test reaches the database `.env` names, although `bun test` loads `.env`:
+`bunfig.toml` preloads `tests/preload.ts` before any test module, and it
+replaces `DATABASE_URL` with an address nothing listens on.
+`tests/testIsolation.test.ts` checks this in a scratch copy with a sentinel
+`.env`. For example:
 
 ```bash
 initdb -D "$PWD/.pg-test" -U test --auth=trust
@@ -99,8 +104,9 @@ transaction before routing activation.
 
 Every stored row has that derived id. Servers before 0.1.4 stored random ids;
 migration `20261127000000_rekey_peers_to_derived_ids` re-keys every such row
-once, in one statement, before this release starts (`deploy.yml` applies
-migrations before it restarts the workers). **The peer id of an identity first
+once, in one statement, before this release starts (`deploy.yml` stops every
+worker, applies the migrations, and only then installs and starts the new
+binary). **The peer id of an identity first
 stored by an older server therefore changes once, at this upgrade.** Its room
 memberships, challenges and queued signals move with it, and peers see it
 under the new id from then on, so a client must identify peers by public key,
@@ -550,9 +556,12 @@ keeps working, and if the new socket fails at any step (signature, admission,
 identity row and claim, or its own close) the predecessor is not touched and
 the new socket closes bare, so its client may retry. While its commit is in
 flight a proved socket's `pong` keeps it alive, but it may send nothing else.
-If two new sockets of one identity commit around the same time, the one that
-began activating later becomes current and the other closes with the same
-`1008`.
+If two new sockets of one identity commit around the same time, exactly one
+becomes current and the other closes with the same `1008`. Usually that is the
+one that began activating later. But when their commits conflict, the earlier
+socket's retried commit can be processed first: it registers, and closing the
+socket whose claim it replaced then closes the later socket while that one is
+still committing.
 
 The identity row and the routing claim are written by one statement in one
 serializable transaction, and the claim names its owner: the process
@@ -561,7 +570,10 @@ or restores only a claim that carries its own owner token, compared in the
 same statement, so a late release from a replaced socket cannot clear a
 successor's claim on any worker. A socket that committed but does not become
 current takes back what it wrote: a row it created is deleted and its creation
-charge refunded; otherwise the claim it replaced is put back. A new identity
+charge refunded; otherwise the claim it replaced is put back. If that undo
+itself fails (the database unreachable, say), the claim and any row the socket
+created stay: the claim still names this instance, so frames for the identity
+still reach it, and the failure is logged by peer tag and error class. A new identity
 is charged once: two first-time sockets of one key both charge before they
 insert, the loser's insert conflicts, its retry finds the winner's row, and
 its charge is refunded.
@@ -696,22 +708,32 @@ and the DNS records for the signaling, TURN and STUN names. Run it through
 [`deploy/ansible`](deploy/ansible) configures those hosts
 (`playbooks/site.yml`) and ships releases (`playbooks/deploy.yml`, wrapped by
 `deploy/deploy.sh`). A deploy builds `p2party_linux_x64` from this repo with
-`bun run build:linux` and refuses to continue if the binary is missing; copies
-it with a rendered environment file and one systemd unit per entry in
-`signaling_ports`; installs the audited manifest and frozen lockfile into isolated
-migration tooling; runs its Prisma CLI on the host and fails the play
-if it errors, so a binary is never restarted against a schema it does not match;
-narrows the Caddy upstream list before restarting; verifies the version,
+`bun run build:linux` and refuses to continue if the binary is missing; stops and
+disables every signaling worker; installs the audited manifest and frozen
+lockfile into isolated migration tooling and runs its Prisma CLI on the host,
+ending the play with the recovery steps if it errors (deploy/README.md, "A
+failed or interrupted migration") while the workers stay stopped and the
+previous binary stays in place; only then copies the new binary with a rendered
+environment file and one systemd unit per entry in `signaling_ports`; narrows the
+Caddy upstream list before enabling and starting the workers; verifies the version,
 protocol version and per-process `serverId` on every instance directly; retires
 obsolete units; and only then checks that public Caddy answers with one of those
 exact `serverId`s. [`tests/deploy.contract.test.ts`](tests/deploy.contract.test.ts)
 pins that ordering.
 
+Systemd therefore never starts a binary against a schema it was not built for
+during a deploy: the old binary is stopped and disabled before the schema
+changes, and the new one is installed only after. The binary also refuses by
+itself: before opening its listener it reads the migration history and exits
+with one `p2party: refusing to start` line, naming what it found and what to
+run, on an empty, older, newer or half-migrated database, so `Restart=always`
+only repeats that refusal. It then re-runs the identity re-key statement, which
+changes nothing unless an unsupported writer left a row with another id. A
+0.1.4 binary has no such check; never start one on a database past
+`20261127000000_rekey_peers_to_derived_ids`.
+
 Production sets `signaling_ports: [3001]` — one process — for the
-membership-ordering reason above. The identity re-key migration runs while the
-older release still serves: until its workers restart, seconds later, a socket
-of a re-keyed identity on an older worker can have room requests refused, and
-it reconnects after the restart. Where several workers share a database, stop every worker of an
+membership-ordering reason above. Where several workers share a database, stop every worker of an
 older release before the first worker of this release starts, and run all
 workers under one database role: a worker counts as live only through its named
 PostgreSQL session, which older releases do not open, so a new worker would

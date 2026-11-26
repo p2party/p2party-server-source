@@ -81,7 +81,7 @@ describe("cross-instance signal routing", () => {
   test("release compares the claim's owner token: this instance and the socket", () => {
     // Otherwise a slow close clears the claim a successor just took, on this
     // worker or another. Behaviour against PostgreSQL:
-    // tests/db/routingClaim.postgres.test.ts.
+    // tests/db/routingClaim.throwaway.test.ts.
     const body =
       /export const releasePeer[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
     expect(body).toContain(
