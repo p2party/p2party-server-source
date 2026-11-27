@@ -401,6 +401,15 @@ The apex DNS record must be proxied through Cloudflare for the rule to run. This
 rule is the only source of HSTS that Terraform manages; the zone HSTS setting
 is left unmanaged on purpose (see [Frontend HTTPS and TLS](#frontend-https-and-tls)).
 
+The same ruleset assigns `Cross-Origin-Opener-Policy: same-origin` to the
+signing document at `/wallet/`, its direct index and offline download paths.
+An ordinary site page that opens the wallet in another tab loses its window
+reference when the wallet loads. The help, public history, and room pages keep
+the default opener policy. The wallet matches receipts locally and uses a
+dedicated worker for public history, so it can refresh without an opener.
+Verify the header on `/wallet/` and `/wallet/index.html`, and its absence on
+`/rooms/` and `/wallet/help/`.
+
 The configuration requires Terraform 1.17.2 or newer (`required_version` in
 `terraform/p2party_main.tf`). `terraform test` runs the offline provider-mock
 plans covering the default-off behavior, disabled initial rules, existing-rule
@@ -446,7 +455,7 @@ rule list. Before enabling management:
 3. If the phase is absent, set `manage_frontend_response_headers = true` in
    ignored `terraform.tfvars` while keeping `frontend_response_headers_enabled
 = false`. If it exists, preserve its rules and reconcile ownership first.
-   Importing a populated phase into this single-rule configuration and applying
+   Importing a populated phase into this configuration and applying
    would otherwise remove its other rules; the precondition refuses that case.
    A phase already created from this exact configuration may be imported with
    `./deploy/tf import 'cloudflare_ruleset.frontend_response_headers[0]'

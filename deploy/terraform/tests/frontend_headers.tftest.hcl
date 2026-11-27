@@ -111,6 +111,38 @@ run "previously_managed_rule_can_be_enabled" {
   }
 }
 
+run "wallet_opener_policy_applies_only_to_the_signer" {
+  command = plan
+
+  variables {
+    manage_frontend_response_headers  = true
+    frontend_response_headers_enabled = true
+  }
+
+  override_module {
+    target = module.frontend_response_headers_inventory[0]
+    outputs = {
+      rulesets = [{
+        name  = "p2party frontend response headers"
+        rules = [{ ref = "p2party_frontend_security_headers" }, { ref = "p2party_wallet_opener_isolation" }]
+      }]
+    }
+  }
+
+  assert {
+    condition = (
+      length(cloudflare_ruleset.frontend_response_headers[0].rules) == 2 &&
+      cloudflare_ruleset.frontend_response_headers[0].rules[1].enabled &&
+      cloudflare_ruleset.frontend_response_headers[0].rules[1].expression == "(http.host eq \"p2party.com\" and http.request.uri.path in {\"/wallet\" \"/wallet/\" \"/wallet/index.html\" \"/wallet/restore-wallet.html\"})" &&
+      keys(cloudflare_ruleset.frontend_response_headers[0].rules[1].action_parameters.headers) == tolist(["Cross-Origin-Opener-Policy"]) &&
+      cloudflare_ruleset.frontend_response_headers[0].rules[1].action_parameters.headers["Cross-Origin-Opener-Policy"].operation == "set" &&
+      cloudflare_ruleset.frontend_response_headers[0].rules[1].action_parameters.headers["Cross-Origin-Opener-Policy"].value == "same-origin" &&
+      !contains(keys(cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters.headers), "Cross-Origin-Opener-Policy")
+    )
+    error_message = "Only the standalone signing documents on the apex should isolate their opener. Other site documents must retain the default policy."
+  }
+}
+
 # The rule has been live on the apex since 2026-09-09 with both flags enabled.
 # Without a new opt-in, a plan must leave its match and HSTS value unchanged.
 run "live_rule_keeps_its_apex_match_and_hsts_value" {

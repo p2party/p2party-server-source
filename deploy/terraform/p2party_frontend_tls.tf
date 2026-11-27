@@ -16,7 +16,7 @@ locals {
   frontend_page_dirs = [
     "/blog", "/explorer", "/explorer/mainnet", "/explorer/testnet", "/privacy-policy",
     "/protocol", "/r", "/roadmap", "/rooms", "/session-lab", "/terms-of-service",
-    "/wallet", "/wallet/snapshot", "/whitepaper",
+    "/wallet", "/wallet/help", "/wallet/snapshot", "/whitepaper",
   ]
   frontend_directory_match = format(
     "(http.host in {\"p2party.com\" \"www.p2party.com\"} and (http.request.uri.path in {%s} or (starts_with(http.request.uri.path, \"/blog/\") and not ends_with(http.request.uri.path, \"/\") and not (http.request.uri.path contains \".\"))))",

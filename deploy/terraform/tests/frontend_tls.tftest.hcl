@@ -135,7 +135,7 @@ run "website_redirects_to_https_apex_keeping_path_and_query" {
   assert {
     condition = (
       startswith(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, "(http.host in {\"p2party.com\" \"www.p2party.com\"}") &&
-      alltrue([for path in ["/r", "/explorer/testnet", "/wallet/snapshot"] : strcontains(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, jsonencode(path))]) &&
+      alltrue([for path in ["/r", "/explorer/testnet", "/wallet/help", "/wallet/snapshot"] : strcontains(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, jsonencode(path))]) &&
       !strcontains(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, "/.well-known") &&
       cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.target_url.expression == "concat(\"https://p2party.com\", http.request.uri.path, \"/\")"
     )
