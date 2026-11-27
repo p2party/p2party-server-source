@@ -406,6 +406,59 @@ describe("the pending-signal drain", () => {
     expect(logged).toEqual([[ABANDONED]]);
   });
 
+  test("a late read of an abandoned pass does not make a delivered frame deliverable again", async () => {
+    const { alice, signals, clock, drain } = deadlineHarness([]);
+    const logged = await capturingErrors(async () => {
+      // The abandoned pass read an empty queue.
+      const late = signals.holdNextRead();
+      void drain();
+      clock.expire();
+      // The fresh pass delivers s1, and its delete fails: s1 stays queued
+      // and is recorded as delivered.
+      signals.add({ id: "s1", targetPeerId: ALICE, payload: "s1" });
+      signals.failNextDelete();
+      void drain();
+      await settle();
+      // The abandoned read returns now, without s1: it must not forget it.
+      late.resolve();
+      await settle();
+      void drain();
+      await settle();
+    });
+
+    expect(alice.received).toEqual(["s1"]);
+    expect(signals.rows()).toEqual([]);
+    expect(logged).toEqual([
+      [ABANDONED],
+      ["p2party: failed to drain pending signals", "Error"],
+    ]);
+  });
+
+  test("a late delete of an abandoned pass does not make its frame deliverable again", async () => {
+    const { alice, signals, clock, drain } = deadlineHarness([
+      { id: "s1", targetPeerId: ALICE, payload: "s1" },
+    ]);
+    const logged = await capturingErrors(async () => {
+      const lateDelete = signals.holdNextDelete();
+      void drain();
+      await settle();
+      clock.expire();
+      // The fresh pass reads while s1 is still queued...
+      const freshRead = signals.holdNextRead();
+      void drain();
+      // ...then the abandoned delete completes...
+      lateDelete.resolve();
+      await settle();
+      // ...and the fresh pass sees s1 in what it read.
+      freshRead.resolve();
+      await settle();
+    });
+
+    expect(alice.received).toEqual(["s1"]);
+    expect(signals.rows()).toEqual([]);
+    expect(logged).toEqual([[ABANDONED]]);
+  });
+
   test("a pass that ends in time leaves no deadline timer", async () => {
     const { alice, signals, clock, drain } = deadlineHarness([
       { id: "s1", targetPeerId: ALICE, payload: "s1" },
