@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Add a local Testnet 1 wallet companion that carries native signing keys and receive nonces between desktop browsers. It checks the saved backup before revealing a new receive request, migrates original key folders and exports reviewed, offline-signed native payments. [Wallet guide](clients/evm/portable-wallet/README.md)
+
 - Add a local fixed-committee ordering experiment for native transfers. Validators sign post-quantum data-availability votes, order certified batches with Bullshark anchors and issue separate execution certificates that bind the receipt and state roots. [Protocol and local checks](tools/ordering/README.md)
 
 ## [0.2.2] — 2026-11-27

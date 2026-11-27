@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>P2PARTY · Local wallet</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <strong>P2PARTY</strong><span>Testnet 1 · Local wallet</span>
+    </header>
+    <main>
+      <h1>Your wallet</h1>
+      <p class="lede">
+        Manage your testnet receive requests and take spending access to another
+        browser.
+      </p>
+      <noscript
+        >Enable JavaScript in this local companion to open your
+        wallet.</noscript
+      >
+      <section id="welcome" hidden>
+        <h2>Open on this device</h2>
+        <p>
+          Already have a wallet? Bring its encrypted backup file and the
+          recovery code you saved separately.
+        </p>
+        <button id="start-restore" type="button">Restore my wallet</button>
+        <details>
+          <summary>Create a new wallet</summary>
+          <form id="create-form" method="post">
+            <label for="create-suite">First receive request</label>
+            <select id="create-suite">
+              <option value="1">ML-DSA-65</option>
+              <option value="2">SLH-DSA-SHA2-192s</option>
+            </select>
+            <button type="submit">Create wallet</button>
+          </form>
+        </details>
+      </section>
+      <section id="overview" hidden>
+        <h2 id="wallet-heading">Wallet open</h2>
+        <p id="account-count"></p>
+        <button id="move" type="button">Move to another browser</button>
+        <div id="account-list"></div>
+        <details>
+          <summary>Check my total locally</summary>
+          <p>
+            Choose a complete public Testnet 1 snapshot from a replica you
+            trust. This computer matches your requests locally. The result
+            depends on the snapshot's source and height.
+          </p>
+          <form id="balance-form" method="post">
+            <label for="snapshot">Replica snapshot (.json)</label>
+            <input id="snapshot" type="file" required />
+            <button type="submit">Read snapshot</button>
+          </form>
+          <p id="reported-total" aria-live="polite"></p>
+        </details>
+        <details>
+          <summary>Add a receive request</summary>
+          <form id="add-form" method="post">
+            <label for="add-suite">Signing suite</label>
+            <select id="add-suite">
+              <option value="1">ML-DSA-65</option>
+              <option value="2">SLH-DSA-SHA2-192s</option>
+            </select>
+            <button type="submit">Create receive request</button>
+          </form>
+        </details>
+      </section>
+      <section id="kit" hidden>
+        <h2 tabindex="-1" id="kit-heading">Save your recovery kit</h2>
+        <p>
+          Keep the encrypted file and its recovery code in separate places.
+          Anyone with both can spend the units for the requests inside.
+        </p>
+        <ol>
+          <li>
+            <strong>Save the encrypted file.</strong>
+            <p>Choose where to keep it on this device or removable storage.</p>
+            <button id="download" type="button">
+              Download encrypted backup
+            </button>
+          </li>
+          <li>
+            <strong>Keep the recovery code separately.</strong>
+            <p>Write it down or save it in a trusted password manager.</p>
+            <button
+              id="reveal"
+              type="button"
+              aria-expanded="false"
+              aria-controls="code"
+            >
+              Show recovery code</button
+            ><code id="code" hidden></code>
+          </li>
+          <li id="confirm-step">
+            <strong>Check what you saved.</strong>
+            <p>
+              Choose your downloaded file and enter the code from your separate
+              copy. Your new receive requests will appear after the check.
+            </p>
+            <button id="start-confirm" type="button">Check my backup</button>
+          </li>
+          <li id="restore-step" hidden>
+            <strong>Open the destination browser.</strong>
+            <p>
+              On this computer, open this same local address in your other
+              browser. On another computer, start its own companion and open its
+              local address. Choose <b>Restore my wallet</b>, select the file
+              and enter your saved code. Either copy can authorize spending.
+            </p>
+          </li>
+        </ol>
+        <button class="secondary" id="close-kit" type="button">
+          Close instructions
+        </button>
+      </section>
+      <section id="unlock" hidden>
+        <h2 tabindex="-1" id="unlock-heading">Restore my wallet</h2>
+        <p id="unlock-help">
+          Choose the encrypted file and enter the separate recovery code. Both
+          stay on this computer.
+        </p>
+        <form id="unlock-form" method="post" autocomplete="off">
+          <label for="archive">Encrypted backup file</label>
+          <input id="archive" type="file" required />
+          <label for="recovery">Recovery code</label>
+          <input
+            id="recovery"
+            type="password"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          />
+          <div class="actions">
+            <button id="submit-unlock" type="submit">Restore wallet</button
+            ><button class="secondary" id="cancel-unlock" type="button">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </section>
+      <section id="lock-area" hidden>
+        <details>
+          <summary>Close this local wallet</summary>
+          <p id="lock-help">
+            Closing clears this wallet from the running companion. You will need
+            the backup and code to reopen it.
+          </p>
+          <button id="lock" type="button" class="secondary">
+            Close wallet
+          </button>
+        </details>
+      </section>
+      <p id="status" aria-live="polite" role="status"></p>
+    </main>
+  </body>
+</html>

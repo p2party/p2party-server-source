@@ -2,6 +2,8 @@
 
 This testnet package connects an ethers `BrowserProvider` or a viem `custom` transport to the validator's HTTPS `/rpc` endpoint. A balance is the integer weight of a whole native unit. The owner supplies a signature suite and a full 64-byte commitment. Each receive commitment can hold one unit once over its lifetime.
 
+To take a signing wallet to another desktop browser, restore its encrypted file and separate recovery code in the local companion. The companion also converts existing receive folders and supports signing native payments offline. [Portable wallet instructions](portable-wallet/README.md)
+
 ## Install and connect
 
 Download the [versioned npm tarball](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) and [SHA-256 checksum](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz.sha256) from p2party.com. With both files in your working directory, verify and install the archive.

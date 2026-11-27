@@ -1,0 +1,18 @@
+{
+  "name": "p2party-portable-testnet-wallet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=26.13.1"
+  },
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node --test wallet.test.mjs"
+  },
+  "dependencies": {
+    "@p2party/ledger-client": "https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz",
+    "jose": "6.2.18"
+  }
+}
