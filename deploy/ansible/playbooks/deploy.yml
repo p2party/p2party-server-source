@@ -47,6 +47,21 @@
       run_once: true
       delegate_to: localhost
       block:
+        - name: Read the source revision and worktree state
+          shell: >-
+            git -C "{{ repo_path }}" rev-parse HEAD &&
+            git -C "{{ repo_path }}" status --porcelain
+          changed_when: false
+          failed_when: false
+          register: release_tree
+
+        - name: Require the release Git checkout
+          assert:
+            that:
+              - release_tree.rc == 0
+              - release_tree.stdout_lines | length > 0
+            fail_msg: Run deploy/deploy.sh from a Git checkout of the server release.
+
         - name: Build the Linux binary from this repo
           shell: cd "{{ repo_path }}" && {{ build_command }}
           register: build_result
@@ -59,7 +74,7 @@
         # --skip-build deploy ships an existing binary and is accepted only
         # with a matching record. The commit and dirty flag are for proving
         # that such a binary is the build of the tree being deployed; nothing
-        # compares them yet.
+        # verifies both on a skip-build deploy.
         - name: Record how the binary was built
           when: not (skip_build | default(false) | bool)
           block:
@@ -145,6 +160,55 @@
               Nothing on any host has been changed. Run deploy/deploy.sh without
               --skip-build on a control machine whose bun is {{ bun.version }}.
 
+        - name: Require a reused binary to come from this clean revision
+          when: skip_build | default(false) | bool
+          assert:
+            that:
+              - build_record.commit | default('') == release_tree.stdout_lines[0]
+              - build_record.dirty | default(true) == false
+              - release_tree.stdout_lines | length == 1
+            fail_msg: The saved binary and current clean Git checkout must have the same commit. Commit the intended source and run deploy/deploy.sh without --skip-build to build a fresh binary.
+
+- name: Verify the candidate version against the running release before provisioning
+  hosts: signaling_production
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
+
+  tasks:
+    - name: Read the previous signaling binary
+      stat:
+        path: "{{ app.home }}/server/p2party-server"
+        checksum_algorithm: sha256
+        follow: false
+      register: previous_binary
+
+    - name: Read the serving version before changing the host
+      uri:
+        url: "http://127.0.0.1:{{ item }}/health"
+        return_content: true
+        timeout: 3
+        use_proxy: false
+      loop: "{{ signaling_ports }}"
+      register: previous_health
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse two different binaries with the same serving version
+      assert:
+        that:
+          - previous_binary.stat.checksum | default('') == built_binary.stat.checksum
+        fail_msg: This host serves this package version from a different binary. Deploy its original artifact or assign a new package version and build again.
+      loop: "{{ previous_health.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - item.status | default(0) == 200
+        - item.json.version | default('') == (lookup('ansible.builtin.file', repo_path ~ '/package.json') | from_json).version
+
 - name: Provision verified PostgreSQL TLS
   import_playbook: postgres-tls.yml
 
@@ -169,6 +233,7 @@
     release_staging: /var/lib/p2party-release-staging
     # A failed migration writes Prisma's output here (root-only, password
     # removed) and leaves the marker that initial-setup.yml checks.
+    startup_budget: "{{ lookup('ansible.builtin.file', repo_path ~ '/src/db/deadlines.json') | from_json }}"
     migration_log: /var/log/p2party-migration-failure.log
     migration_failure_marker: /var/lib/p2party-migration-failed
     deploy_interrupted: |
@@ -205,10 +270,18 @@
          check and reconcile any partial effects before retrying.
       4. Run this playbook again. It applies the migration and only then
          installs and starts the new binary.
-      Until then, do not run initial-setup.yml (it refuses to enable or start
-      a signaling unit while {{ migration_failure_marker }} exists) and do not
-      start the previous binary: rolling it back after
-      20261127000000_rekey_peers_to_derived_ids is not supported.
+      Rollback:
+      {% set active = prior_workers.results | selectattr('stdout', 'equalto', 'active') | map(attribute='item') | map('basename') | list %}
+      {% if rollback_history.stdout | default('') == 'before-rekey' and previous_binary.stat.isreg | default(false) and active and (previous_health.results | selectattr('json.version', 'defined') | selectattr('json.version', 'equalto', '0.1.4') | list | length) == (previous_health.results | length) %}
+      No re-key migration was attempted and this run stopped the serving 0.1.4 workers. To restore the previous release, confirm the installed SHA-256 is {{ previous_binary.stat.checksum }}. On each signaling host run:
+        sudo systemctl enable --now {{ active | map('quote') | join(' ') }}
+      Verify every previous port returns the 0.1.4 health response. Only then remove {{ migration_failure_marker }} on that host. Leave the failed migration history intact until the next upgrade.
+      {% elif rollback_history.stdout | default('') == 'rekey-started' %}
+      The re-key or a later migration has a recorded attempt. Starting the previous binary is not supported. Complete forward recovery above, or restore the verified pre-upgrade database backup and matching release together.
+      {% else %}
+      Rollback safety could not be established from both database history and the previous running release. Keep the workers stopped and complete forward recovery above.
+      {% endif %}
+      Until the documented recovery is complete, do not run initial-setup.yml.
     # Read the same package.json that bun build embeds through src/version.ts.
     # A skip-build deploy of an older binary therefore fails the health gate
     # instead of silently announcing a version different from the source tree.
@@ -555,16 +628,46 @@
         recurse: false
       register: signaling_units_before_migration
 
-    - name: Stop and disable every signaling worker before migrating
-      systemd:
-        name: "{{ item | basename }}"
-        state: stopped
-        enabled: false
-      loop: >-
-        {{ signaling_units_before_migration.files
-           | map(attribute='path') | list }}
-      loop_control:
-        label: "{{ item | basename }}"
+    - name: Record which installed workers currently serve
+      command:
+        argv: [systemctl, is-active, "{{ item | basename }}"]
+      loop: "{{ signaling_units_before_migration.files | map(attribute='path') | list }}"
+      changed_when: false
+      failed_when: false
+      register: prior_workers
+
+    - name: Preserve a recovery marker before the first stop
+      copy:
+        dest: "{{ migration_failure_marker }}"
+        content: |
+          A deploy started stopping workers. Some may still serve. Inspect
+          systemctl list-units --all 'p2party-signaling*.service' and rerun
+          deploy/deploy.sh to complete the coordinated cutover.
+        force: false
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Quiesce all installed signaling workers
+      block:
+        - name: Stop and disable every signaling worker before migrating
+          systemd:
+            name: "{{ item | basename }}"
+            state: stopped
+            enabled: false
+          loop: >-
+            {{ signaling_units_before_migration.files
+               | map(attribute='path') | list }}
+          loop_control:
+            label: "{{ item | basename }}"
+      rescue:
+        - name: Report an incomplete worker stop
+          fail:
+            msg: >-
+              A worker could not be stopped or disabled. This run has not
+              started migrations. Some units may be down. Run systemctl
+              list-units --all 'p2party-signaling*.service' on each signaling
+              host, fix the failed unit, then rerun deploy/deploy.sh.
 
     # From here until the new binary is installed, the binary on disk may not
     # match the schema. initial-setup.yml refuses to enable or start a
@@ -630,6 +733,34 @@
             mode: "0600"
           no_log: true
 
+        - name: Determine whether migration history permits the previous release
+          delegate_to: "{{ groups['databases_production'] | first }}"
+          become_user: postgres
+          command:
+            argv:
+              - /usr/bin/psql
+              - -XAtqw
+              - -v
+              - ON_ERROR_STOP=1
+              - -p
+              - "{{ database.port | string }}"
+              - -d
+              - "{{ database.name }}"
+              - -c
+              - >-
+                SELECT CASE
+                  WHEN count(*) FILTER (WHERE migration_name >= '20261127000000_rekey_peers_to_derived_ids') > 0 THEN 'rekey-started'
+                  WHEN count(DISTINCT migration_name) FILTER (WHERE migration_name IN ('20260224171205_init', '20260224172227_add_pubsub') AND finished_at IS NOT NULL AND rolled_back_at IS NULL) = 2 THEN 'before-rekey'
+                  ELSE 'unknown' END
+                FROM public._prisma_migrations
+          environment:
+            PGOPTIONS: "-c statement_timeout=5000 -c lock_timeout=2000"
+            PGCONNECT_TIMEOUT: "5"
+          register: rollback_history
+          changed_when: false
+          failed_when: false
+          ignore_unreachable: true
+
         # The marker set before the migration now says why.
         - name: Record in the marker that the migration failed
           copy:
@@ -646,44 +777,54 @@
     # ------------------------------------------------------------------
     # Install the release, only once the schema matches it
     # ------------------------------------------------------------------
-    - name: Install the staged binary
-      copy:
-        src: "{{ release_staging }}/p2party-server"
-        dest: "{{ app.home }}/server/p2party-server"
-        remote_src: true
-        owner: "{{ app.user }}"
-        group: "{{ app.group }}"
-        mode: "0755"
+    - name: Install the migrated release
+      block:
+        - name: Install the staged binary
+          copy:
+            src: "{{ release_staging }}/p2party-server"
+            dest: "{{ app.home }}/server/p2party-server"
+            remote_src: true
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0755"
 
-    - name: Install the staged signaling environment file
-      copy:
-        src: "{{ release_staging }}/.env"
-        dest: "{{ app.home }}/server/.env"
-        remote_src: true
-        owner: "{{ app.user }}"
-        group: "{{ app.group }}"
-        mode: "0600"
-      diff: false
+        - name: Install the staged signaling environment file
+          copy:
+            src: "{{ release_staging }}/.env"
+            dest: "{{ app.home }}/server/.env"
+            remote_src: true
+            owner: "{{ app.user }}"
+            group: "{{ app.group }}"
+            mode: "0600"
+          diff: false
 
-    # No notify: the restart task below already passes daemon_reload, so a
-    # handler here would be a second way to do the same thing and a runtime
-    # error if it were ever renamed.
-    - name: Install the staged systemd unit files
-      copy:
-        src: "{{ release_staging }}/p2party-signaling-{{ item }}.service"
-        dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
-        remote_src: true
-        owner: root
-        group: root
-        mode: "0644"
-      loop: "{{ signaling_instance_ports }}"
-      loop_control:
-        label: "{{ item }}"
+        # No notify: the restart task below already passes daemon_reload, so a
+        # handler here would be a second way to do the same thing and a runtime
+        # error if it were ever renamed.
+        - name: Install the staged systemd unit files
+          copy:
+            src: "{{ release_staging }}/p2party-signaling-{{ item }}.service"
+            dest: "/etc/systemd/system/p2party-signaling-{{ item }}.service"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+          loop: "{{ signaling_instance_ports }}"
+          loop_control:
+            label: "{{ item }}"
 
-    - name: Remove the marker now that the binary matches the schema
-      file:
-        path: "{{ migration_failure_marker }}"
-        state: absent
+        - name: Remove the marker now that the binary matches the schema
+          file:
+            path: "{{ migration_failure_marker }}"
+            state: absent
+      rescue:
+        - name: Report an interrupted installation after a successful migration
+          fail:
+            msg: >-
+              Migrations succeeded and all workers were stopped. The installed
+              binary, environment and unit files may be a mix of releases.
+              Leave the workers stopped, correct the failed installation task
+              and rerun deploy/deploy.sh to reinstall the complete release.
 
     # ------------------------------------------------------------------
     # Cut public routing over, start, and verify
@@ -721,13 +862,13 @@
             port: "{{ item }}"
             host: 127.0.0.1
             delay: 3
-            timeout: 25
+            timeout: "{{ ((startup_budget.historyMs + startup_budget.rekeyMs + startup_budget.rekeyGraceMs + 3 * startup_budget.listenMs) / 1000) | round(0, 'ceil') | int + (signaling_restart_seconds | int) + 5 }}"
           loop: "{{ signaling_instance_ports }}"
           loop_control:
             label: "{{ item }}"
       rescue:
         # A dead unit never opens its port, so without this the play spends
-        # 25s per instance timing out and then reports only "Timeout", which
+        # the startup budget per instance and then reports only "Timeout", which
         # says nothing about why. The service log always does.
         - name: Collect why the service did not start
           shell: |
@@ -755,6 +896,28 @@
     # Probe every direct worker rather than sampling through Caddy. A mixed
     # rollout is unsafe for clients that require room request correlation, and
     # a TCP accept alone cannot distinguish the new binary from the old one.
+    - name: Verify the installed release file after startup
+      stat:
+        path: "{{ app.home }}/server/p2party-server"
+        follow: false
+        checksum_algorithm: sha256
+      register: installed_release
+
+    - name: Require the installed file to match the candidate
+      assert:
+        that:
+          - installed_release.stat.isreg | default(false)
+          - installed_release.stat.checksum | default('') == built_binary.stat.checksum
+
+    - name: Verify the executable of each running signaling worker
+      script:
+        cmd: >-
+          {{ playbook_dir }}/../files/verify-running-worker.py {{ item | int }}
+          {{ built_binary.stat.checksum }} {{ 'rosetta' if rehearsal_allow_rosetta_hash | default(false) | bool else 'native' }}
+        executable: /usr/bin/python3
+      changed_when: false
+      loop: "{{ signaling_instance_ports }}"
+
     - name: Read health from every signaling instance
       uri:
         url: "http://127.0.0.1:{{ item }}/health"

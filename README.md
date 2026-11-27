@@ -229,7 +229,7 @@ curl -s https://signaling.p2party.com/health | jq
 {
   "status": "ok",
   "protocolVersion": 5,
-  "version": "0.2.0-rc.0",
+  "version": "0.2.0",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
 ```
@@ -752,7 +752,7 @@ that is the cause whatever else it sends. The reason names only the server's
 version. A `room`/`leaveRoom` request whose key set is not exactly the one
 documented closes the socket with `1003` and a `Malformed protocol-v5` reason.
 
-Deploy server 0.2.0-rc.0 before SDK 0.15.0-rc.0. The previous server returns HTTP
+Deploy server 0.2.0 before SDK 0.15.0. The previous server returns HTTP
 403 for a keyless upgrade, which browsers expose as an abnormal closure.
 The v5 server returns the explicit version refusal to earlier clients.
 
@@ -848,8 +848,7 @@ Before opening its listener it reads the migration history on its own
 connection, within 8 seconds, and exits with one `p2party: refusing to start`
 line, naming what it found and what to run, when the database does not answer
 or cannot be reached, is empty, lacks a migration the build ships, has one it
-does not ship, or holds a failed migration; `Restart=always` only repeats that
-refusal. It then re-runs the identity re-key statement within its own 60-second
+does not ship, or holds a failed migration; systemd retries after 5 seconds while the refusal persists. It then re-runs the identity re-key statement within its own 60-second
 bound; the statement changes nothing unless an unsupported writer left a row
 with another id, and one that runs past the bound is cancelled, changes nothing,
 and ends the start the same way. The Prisma pool that serves requests keeps no

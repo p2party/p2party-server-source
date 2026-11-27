@@ -73,6 +73,7 @@ app:
 # record next to it.
 repo_path: "{{ playbook_dir }}/../../.."
 build_command: "bun run build:linux"
+signaling_restart_seconds: 5
 binary_name: deploy/ansible/builds/p2party_linux_x64
 
 # The ansible-core these playbooks were tested with. playbooks/local-preflight.yml,

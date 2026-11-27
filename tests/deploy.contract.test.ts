@@ -236,7 +236,13 @@ describe("production deployment contract", () => {
         typeof earlier.command === "string" ? earlier.command : "",
         earlier.shell ?? "",
       ].join(" ");
-      expect(command, earlier.name).not.toMatch(/systemctl|service\s/);
+      if (earlier.name === "Record which installed workers currently serve")
+        expect(earlier.command?.argv).toEqual([
+          "systemctl",
+          "is-active",
+          "{{ item | basename }}",
+        ]);
+      else expect(command, earlier.name).not.toMatch(/systemctl|service\s/);
       if (earlier.systemd && earlier.name !== stop)
         expect(String(earlier.systemd.name ?? ""), earlier.name).not.toContain(
           "p2party-signaling",
@@ -250,6 +256,7 @@ describe("production deployment contract", () => {
     const failedNames = failed.map(({ name }) => name);
     expect(failedNames).toEqual([
       "Write the failed migration's output for the operator",
+      "Determine whether migration history permits the previous release",
       "Record in the marker that the migration failed",
       "Report the failed migration and how to recover",
     ]);
@@ -263,12 +270,12 @@ describe("production deployment contract", () => {
     expect(String(failed[0]!.copy?.content)).toContain(
       "replace(database.password",
     );
-    expect(failed[1]!.copy).toMatchObject({
+    expect(failed[2]!.copy).toMatchObject({
       dest: "{{ migration_failure_marker }}",
       content: "{{ migration_recovery }}",
       mode: "0600",
     });
-    expect(failed[2]!.fail?.msg).toBe("{{ migration_recovery }}");
+    expect(failed[3]!.fail?.msg).toBe("{{ migration_recovery }}");
     expect(task(play, migrate).no_log).toBe(true);
     const recovery = play.vars?.migration_recovery ?? "";
     for (const stated of [
@@ -355,6 +362,48 @@ describe("production deployment contract", () => {
       "DATABASE_URL={{ postgres_connection_url }}&options=",
     );
     expect(migrate.command?.argv).toContain("--no-env-file");
+  });
+
+  test("a reused build must identify its exact clean source revision", () => {
+    const name = "Require a reused binary to come from this clean revision";
+    const play = playWithTask(deploy, name);
+    const gate = task(play, name);
+    expect(gate.when).toBe("skip_build | default(false) | bool");
+    expect(gate.assert).toMatchObject({
+      that: [
+        "build_record.commit | default('') == release_tree.stdout_lines[0]",
+        "build_record.dirty | default(true) == false",
+        "release_tree.stdout_lines | length == 1",
+      ],
+    });
+    expect(deploy.indexOf("Refuse two different binaries")).toBeLessThan(
+      deploy.indexOf("import_playbook: postgres-tls.yml"),
+    );
+  });
+
+  test("an interrupted stop or install has a marker and its own recovery; running bytes are checked before health", () => {
+    const play = playWithTask(deploy, "Apply migrations against Postgres");
+    expect(
+      task(play, "Quiesce all installed signaling workers").rescue?.[0]?.fail
+        ?.msg,
+    ).toContain("rerun deploy/deploy.sh");
+    expect(
+      task(play, "Install the migrated release").rescue?.[0]?.fail?.msg,
+    ).toContain("rerun deploy/deploy.sh");
+    const at = (name: string) => position(play, name);
+    expect(at("Preserve a recovery marker before the first stop")).toBeLessThan(
+      at("Stop and disable every signaling worker before migrating"),
+    );
+    expect(at("Restart signaling services")).toBeLessThan(
+      at("Require the installed file to match the candidate"),
+    );
+    expect(
+      at("Verify the executable of each running signaling worker"),
+    ).toBeLessThan(at("Read health from every signaling instance"));
+    expect(play.vars?.startup_budget).toContain("src/db/deadlines.json");
+    expect(deploy).toContain(
+      "startup_budget.rekeyMs + startup_budget.rekeyGraceMs",
+    );
   });
 
   test("initial-setup refuses to start signaling services while a deploy is unfinished", () => {

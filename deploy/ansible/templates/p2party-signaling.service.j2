@@ -6,6 +6,7 @@
 
 [Unit]
 Description=P2Party Signaling Server
+StartLimitIntervalSec=0
 After=network.target
 Wants=network-online.target
 
@@ -20,7 +21,7 @@ EnvironmentFile={{ app.home }}/server/.env
 Environment=PORT={{ signaling_port }}
 ExecStart={{ app.home }}/server/p2party-server
 Restart=always
-RestartSec=5
+RestartSec={{ signaling_restart_seconds }}
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=p2party-signaling-{{ signaling_port }}

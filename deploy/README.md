@@ -5,7 +5,7 @@ coturn. Copy the tracked example inventory and vault files to their ignored
 operational paths, encrypt the vault, and configure SSH access before deploying.
 Never commit the resulting credentials, inventory, Terraform state or logs.
 
-Run a release from the repository root:
+Run a release from a Git checkout of the server repository:
 
 ```bash
 bun install --frozen-lockfile
@@ -26,9 +26,8 @@ TLS, then on the signaling host:
    `--check-config` as the service account with network access isolated.
    A failure stops the deploy here. Check the workers' current health and
    the failed task. Earlier TLS provisioning may already have run;
-2. stops and disables every signaling worker (`p2party-signaling*.service`), so
-   neither `Restart=always` nor a reboot can start one while the schema changes,
-   and writes the marker `/var/lib/p2party-migration-failed` (below);
+2. writes `/var/lib/p2party-migration-failed`, then stops and disables every
+   signaling worker (`p2party-signaling*.service`) before changing the schema;
 3. applies pending migrations as the service account. PostgreSQL allows 10
    seconds to acquire a lock and 120 seconds for each statement. systemd
    allows 300 seconds for the full CLI run, then terminates the process group
@@ -52,10 +51,17 @@ cannot be reached, is empty, lacks a migration the build ships, has one it does
 not ship, or holds a failed migration. It then re-runs the identity re-key
 statement within its own bound of 60 seconds (normally a no-op); a re-key that
 runs past it is cancelled, changes nothing, and ends the start with the same
-kind of line. `Restart=always` then only repeats the refusal.
+kind of line. A lost connection can leave the result unknown. Once the
+database is reachable the idempotent re-key can run again. The service
+retries after 5 seconds with no fixed retry count. The deploy waits up to
+113 seconds per worker for the schema check, re-key, LISTEN setup and restart.
+Once LISTEN is ready, cleanup of expired routing state runs in the background;
+a failed pass retries after 30 seconds. The worker pool allows 5 seconds to
+acquire a connection, 8 seconds per SQL statement and 10 seconds to receive
+its response.
 
-Deploy server 0.2.0-rc.0 before SDK 0.15.0-rc.0. Verify that every direct
-worker and the public `/health` endpoint report `version: "0.2.0-rc.0"` and
+Deploy server 0.2.0 before SDK 0.15.0. Verify that every direct
+worker and the public `/health` endpoint report `version: "0.2.0"` and
 `protocolVersion: 5` before updating clients. The signaling environment sets `SIGNALING_HOST` to the public
 WebSocket authority from `domains.signaling`. Clients include this authority
 in the login signature.
@@ -85,9 +91,13 @@ this order, and compares the staged binary afterwards:
    had changes (`dirty`), and the binary's SHA-256. Every deploy then requires
    that the record exists and is valid JSON, matches the binary's SHA-256 and
    names the pin; a binary built by hand, rebuilt after its record, or built
-   with another Bun is refused, and so is a missing or damaged record. The
-   commit and dirty flag are there to prove later that a `--skip-build` binary
-   is the build of the tree being deployed; nothing compares them yet.
+   with another Bun is refused, and so is a missing or damaged record. A
+   `--skip-build` deploy also requires both the recorded and current worktrees
+   to be clean and their commits to match. Before provisioning, a currently
+   serving package version must match the candidate binary byte for byte.
+   Use a new version for changed bytes. After restart, the deploy hashes the
+   installed file and each systemd worker's live executable before checking
+   its health response.
 3. **The signaling host runtime** comes from the pinned Linux release archive
    for the host architecture. Preparation checks its SHA-256 against the table
    below and runs the installed binary as the worker to verify its version.
@@ -249,17 +259,29 @@ statement boundary). The two migrations released in 0.1.4 are unchanged.
 4. Run `./deploy/deploy.sh` again. It applies the migration and only then
    installs and starts the new binary.
 
-From the moment a deploy stops the workers until it has installed the new
+From the moment a deploy starts stopping workers until it has installed the new
 binary, and after any failure in between, the file
 `/var/lib/p2party-migration-failed` exists on the signaling host and holds these
 steps (or, if the deploy ended after a successful migration, an instruction to
 run it again). `playbooks/initial-setup.yml` (also run by `site.yml`) refuses to
 enable or start a signaling unit while it exists, and prints it, although it
 still renders `.env` and the unit files first; a deploy that installs the new
-binary removes it. Do not start the previous binary by hand
-either: rolling the binary back after
-`20261127000000_rekey_peers_to_derived_ids` is not supported. A new binary
-started on such a database refuses with the same instructions.
+binary removes it. A partial worker stop or interrupted install has its own
+recovery message. Inspect the affected units, fix the failed task, and rerun
+`./deploy/deploy.sh` to finish the cutover.
+
+**Returning to 0.1.4.** The migration failure marker records the history check,
+the previously running units and the original binary's SHA-256 when verified.
+If both 0.1.4 migrations completed, **no re-key or later migration ever started**,
+and the previous 0.1.4 file is still installed, compare
+`sha256sum ~p2party/server/p2party-server` with that recorded digest. Run the
+marker’s `sudo systemctl enable --now <previous-unit...>` command on each
+signaling host. Check every previous port with
+`curl -fsS http://127.0.0.1:<port>/health`. Remove the marker only once each
+worker again reports 0.1.4. Keep Prisma’s failed row for the next upgrade.
+If the re-key or a later migration has a recorded attempt, the old binary
+requires a verified pre-upgrade database restore and matching release. If
+the state is unknown, keep workers stopped and perform forward recovery.
 
 ## Relay capacity
 
@@ -316,12 +338,12 @@ Two mitigations were considered and not built:
   head-of-line blocking and connectivity cost, and an adversary with several
   identities would still not be bounded.
 
-## Upgrading to 0.2.0-rc.0
+## Upgrading to 0.2.0
 
 `deploy.yml` stops every 0.1.4 worker before it migrates, so no 0.1.4 worker
 serves after the identity re-key. Where workers are run by other means, do the
-same: stop every 0.1.4 worker before migrating and before the first 0.2.0-rc.0 worker
-starts, and run all workers under one database role. A 0.2.0-rc.0 worker counts
+same: stop every 0.1.4 worker before migrating and before the first 0.2.0 worker
+starts, and run all workers under one database role. A 0.2.0 worker counts
 another as live only through its named PostgreSQL session, which 0.1.4 does not
 open, so it would clear a running 0.1.4 worker's routing claims.
 
