@@ -58,6 +58,8 @@ while :; do
   free="$(df -k "$work" 2>/dev/null | awk 'NR == 2 { print int($4 / 1048576) }')"
   [[ "$free" =~ ^[0-9]+$ ]] || trip "a probe failed (df printed nothing readable)"
   [ "$free" -ge "$abort_gib" ] || trip "only $free GiB free (the floor is $abort_gib GiB)"
-  date +%s >"$work/watch-heartbeat"
+  # A concurrent reader must see either the previous or the next timestamp.
+  date +%s >"$work/watch-heartbeat.next" && mv "$work/watch-heartbeat.next" "$work/watch-heartbeat" ||
+    trip "could not publish the watchdog heartbeat"
   sleep "$period"
 done

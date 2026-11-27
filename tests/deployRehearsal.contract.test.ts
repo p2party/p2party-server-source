@@ -1722,15 +1722,16 @@ function runWatch(options: {
           : options.dfScript;
     writeFileSync(join(bin, "lsof"), `#!/bin/sh\n${lsof}\n`, { mode: 0o755 });
     writeFileSync(join(bin, "df"), `#!/bin/sh\n${df}\n`, { mode: 0o755 });
-    writeFileSync(join(bin, "sleep"), `#!/bin/sh\nexit 0\n`, { mode: 0o755 });
+    // sleep is called only after the watchdog publishes a complete heartbeat.
+    writeFileSync(join(bin, "sleep"), '#!/bin/sh\nkill -TERM "$PPID"\n', {
+      mode: 0o755,
+    });
     const calls = join(sandbox, "calls");
     writeFileSync(
       join(bin, "limactl"),
       `#!/bin/sh\necho "$*" >> '${calls}'\n`,
       { mode: 0o755 },
     );
-    // The stub sleep returns at once, so a watch that never trips would loop
-    // forever; the timeout ends it after its first heartbeats.
     const result = Bun.spawnSync({
       cmd: [
         "bash",
@@ -1744,7 +1745,7 @@ function runWatch(options: {
       env: { PATH: `${bin}:/usr/bin:/bin` },
       stdout: "pipe",
       stderr: "pipe",
-      timeout: 1_000,
+      timeout: RUN_TIMEOUT_MS,
     });
     const read = (path: string) =>
       existsSync(path) ? readFileSync(path, "utf8").trim() : "";
