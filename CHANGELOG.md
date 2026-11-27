@@ -9,7 +9,9 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
-## [0.2.1]
+## [0.2.1] — 2026-11-27
+
+- Activated the public validator. The first grant and two native transfers appear at heights 1–3. Ethers and viem moved the same unit with different signature suites and recovered the original receipts on retry. [Public verification instructions](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md)
 
 - Add P2Party Testnet 1, an opt-in validating node for 128 valueless genesis units. The native verifier checks ML-DSA-65 and SLH-DSA-SHA2-192s transfers. PostgreSQL commits each spend and receipt together. A sender who loses the response can resubmit exactly the same signed bytes and recover the receipt. [Public testnet and grants guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) · [Native RPC](src/ledger/README.md)
 - Expose chain ID, ledger height and indexed balances to ethers and viem HTTP providers. Native transfers require the full owner commitment and a post-quantum signature. [Public wallet package](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) · [Client source archive](https://p2party.com/downloads/testnet-1/ledger-client-source.tar.gz)
