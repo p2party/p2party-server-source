@@ -12,6 +12,8 @@ node --test tools/ordering/ordering.test.mjs
 
 The tests cover a silent committee member, competing proposals for one author and round, duplicate deliveries, reordered certificates, missing ancestors, recovery of an earlier anchor, skipping an unreachable anchor and storage across restarts. The storage race runs two Node workers sharing a journal through independent SQLite connections. Candidate envelopes in these ordering tests exercise wire and commitment checks. Native execution requires the full transaction verifier and deterministic state replay.
 
+Run the native integration to reproduce a transfer, its certified receipt and a wallet proof of the resulting unspent unit. The browser SDK has a separate loopback experiment for purchasing a multi-relay route and collecting signed forwarding receipts. [Native replay and wallet proofs](native-replay.md) · [Browser relay experiment](https://github.com/p2party/p2party-js/tree/research/multi-relay-payout-local/docs/e2e/volunteer-relay)
+
 ## What validators vote on
 
 1. **Pin the committee.** `makeCommittee({version: 1, chainId, genesisHash, epoch, operators})` accepts canonical public SPKIs with distinct operator identities. Sorting by existing operator ID gives all replicas the same member indices. A committee has `n = 3f + 1` members, with 4, 7, 10, 13 or 16 supported. The committee ID binds the chain, canonical genesis hash, epoch, roster and signature suites. The fixed committee assumes at most `f` Byzantine members. Choosing a roster and establishing operator independence require external agreement.

@@ -4,9 +4,12 @@ The local ordering experiment accepts the existing ML-DSA and SLH-DSA transfer w
 
 ## Run locally
 
-Build the libdemos ledger from the sparse-state branch (commit `c085997`) with OpenSSL 3.5 or later and libsodium. The directory in `P2PARTY_NATIVE_BIN` must contain `demos-ledger-verify`, `demos-ledger-fixture`, `demos-ledger-state` and `demos-ledger-log`. Only the test uses the signing fixture.
+Build the libdemos ledger with CMake 3.28 or later, OpenSSL 3.5 or later, pkg-config and libsodium. From this server checkout, the commands below place the pinned native source and binaries in a temporary directory. The directory in `P2PARTY_NATIVE_BIN` must contain `demos-ledger-verify`, `demos-ledger-fixture`, `demos-ledger-state` and `demos-ledger-log`. Only the test uses the signing fixture. [Native source](https://github.com/p2party/libdemos/tree/d3da58d89e769e933db77bdeef1d44e07daf5bd4/ledger)
 
 ```sh
+LIBDEMOS=$(mktemp -d)/libdemos
+git clone --branch feat/ledger-sparse-state --single-branch https://github.com/p2party/libdemos.git "$LIBDEMOS"
+git -C "$LIBDEMOS" checkout --detach d3da58d89e769e933db77bdeef1d44e07daf5bd4
 cmake -S "$LIBDEMOS/ledger" -B "$LIBDEMOS/build/ledger" -DBUILD_TESTING=ON
 cmake --build "$LIBDEMOS/build/ledger" --parallel
 export P2PARTY_NATIVE_BIN="$LIBDEMOS/build/ledger"
