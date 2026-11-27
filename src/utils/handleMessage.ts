@@ -25,7 +25,7 @@ import {
   MALFORMED_PROTOCOL_CLOSE_CODE,
 } from "./socketAuth";
 import { isExactPongMessage } from "./handlePong";
-import { evictReplacedClaim } from "../pubsub";
+import { evictReplacedClaim, wakePendingSignalDrain } from "../pubsub";
 import { describeError } from "./logError";
 import { peerLogTag } from "./logTag";
 
@@ -72,6 +72,8 @@ export interface ProvedSocketActivation {
   undo: (ws: P2PartyWSClient, commit: IdentityCommit) => Promise<boolean>;
   /** Close the socket that held a claim which stays replaced. */
   evict: (peerId: string, replaced: RoutingClaim | null) => Promise<void>;
+  /** Called the moment this socket becomes current. */
+  becameCurrent?: (ws: P2PartyWSClient) => void;
 }
 
 /** This process's registry, store and queue; built per call (wsServer imports this module). */
@@ -80,6 +82,10 @@ const processActivation = (): ProvedSocketActivation => ({
   persist: (ws) => persistVerifiedIdentity(ws),
   undo: (ws, commit) => undoIdentityCommit(ws, commit),
   evict: (peerId, replaced) => evictReplacedClaim(peerId, replaced),
+  // Rows queued for this socket while it activated (a frame sent between its
+  // claim commit and its registration) are kept for it; deliver them now,
+  // not at the next safety poll, before direct sends can overtake them.
+  becameCurrent: () => wakePendingSignalDrain(),
 });
 
 /**
@@ -115,6 +121,7 @@ export const activateProvedSocket = (
         );
       }
     },
+    () => activation.becameCurrent?.(ws),
   );
 
 const hasExactKeys = (value: object, allowed: readonly string[]): boolean => {

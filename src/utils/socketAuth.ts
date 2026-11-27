@@ -502,6 +502,8 @@ export const activateVerifiedSocket = async <
   ws: T,
   commit: (peerId: string) => Promise<C | false>,
   undo: (committed: C) => Promise<void>,
+  /** Called once, synchronously, the moment the socket has become current. */
+  becameCurrent: () => void = () => undefined,
 ): Promise<C | false> => {
   const { peerId } = ws.data;
   if (
@@ -546,6 +548,9 @@ export const activateVerifiedSocket = async <
   if (committed && !replaced && ws.readyState === 1 && ws.data.isVerified) {
     registerVerifiedSocket(clients, ws);
     ws.data.isAuthenticating = false;
+    // The only place a socket becomes current: rows queued for it while it
+    // activated can be delivered now.
+    becameCurrent();
     return committed;
   }
 

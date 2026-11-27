@@ -480,6 +480,15 @@ Worst sustained departure frames per minute per process, at the defaults:
 Each worker process keeps its own counts, so with several workers these
 multiply by their number.
 
+A source's budget is shared by every identity behind it: everyone behind one
+NAT address or in one /64 shares the source budget, and everyone in one /48
+the /48 budget. One member there that uses it up, by leaving many rooms or by
+going offline repeatedly from rooms with many members, stops the others'
+departure pushes for the rest of that minute. What they lose is the advisory
+push only: their room-mates still see each departure in the next snapshot
+they request (a missing member; on one process, a missing socket generation)
+and on their own edges, which close when a member really goes.
+
 A `peerLeft` frame is a report from the signaling server, which clients cannot
 verify. The reference client never closes a connected WebRTC edge because of
 one: it removes a departed member it holds no connected edge to, keeps a
@@ -498,9 +507,19 @@ and a rejoin on the same socket carry the same generation; they are ordered
 because the leave's frames are handed on inside that socket's message queue,
 before the rejoin is processed, and because each process delivers its queue
 in order and once: `createPendingSignalDrain` (`src/pubsub.ts`) runs one pass
-at a time (a NOTIFY or safety poll during a pass asks for exactly one more),
-keeps a recipient's later rows behind one of its rows that could not be
-delivered yet, and does not deliver again a row whose delete failed. Frames
+at a time (a NOTIFY, a safety poll or a socket becoming current during a pass
+asks for exactly one more), keeps a recipient's later rows behind one of its
+rows that could not be delivered yet, and does not deliver again a row whose
+delete failed. A pass that has not ended after
+`PENDING_SIGNAL_PASS_DEADLINE_MS` (10 seconds, twice the safety poll) is
+abandoned, with one error line, and the next wake-up starts a fresh one: the
+Prisma pool has no query timeout, and a statement hung on a half-open
+connection would otherwise stop the drain until restart. The abandoned pass
+sends and deletes nothing more. Rows kept for a socket that is still
+activating are delivered as soon as it becomes current, because becoming
+current wakes the drain (`activateVerifiedSocket` in
+`src/utils/socketAuth.ts`); a frame sent straight to that socket during the
+one pass that follows can still arrive before them. Frames
 queued by different processes are delivered in `createdAt` order, a
 millisecond timestamp taken at insert; rows of the same millisecond have no
 defined order, and a row whose insert commits after a pass has read the queue

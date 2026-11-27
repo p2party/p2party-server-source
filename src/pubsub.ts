@@ -41,6 +41,18 @@ const SAFETY_POLL_MS = 5_000;
 /** Fail fast instead of hanging: see the note at the pg.Client construction. */
 const CONNECT_TIMEOUT_MS = 10_000;
 /**
+ * The longest one drain pass may take before it is abandoned and the next
+ * wake-up may start a fresh one. The Prisma pool has no query timeout, so a
+ * read or delete on a half-open connection could otherwise hang the drain,
+ * which runs one pass at a time, until restart. A healthy pass is one indexed
+ * read, local sends and one delete. Twice the safety poll, so a slow but
+ * working database is not cut off at every poll; a stalled pass then delays
+ * delivery by at most this plus one safety poll (15 s), well inside the
+ * PENDING_SIGNAL_MAX_AGE_MS (120 s) after which queued rows are swept, so the
+ * rows queued meanwhile are still there for the fresh pass.
+ */
+export const PENDING_SIGNAL_PASS_DEADLINE_MS = 2 * SAFETY_POLL_MS;
+/**
  * A queued offer, answer or ICE candidate is stale long before this. Older
  * rows are deleted whichever process they are addressed to: a live owner
  * drains within one safety poll, so an older row belongs to a dead process or
@@ -108,11 +120,14 @@ interface PendingSignalFrame {
 export const deliverPendingSignalsLocally = (
   signals: readonly PendingSignalFrame[],
   clients: Map<string, P2PartyWSClient> = wsClients,
+  /** Checked before every row; false stops delivery (an abandoned pass). */
+  stillCurrent: () => boolean = () => true,
 ): string[] => {
   const settled: string[] = [];
   /** Recipients with a row kept in this pass. */
   const waiting = new Set<string>();
   for (const signal of signals) {
+    if (!stillCurrent()) break;
     if (signal.kind !== "evict" && waiting.has(signal.targetPeerId)) continue;
     const delivered = deliverPendingSignal(signal, clients);
     if (delivered) settled.push(signal.id);
@@ -149,69 +164,157 @@ const deliverPendingSignal = (
   return target.send(signal.payload) !== 0;
 };
 
+/** The timer functions the drain's pass deadline uses; injectable for tests. */
+export interface DrainTimers {
+  setTimeout: (run: () => void, ms: number) => unknown;
+  clearTimeout: (handle: unknown) => void;
+}
+
+const processTimers: DrainTimers = {
+  setTimeout: (run, ms) => setTimeout(run, ms),
+  clearTimeout: (handle) => {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
+
+export interface PendingSignalDrain {
+  /** Start a pass, or ask the pass in flight for exactly one more. */
+  (): Promise<void>;
+  /** Abandon the pass in flight, if any, and clear its deadline. */
+  stop(): void;
+}
+
 /**
  * This process's drain of its PendingSignal queue, one pass at a time.
  *
- * Every NOTIFY on this process's channel and every safety poll wakes it.
- * Passes that overlapped would each read the same rows and deliver them
- * twice, and the slower pass's copy could land after frames queued later. So
- * a wake-up during a pass only asks for one more pass after it, however many
- * arrive. A pass delivers in queue order (deliverPendingSignalsLocally), then
- * deletes what it delivered. When that delete fails, the delivered ids are
- * remembered here and not delivered again, and the next pass retries their
- * delete; an id the queue no longer holds is forgotten. A pass that fails to
- * read loses nothing: the rows stay for the next wake-up.
+ * Every NOTIFY on this process's channel, every safety poll and every socket
+ * that becomes current wakes it. Passes that overlapped would each read the
+ * same rows and deliver them twice, and the slower pass's copy could land
+ * after frames queued later. So a wake-up during a pass only asks for one
+ * more pass after it, however many arrive. A pass delivers in queue order
+ * (deliverPendingSignalsLocally), then deletes what it delivered. When that
+ * delete fails, the delivered ids are remembered here and not delivered
+ * again, and the next pass retries their delete; an id the queue no longer
+ * holds is forgotten. A pass that fails to read loses nothing: the rows stay
+ * for the next wake-up.
+ *
+ * A pass that has not ended by `deadlineMs` (PENDING_SIGNAL_PASS_DEADLINE_MS)
+ * is abandoned: the epoch is bumped, the drain is free again, one line is
+ * logged, and the next wake-up starts a fresh pass. The abandoned pass checks
+ * the epoch after each await and before every send and every delete, so once
+ * stale it does nothing more and two passes never deliver at once. What it
+ * delivered before is recorded in `undeleted`, so the fresh pass does not
+ * deliver it again.
  */
 export const createPendingSignalDrain = (
   store: Pick<RoutingStore, "pendingSignal">,
   clients: Map<string, P2PartyWSClient>,
   self: string,
-): (() => Promise<void>) => {
+  timers: DrainTimers = processTimers,
+  deadlineMs: number = PENDING_SIGNAL_PASS_DEADLINE_MS,
+): PendingSignalDrain => {
+  /** Only a pass of the current epoch may send, delete or record. */
+  let epoch = 0;
   let running: Promise<void> | undefined;
   let again = false;
+  let deadline: unknown;
+  let abandoned = 0;
   /** Delivered rows whose delete has not succeeded yet. */
   const undeleted = new Set<string>();
 
-  const pass = async (): Promise<void> => {
+  const clearDeadline = (): void => {
+    if (deadline === undefined) return;
+    timers.clearTimeout(deadline);
+    deadline = undefined;
+  };
+
+  /** Make the pass in flight stale and free the drain for a fresh one. */
+  const abandon = (): void => {
+    epoch++;
+    running = undefined;
+    again = false;
+    clearDeadline();
+  };
+
+  const pass = async (mine: number): Promise<void> => {
     const signals = await store.pendingSignal.findMany({
       where: { targetServerId: self },
       orderBy: { createdAt: "asc" },
     });
+    if (mine !== epoch) return;
     const queued = new Set(signals.map(({ id }) => id));
     for (const id of undeleted) if (!queued.has(id)) undeleted.delete(id);
     const fresh = signals.filter(({ id }) => !undeleted.has(id));
-    for (const id of deliverPendingSignalsLocally(fresh, clients))
+    for (const id of deliverPendingSignalsLocally(
+      fresh,
+      clients,
+      () => mine === epoch,
+    ))
       undeleted.add(id);
-    if (undeleted.size === 0) return;
+    if (undeleted.size === 0 || mine !== epoch) return;
     const done = [...undeleted];
     await store.pendingSignal.deleteMany({ where: { id: { in: done } } });
+    if (mine !== epoch) return;
     for (const id of done) undeleted.delete(id);
   };
 
-  return () => {
+  const start = (): Promise<void> => {
+    const mine = ++epoch;
+    const run = (async () => {
+      try {
+        do {
+          again = false;
+          deadline = timers.setTimeout(() => {
+            deadline = undefined;
+            if (mine !== epoch) return;
+            abandon();
+            abandoned++;
+            // Counts only: which rows or recipients were waiting is not for
+            // the journal.
+            console.error(
+              `p2party: abandoned a pending-signal drain pass after ${String(deadlineMs)} ms (${String(abandoned)} since start); the next wake-up starts a fresh one`,
+            );
+          }, deadlineMs);
+          try {
+            await pass(mine);
+          } catch (error) {
+            if (mine === epoch)
+              console.error(
+                "p2party: failed to drain pending signals",
+                describeError(error),
+              );
+          }
+          if (mine !== epoch) return;
+          clearDeadline();
+        } while (again);
+      } finally {
+        if (mine === epoch) running = undefined;
+      }
+    })();
+    running = run;
+    return run;
+  };
+
+  const wake = (): Promise<void> => {
     if (running) {
       again = true;
       return running;
     }
-    running = (async () => {
-      try {
-        do {
-          again = false;
-          try {
-            await pass();
-          } catch (error) {
-            console.error(
-              "p2party: failed to drain pending signals",
-              describeError(error),
-            );
-          }
-        } while (again);
-      } finally {
-        running = undefined;
-      }
-    })();
-    return running;
+    return start();
   };
+  return Object.assign(wake, { stop: abandon });
+};
+
+/** This process's drain, built in initPubSub, stopped in shutdownPubSub. */
+let pendingSignalDrain: PendingSignalDrain | undefined;
+
+/**
+ * Wake this process's drain, if routing is initialised. Called when a socket
+ * becomes current (handleMessage.ts), so rows kept for it while it activated
+ * are delivered at once instead of at the next safety poll.
+ */
+export const wakePendingSignalDrain = (): void => {
+  void pendingSignalDrain?.();
 };
 
 /** Delete every queued signal older than PENDING_SIGNAL_MAX_AGE_MS. */
@@ -407,6 +510,7 @@ export const initPubSub = async (): Promise<void> => {
   // Built here, not at module load: this module and wsServer.ts import each
   // other, so wsClients does not exist yet while this module is evaluated.
   const drain = createPendingSignalDrain(prisma, wsClients, SERVER_ID);
+  pendingSignalDrain = drain;
   listenClient.on("notification", (message) => {
     if (message.channel === CHANNEL) void drain();
   });
@@ -693,6 +797,8 @@ export const releasePeer = async (
 export const shutdownPubSub = async (): Promise<void> => {
   if (safetyPoll) clearInterval(safetyPoll);
   safetyPoll = undefined;
+  pendingSignalDrain?.stop();
+  pendingSignalDrain = undefined;
   if (pendingSignalSweep) clearInterval(pendingSignalSweep);
   pendingSignalSweep = undefined;
   if (claimReconciliation) clearInterval(claimReconciliation);
