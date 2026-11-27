@@ -1437,6 +1437,12 @@ mode_scenario_8() {
   record_candidate_health "$scenario_tree"
 
   res ""
+  res "### Reuse the saved binary from this clean revision"
+  rc=0
+  play_recorded "deploy.yml -e skip_build=true with the unchanged candidate and record" "$LOGS/s8-reuse.log" "$scenario_tree" deploy.yml -e skip_build=true || rc=$?
+  [ "$rc" -eq 0 ] || die "deploy refused its own matching clean build"
+  record_candidate_health "$scenario_tree"
+  res ""
   res "### c. The binary and build record of a deploy of another commit"
   other_sha="$(git -C "$repo" rev-parse --verify "$OTHER_REV^{commit}")"
   if [ "$other_sha" = "$COMMIT_SHA" ]; then

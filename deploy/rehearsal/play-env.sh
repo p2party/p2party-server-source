@@ -32,11 +32,13 @@ for value in "$work" "$tools" "$cfg" "$control" "$guard_bin" "$ssh_port" "$bun_d
 done
 [ $# -gt 0 ] || { echo "play-env.sh: no command" >&2; exit 2; }
 
+# Expand HOME on the connection target. The fictitious USER has no macOS
+# home entry, so Ansible's default "~rehearsal" becomes a path in the checkout.
 exec env -i \
   HOME="$work/home" USER=rehearsal LANG=C.UTF-8 LC_ALL=C.UTF-8 TMPDIR="$work/tmp" \
   PATH="$guard_bin:$bun_dir:$tools/venv/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
   ANSIBLE_CONFIG="$cfg" ANSIBLE_HOME="$work/ansible/home" \
-  ANSIBLE_LOCAL_TEMP="$work/ansible/tmp" ANSIBLE_SSH_CONTROL_PATH_DIR="$control" \
+  ANSIBLE_REMOTE_TEMP='$HOME/.ansible/tmp' ANSIBLE_LOCAL_TEMP="$work/ansible/tmp" ANSIBLE_SSH_CONTROL_PATH_DIR="$control" \
   ANSIBLE_COLLECTIONS_PATH="$tools/collections" ANSIBLE_PRIVATE_KEY_FILE="$work/secrets/id_ed25519" \
   ANSIBLE_SSH_COMMON_ARGS="-o UserKnownHostsFile=$work/secrets/known_hosts -o StrictHostKeyChecking=accept-new" \
   ANSIBLE_NOCOLOR=1 ANSIBLE_FORCE_COLOR=0 \

@@ -1294,6 +1294,7 @@ describe("release rehearsal contract", () => {
             "ANSIBLE_FORCE_COLOR",
             "ANSIBLE_HOME",
             "ANSIBLE_LOCAL_TEMP",
+            "ANSIBLE_REMOTE_TEMP",
             "ANSIBLE_NOCOLOR",
             "ANSIBLE_PRIVATE_KEY_FILE",
             "ANSIBLE_SSH_COMMON_ARGS",
@@ -1314,6 +1315,7 @@ describe("release rehearsal contract", () => {
         );
         expect(env.PATH?.split(":")[0]).toBe("/g");
         expect(env.ANSIBLE_CONFIG).toBe("/c.cfg");
+        expect(env.ANSIBLE_REMOTE_TEMP).toBe("$HOME/.ansible/tmp");
         expect(env.ANSIBLE_SSH_COMMON_ARGS).toBe(
           "-o UserKnownHostsFile=/w/secrets/known_hosts -o StrictHostKeyChecking=accept-new",
         );
