@@ -41,4 +41,10 @@ for required in TF_VAR_hcloud_token TF_VAR_cloudflare_api_token TF_VAR_cloudflar
 done
 
 cd "$TERRAFORM_DIR"
+# Real plans and applies must establish visibility of an opted-in redirect phase.
+command="${1:-}"
+if [[ "$command" == -chdir=* ]]; then command="${2:-}"; fi
+case "$command" in
+  plan|apply|destroy|refresh) python3 "$SCRIPT_DIR/redirect_preflight.py" "$@" ;;
+esac
 exec terraform "$@"

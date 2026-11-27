@@ -635,7 +635,11 @@ Before enabling any of them:
    lookup or ruleset dry run means the token lacks access. If the existing
    project ruleset is outside this state, verify its current rules and import
    the matching ID into `cloudflare_ruleset.frontend_redirects[0]` before planning.
-   Keep any additional or independently managed rules in their owning configuration. On 2026-09-09 the zone had no
+   Keep any additional or independently managed rules in their owning configuration.
+   The `./deploy/tf` wrapper checks the live redirect phase before planning or
+   applying a rollout, including a saved plan. It reads the phase versions
+   directly because a zone-wide ruleset list can omit phases that the token
+   cannot inspect. On 2026-09-09 the zone had no
    ruleset in that phase. As with the header rule, the opt-in data source
    refuses a differently named ruleset or any additional rule, and a 403 is an
    unresolved ownership check. Also look for a Page Rule that forwards www; it
