@@ -21,7 +21,7 @@ Open the exact `http://127.0.0.1:PORT/` address printed in the terminal. The ran
 
 Archive names include a wallet identifier and revision. **Each file covers only the receive requests present when it was saved.** A replacement with just an older valid file can restore that revision and cannot discover later nonces. After moving, use one device to add new requests and carry the updated file to other devices. Two devices that add requests independently produce separate histories, even if their revision numbers match. Retain both files if that happens. Browser storage contains only a tab's random session token. The local signer keeps unlocked wallet material in process memory until you close the wallet or stop it. Recovery is self-custodial. Protect both pieces against loss and keep separate backups.
 
-The local signer and command-line tools require a computer that runs the supported Node runtime. The browser test uses separate desktop Chromium profiles. A narrow viewport check covers the layout. Installation and signing on mobile operating systems need a separate release.
+The local signer and command-line tools require a computer that runs the supported Node runtime. The automated browser test uses separate desktop Chromium profiles. A separate Chromium-to-Firefox 161 recovery check reproduced the original ML-DSA-65 commitment and verified an offline signature after the source signer stopped. A narrow viewport check covers the layout. Installation and signing on mobile operating systems need a separate release.
 
 ## What someone with one address can see
 
@@ -39,7 +39,7 @@ A replica operator can produce the generic public JSON file using a read-only da
 psql -XAt -v ON_ERROR_STOP=1 -d verified_replica -f export-snapshot.sql > testnet1-snapshot.json
 ```
 
-The checker pins the server’s canonical decoded-genesis fingerprint, verifies the 128 distinct, weight-one units required by Testnet 1, validates suite IDs, and rejects duplicate IDs or commitments. A wallet-side structural check cannot authenticate membership, freshness or the claimed head. Obtain the file directly from a trusted verified replay. There is no public snapshot feed. [Replica replay instructions](../../../src/ledger/README.md#replay-a-local-peer-into-a-second-database) · [Consistent snapshot query](export-snapshot.sql)
+A disposable PostgreSQL 18 database using the server schema reproduced all 128 published genesis units, their canonical fingerprint and height zero with this query. The checker pins the server’s canonical decoded-genesis fingerprint, verifies the 128 distinct, weight-one units required by Testnet 1, validates suite IDs, and rejects duplicate IDs or commitments. A wallet-side structural check cannot authenticate membership, freshness or the claimed head. Obtain the file directly from a trusted verified replay. There is no public snapshot feed. [Replica replay instructions](../../../src/ledger/README.md#replay-a-local-peer-into-a-second-database) · [Consistent snapshot query](export-snapshot.sql)
 
 ## Bring an existing key and receive nonce
 
