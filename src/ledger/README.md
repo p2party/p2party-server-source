@@ -2,6 +2,8 @@
 
 The signaling process can expose a JSON-RPC 2.0 transfer validator backed by PostgreSQL. Each accepted transfer spends one existing unit, retains its weight, creates a unit under a fresh owner commitment, and appends its signed native bytes at the next height. The same database orders submissions across signaling workers. This stage has local committed heights. Consensus, staking, finality and minting are outside the protocol implemented here.
 
+The local fixed-committee experiment certifies batches, orders their committed causal history using Bullshark anchors, and collects separate signatures over independently replayed execution roots. [Ordering protocol and tests](../../tools/ordering/README.md)
+
 ## Start a node
 
 Build `demos-ledger-verify` from the pinned public source with CMake, OpenSSL 3.5+ and libsodium. The reference Linux amd64 release checks the executable's SHA-256 digest and exercises a positive and negative vector for each signing suite. [Pinned verifier](https://github.com/p2party/libdemos/tree/243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0/ledger) · [Release configuration](../../deploy/README.md#public-testnet-release)

@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Add a local fixed-committee ordering experiment for native transfers. Validators sign post-quantum data-availability votes, order certified batches with Bullshark anchors and issue separate execution certificates that bind the receipt and state roots. [Protocol and local checks](tools/ordering/README.md)
+
 ## [0.2.2] — 2026-11-27
 
 - Expire offline signaling identities and their room memberships after 90 days without an authenticated login. Operators can set `MEMBERSHIP_TTL_DAYS`. The cleanup runs on startup and every minute and preserves online identities.
