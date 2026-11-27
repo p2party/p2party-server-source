@@ -29,5 +29,5 @@
     "noPropertyAccessFromIndexSignature": false
   },
   // logs/ holds local audit artifacts (gitignored), including source snapshots.
-  "exclude": ["node_modules", "logs"]
+  "exclude": ["node_modules", "logs", "clients"]
 }

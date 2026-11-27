@@ -5,6 +5,7 @@
     "": {
       "name": "p2party-server",
       "dependencies": {
+        "@noble/hashes": "2.4.0",
         "@ondemos/core": "0.2.7",
         "@prisma/adapter-pg": "7.10.1",
         "@prisma/client": "7.10.1",
@@ -28,6 +29,8 @@
     "@electric-sql/pglite-socket": ["@electric-sql/pglite-socket@0.1.3", "", { "peerDependencies": { "@electric-sql/pglite": "0.4.3" }, "bin": { "pglite-server": "dist/scripts/server.js" } }, "sha512-LAciWM0M1dCL8hlsxu2venbVZcdxema0BtDfpWYVqr+Y468UADw0pFWidhKw1M8sfJ8rdLT71tjMmnirf/IZRQ=="],
 
     "@electric-sql/pglite-tools": ["@electric-sql/pglite-tools@0.3.3", "", { "peerDependencies": { "@electric-sql/pglite": "0.4.3" } }, "sha512-AlzLJTRJ8+UFgK8CmxIpyIpJ0+YaFw02IiOSdYrqxwPXdSyeIShz8aa9Tq+tYFXdPwcaMp/Fc80mQZ1dkOQ/wg=="],
+
+    "@noble/hashes": ["@noble/hashes@2.4.0", "", {}, "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA=="],
 
     "@ondemos/core": ["@ondemos/core@0.2.7", "", {}, "sha512-8InwLB0ZfQiIGy6Y3Q/neaBnysm19tnHgM4+WSdx46OlR8pSdFnKVKMP1heb3Bpv2/kv9Ua44UHXf9EhKPLkbA=="],
 

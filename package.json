@@ -1,6 +1,6 @@
 {
   "name": "p2party-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Protocol-v5 signaling server for p2party WebRTC room meshes",
   "private": true,
   "license": "Apache-2.0",
@@ -37,6 +37,7 @@
     "build:windows": "bun run db:generate && bun build --compile --minify --sourcemap --bytecode --target=bun-windows-x64-modern --format esm ./src/index.ts --outfile deploy/ansible/builds/p2party_exe"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@ondemos/core": "0.2.7",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",

@@ -1,9 +1,15 @@
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { Pool, type PoolClient } from "pg";
 import { postgresConnection } from "../db/ssl";
 import schema from "./schema.sql" with { type: "text" };
 import { bytes, hex, hexQuantity, RpcError, type LedgerConfig } from "./config";
 import { validateTransfer, type StoredUnit } from "./native";
 
+function handle(suite: number, commitment: Buffer): Buffer {
+  return Buffer.from(
+    keccak_256(Buffer.concat([Buffer.from([suite]), commitment])).subarray(12),
+  );
+}
 const unitView = (u: StoredUnit) => ({
   id: hex(u.id),
   weight: hexQuantity(u.weight),
@@ -56,6 +62,47 @@ export class LedgerStore {
       c.release(discard);
     }
   }
+  private checkIdentity(row?: { chain_id: Buffer; genesis_hash: Buffer }) {
+    if (
+      !row ||
+      hex(row.chain_id) !== this.config.chainId ||
+      row.genesis_hash.toString("hex") !== this.config.genesisHash
+    )
+      throw new Error("Configured genesis differs from the stored ledger");
+  }
+  /** Verify the same role can initialize or migrate this database, without creating or modifying state. */
+  async preflight() {
+    await this.transaction(async (c) => {
+      await c.query("SET TRANSACTION READ ONLY");
+      const {
+        rows: [state],
+      } = await c.query(`SELECT to_regnamespace('p2party_ledger') AS schema,
+        has_database_privilege(current_database(), 'CREATE') AS can_create`);
+      if (!state.schema) {
+        if (!state.can_create)
+          throw new Error(
+            "Ledger role needs CREATE on the database for initial setup",
+          );
+        return;
+      }
+      const {
+        rows: [privileges],
+      } =
+        await c.query(`SELECT has_schema_privilege('p2party_ledger', 'USAGE') AND
+        has_schema_privilege('p2party_ledger', 'CREATE') AS schema_access,
+        (SELECT count(*)=3 AND bool_and(pg_has_role(cl.relowner,'USAGE'))
+          FROM pg_class cl JOIN pg_namespace n ON n.oid=cl.relnamespace
+          WHERE n.nspname='p2party_ledger' AND cl.relkind='r' AND cl.relname IN ('chain','units','transfers')) AS can_migrate`);
+      if (!privileges.schema_access || !privileges.can_migrate)
+        throw new Error(
+          "Ledger role must be able to access and migrate the existing ledger tables",
+        );
+      const { rows } = await c.query(
+        "SELECT chain_id,genesis_hash FROM p2party_ledger.chain WHERE singleton",
+      );
+      this.checkIdentity(rows[0]);
+    });
+  }
   async initialize() {
     const cfg = this.config;
     await this.transaction(async (c) => {
@@ -68,11 +115,35 @@ export class LedgerStore {
         "SELECT chain_id,genesis_hash FROM p2party_ledger.chain WHERE singleton",
       );
       if (existing.rows[0]) {
-        if (
-          hex(existing.rows[0].chain_id) !== cfg.chainId ||
-          existing.rows[0].genesis_hash.toString("hex") !== cfg.genesisHash
-        )
-          throw new Error("Configured genesis differs from the stored ledger");
+        this.checkIdentity(existing.rows[0]);
+        const {
+          rows: [column],
+        } = await c.query(
+          `SELECT attnotnull FROM pg_attribute WHERE attrelid='p2party_ledger.units'::regclass AND attname='read_handle' AND NOT attisdropped`,
+        );
+        if (!column.attnotnull) {
+          for (;;) {
+            const { rows } = await c.query<{
+              id: Buffer;
+              suite: number;
+              commitment: Buffer;
+            }>(
+              "SELECT id,suite,commitment FROM p2party_ledger.units WHERE read_handle IS NULL LIMIT 256",
+            );
+            if (!rows.length) break;
+            await c.query(
+              `UPDATE p2party_ledger.units u SET read_handle=decode(x.handle,'hex')
+              FROM unnest($1::text[],$2::text[]) AS x(id,handle) WHERE u.id=decode(x.id,'hex')`,
+              [
+                rows.map((r) => r.id.toString("hex")),
+                rows.map((r) => handle(r.suite, r.commitment).toString("hex")),
+              ],
+            );
+          }
+          await c.query(
+            "ALTER TABLE p2party_ledger.units ALTER COLUMN read_handle SET NOT NULL",
+          );
+        }
         return;
       }
       await c.query("INSERT INTO p2party_ledger.chain VALUES(true,$1,$2,0)", [
@@ -81,13 +152,16 @@ export class LedgerStore {
       ]);
       if (cfg.units.length)
         await c.query(
-          `INSERT INTO p2party_ledger.units(id,weight,suite,commitment,created)
-        SELECT decode(u.id,'hex'),u.weight,u.suite,decode(u.commitment,'hex'),0 FROM unnest($1::text[],$2::numeric[],$3::smallint[],$4::text[]) AS u(id,weight,suite,commitment)`,
+          `INSERT INTO p2party_ledger.units(id,weight,suite,commitment,created,read_handle)
+        SELECT decode(u.id,'hex'),u.weight,u.suite,decode(u.commitment,'hex'),0,decode(u.handle,'hex') FROM unnest($1::text[],$2::numeric[],$3::smallint[],$4::text[],$5::text[]) AS u(id,weight,suite,commitment,handle)`,
           [
             cfg.units.map((u) => u.id.slice(2)),
             cfg.units.map((u) => BigInt(u.weight).toString()),
             cfg.units.map((u) => u.suite),
             cfg.units.map((u) => u.commitment.slice(2)),
+            cfg.units.map((u) =>
+              handle(u.suite, bytes(u.commitment, 64)).toString("hex"),
+            ),
           ],
         );
     });
@@ -100,6 +174,36 @@ export class LedgerStore {
       chainId: this.config.chainId,
       height: hexQuantity(rows[0]!.height),
     };
+  }
+  async balance(address: Buffer, height: bigint | null) {
+    // One MVCC snapshot for both head and units. Detect distinct commitments sharing a
+    // handle even when a previous unit was spent; that handle no longer identifies one owner.
+    const { rows } = await this.pool.query<{
+      head: string;
+      at: string;
+      weight: string | null;
+      spent: string | null;
+    }>(
+      `
+      SELECT p.head,p.at,u.weight,u.spent FROM (
+        SELECT height AS head,coalesce($2::bigint,height) AS at FROM p2party_ledger.chain WHERE singleton
+      ) p LEFT JOIN LATERAL (
+        SELECT weight,spent FROM p2party_ledger.units WHERE read_handle=$1 AND created<=p.at LIMIT 2
+      ) u ON true`,
+      [address, height?.toString() ?? null],
+    );
+    const row = rows[0]!;
+    if (BigInt(row.at) > BigInt(row.head))
+      throw new RpcError(-32001, "Unknown ledger height");
+    if (rows.length > 1)
+      throw new RpcError(
+        -32004,
+        "Ambiguous native read handle; use a full commitment or unit ID",
+      );
+    return row.weight !== null &&
+      (row.spent === null || BigInt(row.spent) > BigInt(row.at))
+      ? hexQuantity(row.weight)
+      : "0x0";
   }
   async unit(id: Buffer) {
     const { rows } = await this.pool.query<StoredUnit>(
@@ -175,13 +279,14 @@ export class LedgerStore {
           );
           if (spent.rowCount !== 1) throw rejected();
           await c.query(
-            "INSERT INTO p2party_ledger.units(id,weight,suite,commitment,created) VALUES($1,$2,$3,$4,$5)",
+            "INSERT INTO p2party_ledger.units(id,weight,suite,commitment,created,read_handle) VALUES($1,$2,$3,$4,$5,$6)",
             [
               out.outputId,
               input.weight,
               out.suite,
               out.commitment,
               height.toString(),
+              handle(out.suite, out.commitment),
             ],
           );
           await c.query(
