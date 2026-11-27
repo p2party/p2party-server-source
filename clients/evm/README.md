@@ -4,16 +4,16 @@ This testnet package connects an ethers `BrowserProvider` or a viem `custom` tra
 
 ## Install and connect
 
-Download the [versioned npm tarball](https://github.com/p2party/p2party-server/releases/download/ledger-client-v0.1.0-testnet.0/p2party-ledger-client-0.1.0-testnet.0.tgz) and [SHA-256 checksum](https://github.com/p2party/p2party-server/releases/download/ledger-client-v0.1.0-testnet.0/p2party-ledger-client-0.1.0-testnet.0.tgz.sha256) from the public GitHub prerelease. With both files in your working directory:
+Download the [versioned npm tarball](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) and [SHA-256 checksum](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz.sha256) from p2party.com. With both files in your working directory, verify and install the archive.
 
 ```sh
 shasum -a 256 -c p2party-ledger-client-0.1.0-testnet.0.tgz.sha256
 npm install ./p2party-ledger-client-0.1.0-testnet.0.tgz
 ```
 
-For a source build, run `npm ci` and `npm pack` from this directory with Node 26. Install the resulting tarball with the same `npm install` command. Install `ethers` or `viem` in the consuming application. The tested versions are ethers 6.17.0 and viem 2.58.8. The package's main entry runs in browsers and Node. Its optional `/node` signer uses Node 26 with OpenSSL support for the selected post-quantum algorithm.
+The [source archive](https://p2party.com/downloads/testnet-1/ledger-client-source.tar.gz) and its [checksum](https://p2party.com/downloads/testnet-1/ledger-client-source.tar.gz.sha256) contain the reviewed wallet source. For a source build, extract the archive and run `npm ci` and `npm pack` from this directory with Node 26. Install the resulting tarball with the same `npm install` command. Install `ethers` or `viem` in the consuming application. The tested versions are ethers 6.17.0 and viem 2.58.8. The package's main entry runs in browsers and Node. Its optional `/node` signer uses Node 26 with OpenSSL support for the selected post-quantum algorithm.
 
-The public, valueless testnet manifest is [deploy/testnet/genesis.json](../../deploy/testnet/genesis.json). Its RPC URL is `https://signaling.p2party.com/rpc`, native chain ID is `0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73c760`, and numeric provider ID is `1345474644` (`0x50325054`). Wallets should pin this pair before signing. Publication of the endpoint and issuance of valueless test allocations are operator actions.
+The public, valueless testnet manifest is [genesis.json](https://p2party.com/downloads/testnet-1/genesis.json) ([SHA-256](https://p2party.com/downloads/testnet-1/genesis.json.sha256)). Its RPC URL is `https://signaling.p2party.com/rpc`, native chain ID is `0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73c760`, and numeric provider ID is `1345474644` (`0x50325054`). Wallets should pin this pair before signing. Request a valueless unit from the public testnet operator using the steps below.
 
 ```ts
 import { JsonRpcProvider } from "ethers";
@@ -48,6 +48,32 @@ const latestHeight = await viem.getBlockNumber();
 Any client can read a public handle directly over HTTP. No wallet connection or owner registration is required. The handle is the final 20 bytes of `Keccak-256(uint8(suite) || commitment[64])`. It identifies a single native receive commitment and gives no signing authority. A missing, unfunded or spent handle returns zero. A handle with multiple full commitments at the requested height returns `-32004`; use `demos_getUnit` or `demos_listUnspent` to disambiguate. Historical lookup uses the unit's creation and spend heights. A future height returns `-32001`. The server accepts batches of up to eight requests.
 
 Applications that prefer a pinned EIP-1193 transport can call `await createLedgerTransport({url, chainId, rpcChainId})`, pass the result to ethers `BrowserProvider` or viem `custom`, and use the same methods. The transport verifies both network identifiers and recomputes native IDs when submitting a transfer or looking up its receipt.
+
+## Receive a test unit
+
+Run the following once in a Node ESM file from your wallet project. It creates a local owner-only directory and prints the public receive descriptor. The key and nonce files are local plaintext testnet credentials. Use a new directory for each run and keep both files private.
+
+```js
+import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { receiveOwner } from "@p2party/ledger-client";
+import { nodeSigner } from "@p2party/ledger-client/node";
+
+const dir = "./testnet-wallet";
+mkdirSync(dir, { mode: 0o700 });
+const { privateKey } = generateKeyPairSync("ml-dsa-65");
+const nonce = randomBytes(32);
+const descriptor = receiveOwner(nodeSigner(privateKey), nonce);
+writeFileSync(
+  `${dir}/key.pk8`,
+  privateKey.export({ type: "pkcs8", format: "der" }),
+  { mode: 0o600, flag: "wx" },
+);
+writeFileSync(`${dir}/nonce`, nonce, { mode: 0o600, flag: "wx" });
+console.log(JSON.stringify(descriptor));
+```
+
+Open a [public testnet unit request](https://github.com/p2party/p2party-js/issues/new?title=Testnet%20unit%20request) with only the suite number and full receive commitment. The operator returns the native output unit ID. Look it up with `demos_getUnit` and compare the suite, commitment and weight before spending. The [public guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) describes the wider testnet workflow.
 
 ## Sign a transfer locally
 
