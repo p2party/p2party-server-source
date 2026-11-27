@@ -4,7 +4,14 @@ This testnet package connects an ethers `BrowserProvider` or a viem `custom` tra
 
 ## Install and connect
 
-From this directory, use Node 26 and run `npm ci` followed by `npm pack`. Install the resulting `p2party-ledger-client-0.1.0-testnet.0.tgz` in the wallet with `npm install ./p2party-ledger-client-0.1.0-testnet.0.tgz`. Install `ethers` or `viem` in the consuming application. The tested versions are ethers 6.17.0 and viem 2.58.8. The package's main entry runs in browsers and Node. Its optional `/node` signer uses Node 26 with OpenSSL support for the selected post-quantum algorithm.
+Download the [versioned npm tarball](https://github.com/p2party/p2party-server/releases/download/ledger-client-v0.1.0-testnet.0/p2party-ledger-client-0.1.0-testnet.0.tgz) and [SHA-256 checksum](https://github.com/p2party/p2party-server/releases/download/ledger-client-v0.1.0-testnet.0/p2party-ledger-client-0.1.0-testnet.0.tgz.sha256) from the public GitHub prerelease. With both files in your working directory:
+
+```sh
+shasum -a 256 -c p2party-ledger-client-0.1.0-testnet.0.tgz.sha256
+npm install ./p2party-ledger-client-0.1.0-testnet.0.tgz
+```
+
+For a source build, run `npm ci` and `npm pack` from this directory with Node 26. Install the resulting tarball with the same `npm install` command. Install `ethers` or `viem` in the consuming application. The tested versions are ethers 6.17.0 and viem 2.58.8. The package's main entry runs in browsers and Node. Its optional `/node` signer uses Node 26 with OpenSSL support for the selected post-quantum algorithm.
 
 The public, valueless testnet manifest is [deploy/testnet/genesis.json](../../deploy/testnet/genesis.json). Its RPC URL is `https://signaling.p2party.com/rpc`, native chain ID is `0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73c760`, and numeric provider ID is `1345474644` (`0x50325054`). Wallets should pin this pair before signing. Publication of the endpoint and issuance of valueless test allocations are operator actions.
 
