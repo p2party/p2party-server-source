@@ -211,7 +211,10 @@ The result files are under [`results/`](results/), one directory per date.
 Each names the commit it ran against. The committed copies were formatted
 with the repository's Prettier, which changes only the fence markers, trailing
 spaces, blank lines and apt's carriage-return progress lines in the recorded
-output. The runs of 2026-11-26, in short
+output. The November 27 rehearsal covers the 0.2.0 release, including successful
+recovery from interrupted migrations and reuse of a verified binary. [0.2.0 results](results/2026-11-27/README.md)
+
+The runs of 2026-11-26, in short
 (the defects are listed in the task report that goes with them, for the
 follow-up task; no playbook was changed here):
 
