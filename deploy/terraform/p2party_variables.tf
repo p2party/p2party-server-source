@@ -84,13 +84,13 @@ variable "frontend_tls_previous_settings" {
 }
 
 variable "manage_frontend_www_redirect" {
-  description = "Manage the single-redirect ruleset for www after checking existing phase ownership; see deploy/README.md"
+  description = "Manage the website single-redirect ruleset for www, the HTTP apex and directory URLs after checking existing phase ownership; see deploy/README.md"
   type        = bool
   default     = false
 }
 
 variable "frontend_www_redirect_enabled" {
-  description = "Activate the www to https://p2party.com redirect only after the disabled rule has been created and reviewed"
+  description = "Activate the website host and directory redirects after reviewing the disabled phase"
   type        = bool
   default     = false
 }

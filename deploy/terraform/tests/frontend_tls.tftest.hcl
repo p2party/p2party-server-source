@@ -81,7 +81,7 @@ run "new_redirect_phase_starts_disabled" {
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].enabled == false
+    condition     = alltrue([for r in cloudflare_ruleset.frontend_redirects[0].rules : r.enabled == false])
     error_message = "Provisioning the redirect ruleset must not activate the redirect before review."
   }
 
@@ -96,7 +96,7 @@ run "new_redirect_phase_starts_disabled" {
   }
 }
 
-run "www_redirects_to_https_apex_keeping_path_and_query" {
+run "website_redirects_to_https_apex_keeping_path_and_query" {
   command = plan
 
   variables {
@@ -124,28 +124,29 @@ run "www_redirects_to_https_apex_keeping_path_and_query" {
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].expression == "(http.host eq \"www.p2party.com\")"
-    error_message = "Only www may be redirected; the apex must keep serving the app."
+    condition = (
+      length(cloudflare_ruleset.frontend_redirects[0].rules) == 2 &&
+      cloudflare_ruleset.frontend_redirects[0].rules[1].expression == "(http.host eq \"www.p2party.com\" or (http.host eq \"p2party.com\" and not ssl))" &&
+      cloudflare_ruleset.frontend_redirects[0].rules[1].action_parameters.from_value.target_url.expression == "concat(\"https://p2party.com\", http.request.uri.path)"
+    )
+    error_message = "Canonical HTTPS pages must remain accessible while www and the HTTP apex upgrade to HTTPS."
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.target_url.expression == "concat(\"https://p2party.com\", http.request.uri.path)"
-    error_message = "www must redirect to the HTTPS apex with the request path."
+    condition = (
+      startswith(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, "(http.host in {\"p2party.com\" \"www.p2party.com\"}") &&
+      alltrue([for path in ["/r", "/explorer/testnet", "/wallet/snapshot"] : strcontains(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, jsonencode(path))]) &&
+      !strcontains(cloudflare_ruleset.frontend_redirects[0].rules[0].expression, "/.well-known") &&
+      cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.target_url.expression == "concat(\"https://p2party.com\", http.request.uri.path, \"/\")"
+    )
+    error_message = "Invite, explorer and wallet links must reach the correct directory before the origin drops the query."
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.preserve_query_string
-    error_message = "The redirect must keep the query string."
-  }
-
-  assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.status_code == 301
-    error_message = "The canonical-host redirect is permanent."
-  }
-
-  assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].enabled
-    error_message = "The reviewed, previously managed redirect must remain updatable."
+    condition = alltrue([for r in cloudflare_ruleset.frontend_redirects[0].rules :
+      r.enabled && r.action_parameters.from_value.status_code == 301 && r.action_parameters.from_value.preserve_query_string
+    ])
+    error_message = "Both managed rules must activate as permanent redirects that preserve query strings."
   }
 
   assert {

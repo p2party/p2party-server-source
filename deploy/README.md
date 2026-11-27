@@ -627,9 +627,9 @@ nothing on port 443, both modes fail.
 
 Before enabling any of them:
 
-1. Give the existing zone-scoped token **Zone → Zone Settings → Edit** and
-   **Zone → Single Redirect → Edit**. On 2026-09-09 the token returned 403 for
-   zone settings and Page Rules. Keep the token in ignored `deploy/.env`.
+1. Website redirects require **Zone → Single Redirect → Edit** on the project zone.
+   The separate zone-wide TLS settings require **Zone → Zone Settings → Edit**
+   only if enabling that policy. Keep the token in ignored `deploy/.env`.
 2. Inspect the `http_request_dynamic_redirect` phase (Rules → Redirect Rules)
    and every Terraform state that might own it. On 2026-09-09 the zone had no
    ruleset in that phase. As with the header rule, the opt-in data source
@@ -647,9 +647,9 @@ must show only the change named, apart from drift you have reviewed:
    `./deploy/tf plan -out=tfplan` and `./deploy/tf apply tfplan`. One ruleset
    is added with its rule disabled.
 5. Set `frontend_www_redirect_enabled = true`, plan, apply (one ruleset updated
-   in place). Check that `https://www.p2party.com/r?x=1` and
+   in place). The first rule adds a slash to public page directories before the S3 website origin can drop a query string. The second rule upgrades HTTP on the apex and redirects www to the HTTPS apex. Both rules apply only to the two website hostnames. Check that `http://p2party.com/r?x=1`, `https://www.p2party.com/r?x=1` and
    `http://www.p2party.com/r?x=1` answer 301 with
-   `location: https://p2party.com/r?x=1`.
+   `location: https://p2party.com/r/?x=1`. Check a static download and the Apple association at their original paths over HTTPS.
 6. Before the zone settings, take stock, because they reach every proxied
    record and not only the four above. In the dashboard, list the DNS records
    whose proxy status is Proxied and confirm each one can serve HTTPS at the
