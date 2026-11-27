@@ -350,6 +350,28 @@ export class Validator {
   orderedWires(anchor) {
     return this.#dag.orderedWires(anchor);
   }
+  get epochClosed() {
+    return Boolean(
+      this.#db
+        .prepare("SELECT 1 FROM decisions WHERE slot='stake-close'")
+        .get(),
+    );
+  }
+  certificateIndex() {
+    return this.#db
+      .prepare(
+        "SELECT id, json_extract(data, '$.proposal.header.round') AS round, " +
+          "json_extract(data, '$.proposal.header.author') AS author FROM certs ORDER BY rowid",
+      )
+      .all();
+  }
+  ownProposal(round) {
+    u32(round);
+    const row = this.#db
+      .prepare("SELECT data,signature FROM decisions WHERE slot=?")
+      .get("author/" + round);
+    return row ? { ...JSON.parse(row.data), signature: row.signature } : null;
+  }
   storedProposal(id) {
     fixed(id, 64);
     const row = this.#db

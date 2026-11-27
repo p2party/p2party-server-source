@@ -41,3 +41,5 @@ Starfish pushes headers and Reed–Solomon payload fragments, then derives data-
 - Polyanskii, N., Müller, S., and Vorobyev, I. (2026). _Making Uncertified DAG BFT Provably Live with Linear Payload and Quadratic Metadata Communication_. Preprint, Cryptology ePrint Archive, report 2025/567, revision of 3 November 2026. [IACR ePrint 2025/567](https://eprint.iacr.org/2025/567)
 - Spiegelman, A., Giridharan, N., Sonnino, A., and Kokoris-Kogias, L. (2022a). _Bullshark: DAG BFT Protocols Made Practical_. ACM SIGSAC Conference on Computer and Communications Security (CCS), pp. 2705–2718. [DOI 10.1145/3548606.3559361](https://doi.org/10.1145/3548606.3559361) · [Authors’ version, arXiv:2201.05677v3](https://arxiv.org/abs/2201.05677v3)
 - Spiegelman, A., Giridharan, N., Sonnino, A., and Kokoris-Kogias, L. (2022b). _Bullshark: The Partially Synchronous Version_. Preprint, 12 September 2022. [arXiv:2209.05633v1](https://arxiv.org/abs/2209.05633v1)
+
+The [four-process network test](peer-network.md) exercises stake-backed voting over loopback, catch-up after losing a process and a wallet read that requires fresh, matching quorum replies.

@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Exercise four local stake-backed validators over loopback and verify wallet checkpoint reads with one-use challenges. [Network test and recovery results](tools/ordering/peer-network.md)
+
 - Add a local stake-backed epoch. Native whole-unit bonds determine quorum weight and leader turns. The fixture verifies spend locks, a delayed closing certificate, restart protection and owner-signed withdrawal candidates. [Implementation and tests](tools/ordering/stake-epoch.md)
 
 - Add a local fixed-committee ordering experiment for native transfers. Validators sign post-quantum data-availability votes, order certified batches with Bullshark anchors and issue separate execution certificates that bind the receipt and state roots. [Protocol and local checks](tools/ordering/README.md)
