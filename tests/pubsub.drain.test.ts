@@ -350,6 +350,26 @@ describe("the pending-signal drain", () => {
     expect(logged).toEqual([[ABANDONED]]);
   });
 
+  test("an abandoned read returning during the next pass leaves its deadline intact", async () => {
+    const { signals, clock, drain } = deadlineHarness([]);
+    const logged = await capturingErrors(async () => {
+      const stale = signals.holdNextRead();
+      void drain();
+      clock.expire();
+      const fresh = signals.holdNextRead();
+      void drain();
+      stale.resolve();
+      await settle();
+      expect(clock.pending()).toBe(1);
+      clock.expire();
+      await drain();
+      fresh.resolve();
+      await settle();
+    });
+    expect(signals.calls.reads).toBe(3);
+    expect(logged).toHaveLength(2);
+  });
+
   test("a pass abandoned at its deadline delivers nothing afterwards", async () => {
     const { alice, signals, clock, drain } = deadlineHarness([
       { id: "s1", targetPeerId: ALICE, payload: "s1" },
@@ -474,6 +494,8 @@ describe("the pending-signal drain", () => {
     void drain();
     expect(clock.pending()).toBe(1);
     drain.stop();
+    await drain();
+    expect(clock.pending()).toBe(0);
     expect(clock.pending()).toBe(0);
     late.resolve();
     await settle();

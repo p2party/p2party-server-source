@@ -1,6 +1,7 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { postgresConnection } from "./db/ssl";
+import databaseDeadlines from "./db/deadlines.json";
 
 import { PrismaClient } from "./generated/prisma/client/client";
 
@@ -38,6 +39,11 @@ const pgConnection = postgresConnection(connectionString);
 const adapter = new PrismaPg({
   connectionString: pgConnection.connectionString,
   ssl: pgConnection.ssl,
+  connectionTimeoutMillis: databaseDeadlines.poolAcquireMs,
+  statement_timeout: databaseDeadlines.poolStatementMs,
+  query_timeout: databaseDeadlines.poolReadMs,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: databaseDeadlines.poolReadMs,
 });
 
 export { PrismaClient };

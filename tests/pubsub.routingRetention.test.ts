@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import {
   PENDING_SIGNAL_MAX_AGE_MS,
@@ -8,7 +8,7 @@ import {
   clearDeadServerState,
   connectedServerIds,
   routingSessionName,
-  startPendingSignalSweep,
+  startRoutingMaintenance,
   sweepStalePendingSignals,
 } from "../src/pubsub";
 
@@ -189,30 +189,62 @@ describe("routing state retention", () => {
 
     // The periodic sweep: run the scheduled task at later instants.
     let clock = now;
-    let task: (() => void) | undefined;
+    let task: (() => Promise<void>) | undefined;
     let period = 0;
-    const timer = startPendingSignalSweep(
-      store,
-      () => clock,
+    const timer = startRoutingMaintenance(
+      async () => {
+        await sweepStalePendingSignals(store, clock);
+      },
       (run, ms) => {
         task = run;
         period = ms;
         return 0 as never;
       },
     );
+    await Bun.sleep(0);
     expect(timer).toBe(0 as never);
     // A row therefore lives at most twice the maximum age.
     expect(period).toBeGreaterThan(0);
     expect(period).toBeLessThanOrEqual(PENDING_SIGNAL_MAX_AGE_MS);
     clock = now + period;
-    task!();
-    await Promise.resolve();
+    await task!();
     // The 119 s row passed 120 s one period later; the fresh one has not.
     expect(signals.map(({ id }) => id)).toEqual(["fresh-self"]);
     clock = now + 120_001;
-    task!();
-    await Promise.resolve();
+    await task!();
     expect(signals).toEqual([]);
+  });
+
+  test("startup cleanup returns immediately and the next scheduled pass retries a timeout", async () => {
+    let attempts = 0;
+    let rejectFirst!: (error: Error) => void;
+    let tick!: () => Promise<void>;
+    const failed = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const timer = startRoutingMaintenance(
+        async () => {
+          attempts++;
+          if (attempts === 1)
+            await new Promise<void>((_, reject) => {
+              rejectFirst = reject;
+            });
+        },
+        (run) => {
+          tick = run;
+          return 1 as never;
+        },
+      );
+      expect(timer).toBe(1 as never);
+      await tick();
+      expect(attempts).toBe(1);
+      rejectFirst(new Error("query timeout"));
+      await Bun.sleep(0);
+      await tick();
+      expect(attempts).toBe(2);
+      expect(failed).toHaveBeenCalledTimes(1);
+    } finally {
+      failed.mockRestore();
+    }
   });
 
   test("the sweep deletes in bounded batches, oldest first", async () => {

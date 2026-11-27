@@ -1,4 +1,5 @@
 import pg from "pg";
+import databaseDeadlines from "./db/deadlines.json";
 
 import { postgresConnection } from "./db/ssl";
 import { SERVER_ID } from "./serverId";
@@ -39,12 +40,10 @@ const CHANNEL = `server_${SERVER_ID}`;
 /** Catches anything a lost NOTIFY would otherwise strand. */
 const SAFETY_POLL_MS = 5_000;
 /** Fail fast instead of hanging: see the note at the pg.Client construction. */
-const CONNECT_TIMEOUT_MS = 10_000;
+const CONNECT_TIMEOUT_MS = databaseDeadlines.listenMs;
 /**
  * The longest one drain pass may take before it is abandoned and the next
- * wake-up may start a fresh one. The Prisma pool has no query timeout, so a
- * read or delete on a half-open connection could otherwise hang the drain,
- * which runs one pass at a time, until restart. A healthy pass is one indexed
+ * wake-up may start a fresh one. The pool also bounds each SQL operation. A healthy pass is one indexed
  * read, local sends and one delete. Twice the safety poll, so a slow but
  * working database is not cut off at every poll; a stalled pass then delays
  * delivery by at most this plus one safety poll (15 s), well inside the
@@ -219,6 +218,7 @@ export const createPendingSignalDrain = (
   let again = false;
   let deadline: unknown;
   let abandoned = 0;
+  let stopped = false;
   /** Delivered rows whose delete has not succeeded yet. */
   const undeleted = new Set<string>();
 
@@ -296,13 +296,19 @@ export const createPendingSignalDrain = (
   };
 
   const wake = (): Promise<void> => {
+    if (stopped) return Promise.resolve();
     if (running) {
       again = true;
       return running;
     }
     return start();
   };
-  return Object.assign(wake, { stop: abandon });
+  return Object.assign(wake, {
+    stop: () => {
+      stopped = true;
+      abandon();
+    },
+  });
 };
 
 /** This process's drain, built in initPubSub, stopped in shutdownPubSub. */
@@ -343,23 +349,32 @@ export const sweepStalePendingSignals = async (
   return deleted;
 };
 
-/** Run sweepStalePendingSignals every PENDING_SIGNAL_SWEEP_MS. */
-export const startPendingSignalSweep = (
-  store: Pick<RoutingStore, "pendingSignal"> = prisma,
-  now: () => number = Date.now,
-  every: (task: () => void, ms: number) => ReturnType<typeof setInterval> = (
-    task,
-    ms,
-  ) => setInterval(task, ms),
-): ReturnType<typeof setInterval> =>
-  every(() => {
-    sweepStalePendingSignals(store, now()).catch((error: unknown) => {
+/** Schedule cleanup immediately, then once per period. A delayed pass never overlaps its successor. */
+export const startRoutingMaintenance = (
+  cleanup: () => Promise<void>,
+  every: (
+    task: () => Promise<void>,
+    ms: number,
+  ) => ReturnType<typeof setInterval> = setInterval,
+): ReturnType<typeof setInterval> => {
+  let running = false;
+  const run = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      await cleanup();
+    } catch (error) {
       console.error(
-        "p2party: failed to sweep stale pending signals",
+        "p2party: routing cleanup failed; retrying next sweep",
         describeError(error),
       );
-    });
-  }, PENDING_SIGNAL_SWEEP_MS);
+    } finally {
+      running = false;
+    }
+  };
+  void run();
+  return every(run, PENDING_SIGNAL_SWEEP_MS);
+};
 
 /**
  * The application_name of a process's LISTEN session. The session is the
@@ -525,33 +540,22 @@ export const initPubSub = async (): Promise<void> => {
 
   safetyPoll = setInterval(() => void drain(), SAFETY_POLL_MS);
 
-  // Delete everything past the age limit first, so the liveness check below
-  // only groups recent rows, then clear the claims and rows of processes that
-  // exited without shutting down. The periodic sweep keeps the age limit.
-  try {
-    await sweepStalePendingSignals();
-  } catch (error) {
-    console.error(
-      "p2party: failed to sweep stale pending signals",
-      describeError(error),
-    );
-  }
+  // LISTEN is ready. Maintenance can wait for a busy database without
+  // delaying health or peer admission. Retry the startup liveness cleanup
+  // after a failed pass, then keep only the age sweep on the periodic timer.
   const client = listenClient;
-  try {
+  let checkedLiveness = false;
+  pendingSignalSweep = startRoutingMaintenance(async () => {
+    await sweepStalePendingSignals();
+    if (checkedLiveness) return;
     const cleared = await clearDeadServerState(prisma, (serverIds) =>
       connectedServerIds(client, serverIds),
     );
-    // The count only: server ids are routing state, not for the journal.
+    checkedLiveness = true;
     console.info(
       `p2party: startup cleared the routing state of ${String(cleared.length)} stopped server id(s)`,
     );
-  } catch (error) {
-    console.error(
-      "p2party: failed to clear dead servers' routing state",
-      describeError(error),
-    );
-  }
-  pendingSignalSweep = startPendingSignalSweep();
+  });
   claimReconciliation = startClaimReconciliation();
 };
 

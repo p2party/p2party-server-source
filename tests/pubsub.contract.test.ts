@@ -117,7 +117,7 @@ describe("data ownership", () => {
     const listen = init.indexOf("query(`LISTEN");
     const clearDead = init.indexOf("clearDeadServerState(prisma");
     const sweep = init.indexOf("sweepStalePendingSignals()");
-    const periodic = init.indexOf("startPendingSignalSweep()");
+    const periodic = init.indexOf("startRoutingMaintenance(async");
     expect(naming).toBeGreaterThan(-1);
     expect(listen).toBeGreaterThan(naming);
     // The age sweep runs first, so the liveness check only groups rows that
@@ -125,7 +125,9 @@ describe("data ownership", () => {
     expect(sweep).toBeGreaterThan(listen);
     expect(clearDead).toBeGreaterThan(sweep);
     expect(init).toContain("connectedServerIds(client, serverIds)");
-    expect(periodic).toBeGreaterThan(clearDead);
+    expect(periodic).toBeGreaterThan(listen);
+    expect(periodic).toBeLessThan(sweep);
+    expect(init).not.toContain("await startRoutingMaintenance");
     const shutdown =
       /export const shutdownPubSub[\s\S]*?\n\};/.exec(pubsub)?.[0] ?? "";
     expect(shutdown).toContain("clearInterval(pendingSignalSweep)");
@@ -189,8 +191,9 @@ describe("startup cannot hang", () => {
     // line — indistinguishable from a health check that just never passes.
     expect(pubsub).toContain("connectionTimeoutMillis: CONNECT_TIMEOUT_MS");
     expect(pubsub).toContain("query_timeout: CONNECT_TIMEOUT_MS");
-    const timeout = /const CONNECT_TIMEOUT_MS = ([0-9_]+);/.exec(pubsub)?.[1];
-    expect(Number((timeout ?? "0").replace(/_/g, ""))).toBeGreaterThan(0);
+    expect(pubsub).toContain(
+      "const CONNECT_TIMEOUT_MS = databaseDeadlines.listenMs",
+    );
   });
 
   test("a failed connect names the host and clears the client", () => {

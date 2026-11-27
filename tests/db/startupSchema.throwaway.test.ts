@@ -3,7 +3,10 @@ import { afterEach, expect, test } from "bun:test";
 
 import pg from "pg";
 
-import { BUILD_MIGRATIONS } from "../../src/db/schemaCheck";
+import {
+  startupDatabaseCheck,
+  BUILD_MIGRATIONS,
+} from "../../src/db/schemaCheck";
 import { provisionalPeerId } from "../../src/utils/peerIdentity";
 import {
   describeWithThrowawayPostgres,
@@ -79,6 +82,63 @@ afterEach(async () => {
 });
 
 describeWithThrowawayPostgres("the schema the server starts on", () => {
+  test("losing the startup re-key session reports an unknown outcome", async () => {
+    database = await freshDatabase();
+    await database.client.query("BEGIN");
+    await database.client.query('LOCK TABLE "Peer" IN ACCESS EXCLUSIVE MODE');
+    try {
+      const checking = startupDatabaseCheck(database.url, {
+        check: 2000,
+        rekey: 6000,
+      });
+      let terminated = false;
+      for (let i = 0; i < 100; i++) {
+        await database.client.query("SELECT pg_stat_clear_snapshot()");
+        const { rows } = await database.client.query<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND application_name='p2party-startup-check' AND wait_event_type='Lock'",
+        );
+        if (rows[0]) {
+          await database.client.query("SELECT pg_terminate_backend($1)", [
+            rows[0].pid,
+          ]);
+          terminated = true;
+          break;
+        }
+        await Bun.sleep(25);
+      }
+      expect((await checking).refusal).toContain("result may be unknown");
+      expect(terminated).toBe(true);
+    } finally {
+      await database.client.query("ROLLBACK");
+    }
+  }, 15_000);
+
+  test("the live Prisma pool cancels slow SQL and can serve the next query", async () => {
+    database = await freshDatabase([]);
+    const probe = Bun.spawn(
+      [
+        process.execPath,
+        "--no-env-file",
+        "-e",
+        `import { prisma } from "./src/prismaClient";
+        try { await prisma.$queryRawUnsafe("SELECT 1 FROM pg_sleep(25)"); process.exit(2); }
+        catch { const [row] = await prisma.$queryRawUnsafe("SELECT 1 AS alive"); process.exit(row.alive === 1 ? 0 : 3); }`,
+      ],
+      {
+        cwd: repositoryRoot,
+        env: { PATH: process.env.PATH, DATABASE_URL: database.url },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const kill = setTimeout(() => probe.kill(), 18_000);
+    try {
+      expect(await probe.exited).toBe(0);
+    } finally {
+      clearTimeout(kill);
+    }
+  }, 25_000);
+
   test("the server refuses to start on a schema older than its own", async () => {
     database = await freshDatabase([]);
     const empty = await start(database.url);

@@ -1,0 +1,9 @@
+{
+  "historyMs": 8000,
+  "rekeyMs": 60000,
+  "rekeyGraceMs": 5000,
+  "listenMs": 10000,
+  "poolAcquireMs": 5000,
+  "poolStatementMs": 8000,
+  "poolReadMs": 10000
+}

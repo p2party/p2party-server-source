@@ -1,6 +1,7 @@
 import rekeyStatement from "../../prisma/migrations/20261127000000_rekey_peers_to_derived_ids/migration.sql" with { type: "text" };
 
 import pg from "pg";
+import databaseDeadlines from "./deadlines.json";
 
 import { postgresConnection } from "./ssl";
 import { describeError } from "../utils/logError";
@@ -23,12 +24,12 @@ export const BUILD_MIGRATIONS: readonly string[] = [
  * database that refuses, drops packets or accepts and never answers ends the
  * start inside this bound, under the 10 s the deploy's failure messages state.
  */
-export const STARTUP_CHECK_DEADLINE_MS = 8_000;
+export const STARTUP_CHECK_DEADLINE_MS = databaseDeadlines.historyMs;
 /**
  * How long the startup re-key may run. It is one statement, cancelled by the
  * server at this bound (statement_timeout) and rolled back whole.
  */
-export const STARTUP_REKEY_DEADLINE_MS = 60_000;
+export const STARTUP_REKEY_DEADLINE_MS = databaseDeadlines.rekeyMs;
 
 /** One row of Prisma's `_prisma_migrations` history. */
 export interface MigrationRecord {
@@ -126,8 +127,7 @@ export interface StartupCheck {
 }
 
 /**
- * The first database work of a start, on its own connection and bounded: the
- * shared Prisma pool waits forever for a connection (pg's default), so a
+ * The first database work of a start, on its own connection and bounded: a
  * firewall that drops packets, or a server that accepts and never answers,
  * would otherwise hang the start with no output.
  *
@@ -192,7 +192,7 @@ export const startupDatabaseCheck = async (
 
   try {
     const rekeyed = await within(
-      deadlines.rekey + 5_000,
+      deadlines.rekey + databaseDeadlines.rekeyGraceMs,
       (async () => {
         await client.query(
           `SET statement_timeout = ${String(Math.trunc(deadlines.rekey))}`,
@@ -206,9 +206,9 @@ export const startupDatabaseCheck = async (
     return {
       refusal: refuse(
         error instanceof Deadline
-          ? `the startup re-key of stored identities got no answer within ${seconds(deadlines.rekey + 5_000)}`
-          : `the startup re-key of stored identities failed or ran past ${seconds(deadlines.rekey)} (${describeError(error)}), and changed nothing`,
-        `run prisma/migrations/20261127000000_rekey_peers_to_derived_ids/migration.sql once with psql and no time limit, then start again (${RECOVERY})`,
+          ? `the startup re-key of stored identities got no answer within ${seconds(deadlines.rekey + databaseDeadlines.rekeyGraceMs)}`
+          : `the startup re-key of stored identities failed or ran past ${seconds(deadlines.rekey)} (${describeError(error)})`,
+        `the result may be unknown after a lost connection. Confirm the database is reachable, then restart to retry the idempotent re-key (${RECOVERY})`,
       ),
     };
   }
