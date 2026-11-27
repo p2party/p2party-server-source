@@ -190,11 +190,13 @@
         mode: "0600"
       loop: [ca.key, server.key]
 
-    - name: Locate the installed PostgreSQL configuration
-      shell: ls -1 /etc/postgresql/ | grep -E '^[0-9]+$' | sort -rn | head -1
+    - name: Find the main database cluster serving the application port
+      ansible.builtin.shell: >-
+        set -eu;
+        pg_lsclusters --no-header | awk '$2 == "main" && $3 == {{ ports.postgres | int }} && $4 ~ /^online/ {print $1}'
       register: database_tls_pg_version
       changed_when: false
-      failed_when: database_tls_pg_version.stdout | length == 0
+      failed_when: database_tls_pg_version.rc != 0 or database_tls_pg_version.stdout is not match('^[0-9]+$')
 
     - name: Enable PostgreSQL TLS with the authenticated certificate
       blockinfile:
@@ -226,7 +228,7 @@
   handlers:
     - name: Restart PostgreSQL for verified TLS
       systemd:
-        name: postgresql
+        name: "postgresql@{{ database_tls_pg_version.stdout }}-main"
         state: restarted
 
 - name: Install the database trust anchor on signaling hosts

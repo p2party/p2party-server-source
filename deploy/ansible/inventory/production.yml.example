@@ -34,7 +34,7 @@ all:
           ansible_user: p2party
           role: database
           service: postgres
-          # PostgreSQL 17 tuning (4GB RAM / 3 CPU)
+          # PostgreSQL 19 tuning (4GB RAM / 3 CPU)
           pg_max_connections: 100
           pg_shared_buffers: 1GB
           pg_effective_cache_size: 3GB

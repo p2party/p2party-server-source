@@ -1,0 +1,66 @@
+---
+- name: Check this machine's toolchain before any host is contacted
+  import_playbook: local-preflight.yml
+
+- name: Maintain the PostgreSQL major on the database host
+  hosts: databases_production
+  gather_facts: false
+  become: true
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+  tasks:
+    - name: Require a known database maintenance action
+      ansible.builtin.assert:
+        that: maintenance_mode in ['prepare','check','upgrade','rollback-before-writes']
+    - name: Stage the signed PostgreSQL 19 packages with the original worker running
+      ansible.builtin.command:
+        argv: [bash, -s, --, prepare-upgrade, "{{ ports.postgres | string }}"]
+        stdin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../files/install-postgresql.sh') }}"
+      when: maintenance_mode == 'prepare'
+      register: packages
+      changed_when: "'P2PARTY PostgreSQL provisioned' in packages.stdout"
+    - name: Run the PostgreSQL major maintenance helper
+      ansible.builtin.command:
+        argv:
+          [
+            bash,
+            -s,
+            --,
+            "{{ 'check' if maintenance_mode == 'prepare' else maintenance_mode }}",
+            "{{ ports.postgres | string }}",
+            "{{ vault_postgres_db_name }}",
+          ]
+        stdin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../files/upgrade-postgresql.sh') }}"
+      register: maintenance
+      changed_when: maintenance_mode in ['upgrade','rollback-before-writes']
+    - ansible.builtin.debug:
+        var: maintenance.stdout_lines
+    - name: Verify the application role connects with certificate verification and table privileges
+      ansible.builtin.command:
+        argv:
+          - /usr/lib/postgresql/19/bin/psql
+          - -XAtq
+          - -v
+          - ON_ERROR_STOP=1
+          - -c
+          - >-
+            SELECT ssl AND has_database_privilege(current_user,current_database(),'CONNECT')
+            AND has_schema_privilege(current_user,'public','USAGE')
+            AND (SELECT bool_and(has_table_privilege(current_user,'public."Peer"',p)) FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) p)
+            FROM pg_stat_ssl WHERE pid=pg_backend_pid();
+      environment:
+        PGHOST: "{{ network.postgres }}"
+        PGPORT: "{{ ports.postgres | string }}"
+        PGUSER: "{{ vault_postgres_user }}"
+        PGPASSWORD: "{{ vault_postgres_password }}"
+        PGDATABASE: "{{ vault_postgres_db_name }}"
+        PGSSLMODE: verify-full
+        PGSSLROOTCERT: /etc/postgresql/p2party-tls/ca.crt
+        PGCONNECT_TIMEOUT: "5"
+      register: login
+      changed_when: false
+      failed_when: login.rc != 0 or login.stdout != 't'
+      no_log: true
+    - ansible.builtin.debug:
+        msg: PostgreSQL application login passed certificate verification and CONNECT, USAGE and table CRUD permission checks.

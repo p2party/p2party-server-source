@@ -155,10 +155,9 @@ Host distribution packages keep receiving vendor security updates.
   `package_upgrade: true`), which `playbooks/setup-coturn.yml` then only
   requires to be present. The latest upstream release is 4.19.2; installing it
   would mean installing from upstream instead of the distribution.
-- **PostgreSQL** (database host): `postgresql-17` from the PostgreSQL apt
-  repository, in `playbooks/install-postgres.yml` and the Terraform cloud-init.
-  PostgreSQL 19 is the newest major; moving to it needs a `pg_upgrade` of the
-  live data directory, which no playbook here does.
+- **PostgreSQL** on new database hosts uses the signed PGDG `postgresql-19`
+  package. Upgrade an existing PostgreSQL 17 cluster during a separate
+  maintenance window. [PostgreSQL major upgrade and recovery](postgresql-upgrade.md)
 
 ### First exercised at the release deploy
 
@@ -180,7 +179,7 @@ only locally as described:
    migration history Prisma 7.9.0 wrote. Locally, on PostgreSQL 18.7, 7.10.1
    applied this release's three migrations after 7.9.0 had applied 0.1.4's two,
    and `migrate resolve --applied` and `--rolled-back` behaved as described
-   below; the host runs PostgreSQL 17.
+   below. For the production database major upgrade, see the [database procedure](postgresql-upgrade.md).
 4. The `p2party_linux_x64` binary. The deploy builds it with the control
    machine's Bun, which the pre-flight requires to be the pin, records that Bun
    beside it and stages it only if the staged bytes are the built ones. A

@@ -991,7 +991,9 @@ apply_standins() {
   standin private-network
   standin amd64-runtime
   standin no-prisma-checkpoint
-  standin postgresql-from-ubuntu
+  # Earlier releases rely on the Ubuntu stand-in. New releases install the
+  # supported PostgreSQL major from the signed PGDG repository themselves.
+  if [ ! -f "$1/deploy/ansible/files/install-postgresql.sh" ]; then standin postgresql-from-ubuntu; fi
   standin caddy-from-ubuntu
 }
 
@@ -1010,7 +1012,7 @@ mode_baseline() {
   res ""
   res "Release 0.1.4's tree: \`git archive $BASELINE_REV\`; its package.json pins Bun $(sed -n 's/.*"packageManager": "bun@\([0-9.]*\)".*/\1/p' "$tree014/package.json"); it is built with Bun $(tree_bun_pin "$tree014")."
   apply_signaling_cloud_init "$tree014"
-  apply_standins
+  apply_standins "$tree014"
   guest_bun 1.3.14
   rc=0
   play_recorded "install-postgres.yml at $BASELINE_REV" "$LOGS/014-install-postgres.log" "$tree014" install-postgres.yml || rc=$?
@@ -1480,7 +1482,7 @@ mode_fresh() {
   vm_create
   tree="$(prepare_tree "$COMMIT_SHA")"
   apply_signaling_cloud_init "$tree"
-  apply_standins
+  apply_standins "$tree"
   stage_bun_archive
   standin coturn-certificate "$TURN_NAME" "$STUN_NAME"
   res ""

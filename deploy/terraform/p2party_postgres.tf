@@ -41,10 +41,11 @@ resource "hcloud_server" "p2party_postgres" {
   }
 
   user_data = templatefile("${path.module}/templates/postgres_cloud_init.yaml.tpl", {
-    ssh_port     = var.p2party_postgres_ssh_port
-    ansible_user = var.p2party_ansible_user
-    db_subnet    = var.p2party_subnet
-    ssh_keys     = "- ${join("\n      - ", [for k in local.ssh_public_keys : trimspace(k)])}"
+    ssh_port                  = var.p2party_postgres_ssh_port
+    ansible_user              = var.p2party_ansible_user
+    db_subnet                 = var.p2party_subnet
+    postgresql_install_script = indent(6, trimspace(file("${path.module}/../ansible/files/install-postgresql.sh")))
+    ssh_keys                  = "- ${join("\n      - ", [for k in local.ssh_public_keys : trimspace(k)])}"
   })
 
 
