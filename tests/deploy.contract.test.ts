@@ -153,6 +153,24 @@ describe("production deployment contract", () => {
     expect(pinned).toContain(
       "item.stat.checksum | default('') == item.item.sha",
     );
+    const ci = Bun.YAML.parse(
+      readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8"),
+    ) as {
+      jobs: {
+        "native-ledger": {
+          strategy: {
+            matrix: { verifier: { release: string; revision: string }[] };
+          };
+        };
+      };
+    };
+    const production = ci.jobs["native-ledger"].strategy.matrix.verifier.find(
+      (entry) => entry.release === "production",
+    );
+    expect(production?.revision).toMatch(/^[0-9a-f]{40}$/);
+    expect(pinned).toContain(
+      `ledger_verifier_source_commit == '${production?.revision}'`,
+    );
     expect(pinned).toContain("ansible_become: false");
     expect(pinned).toContain('become_user: "{{ app.user }}"');
     const prepare = deploy.indexOf(included);

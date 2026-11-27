@@ -85,7 +85,7 @@ ledger_genesis_src: "/absolute/path/to/p2party-server/deploy/testnet/genesis.jso
 ledger_genesis_sha256: "38d42d50a5a6d5ceb43fd6f63235e542716b1df5ccff59161c5fd7810aed17c6"
 ```
 
-The native release workflow tests the shipped binary, including failure of its signature provider. The signaling CI also exercises the previous v1 helper for compatibility.
+The native release workflow tests the shipped binary, including failure of its signature provider. The signaling CI runs its PostgreSQL, worker and wallet integration tests with both the production verifier and the previous v1 helper.
 
 The play checks the controller files, installs them beneath root-owned, content-addressed paths in `/opt/p2party-ledger`, and exercises both signature suites as the worker. The staged binary checks its environment offline. A separate read-only database preflight checks initialization permission on a new node, or the stored chain identity and table access on an existing node. Both run before workers stop. Successful startup initializes or reopens the durable `p2party_ledger` schema. Include it in database backups. The release then checks `/rpc/health` through each worker and Caddy. Disabling the option on a subsequent release closes the routes and preserves stored history. [RPC limits and configuration](../src/ledger/README.md)
 
