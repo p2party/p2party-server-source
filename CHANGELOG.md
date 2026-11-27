@@ -11,6 +11,8 @@ speaks signaling protocol 5.
 
 ## [0.2.0]
 
+- Upgrade the Cloudflare Terraform provider to 5.29.0 and pin the PostgreSQL Ansible collection to 5.1.3. Existing Cloudflare state and TLS rollback inputs are covered in the deployment guide.
+
 - Validate staged configuration before stopping workers, bound migration and database waits, and verify each running executable against the release build.
 
 - Breaking signaling upgrade. Deploy the server before SDK 0.15.0.

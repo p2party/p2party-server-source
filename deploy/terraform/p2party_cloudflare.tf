@@ -9,44 +9,44 @@
 # Coturn: turn.p2party.com + stun.p2party.com (same server)
 # ============================================================================
 
-resource "cloudflare_record" "turn_a" {
+resource "cloudflare_dns_record" "turn_a" {
   count = var.deploy_coturn ? 1 : 0
 
   zone_id = var.cloudflare_zone_id_p2party
-  name    = "turn"
+  name    = "turn.p2party.com"
   content = hcloud_server.p2party_coturn[0].ipv4_address
   type    = "A"
   ttl     = 1
   proxied = false
 }
 
-resource "cloudflare_record" "turn_aaaa" {
+resource "cloudflare_dns_record" "turn_aaaa" {
   count = var.deploy_coturn ? 1 : 0
 
   zone_id = var.cloudflare_zone_id_p2party
-  name    = "turn"
+  name    = "turn.p2party.com"
   content = hcloud_server.p2party_coturn[0].ipv6_address
   type    = "AAAA"
   ttl     = 1
   proxied = false
 }
 
-resource "cloudflare_record" "stun_a" {
+resource "cloudflare_dns_record" "stun_a" {
   count = var.deploy_coturn ? 1 : 0
 
   zone_id = var.cloudflare_zone_id_p2party
-  name    = "stun"
+  name    = "stun.p2party.com"
   content = hcloud_server.p2party_coturn[0].ipv4_address
   type    = "A"
   ttl     = 1
   proxied = false
 }
 
-resource "cloudflare_record" "stun_aaaa" {
+resource "cloudflare_dns_record" "stun_aaaa" {
   count = var.deploy_coturn ? 1 : 0
 
   zone_id = var.cloudflare_zone_id_p2party
-  name    = "stun"
+  name    = "stun.p2party.com"
   content = hcloud_server.p2party_coturn[0].ipv6_address
   type    = "AAAA"
   ttl     = 1
@@ -57,22 +57,22 @@ resource "cloudflare_record" "stun_aaaa" {
 # Signaling: signaling.p2party.com
 # ============================================================================
 
-resource "cloudflare_record" "signaling_a" {
+resource "cloudflare_dns_record" "signaling_a" {
   count = var.deploy_signaling ? 1 : 0
 
   zone_id = var.cloudflare_zone_id_p2party
-  name    = "signaling"
+  name    = "signaling.p2party.com"
   content = hcloud_server.p2party_signaling[0].ipv4_address
   type    = "A"
   ttl     = 1
   proxied = false
 }
 
-resource "cloudflare_record" "signaling_aaaa" {
+resource "cloudflare_dns_record" "signaling_aaaa" {
   count = var.deploy_signaling ? 1 : 0
 
   zone_id = var.cloudflare_zone_id_p2party
-  name    = "signaling"
+  name    = "signaling.p2party.com"
   content = hcloud_server.p2party_signaling[0].ipv6_address
   type    = "AAAA"
   ttl     = 1
@@ -99,4 +99,35 @@ output "dns_records" {
       aaaa = "signaling.p2party.com → ${hcloud_server.p2party_signaling[0].ipv6_address}"
     } : null
   }
+}
+
+# Cloudflare v5 migrates the existing record state at these addresses.
+moved {
+  from = cloudflare_record.turn_a
+  to   = cloudflare_dns_record.turn_a
+}
+
+moved {
+  from = cloudflare_record.turn_aaaa
+  to   = cloudflare_dns_record.turn_aaaa
+}
+
+moved {
+  from = cloudflare_record.stun_a
+  to   = cloudflare_dns_record.stun_a
+}
+
+moved {
+  from = cloudflare_record.stun_aaaa
+  to   = cloudflare_dns_record.stun_aaaa
+}
+
+moved {
+  from = cloudflare_record.signaling_a
+  to   = cloudflare_dns_record.signaling_a
+}
+
+moved {
+  from = cloudflare_record.signaling_aaaa
+  to   = cloudflare_dns_record.signaling_aaaa
 }

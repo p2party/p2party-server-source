@@ -18,11 +18,10 @@ terraform {
       version = "~> 1.70"
     }
 
-    # Held on the newest 4.x line; deploy/README.md, "Cloudflare provider 5",
-    # says why and what the move needs.
+    # DNS state moves and existing zone settings are covered in deploy/README.md.
     cloudflare = {
       source  = "cloudflare/cloudflare"
-      version = "~> 4.52"
+      version = "~> 5.29.0"
     }
   }
 }

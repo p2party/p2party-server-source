@@ -8,6 +8,7 @@ Never commit the resulting credentials, inventory, Terraform state or logs.
 Run a release from a Git checkout of the server repository:
 
 ```bash
+ansible-galaxy collection install -r deploy/ansible/requirements.yml
 bun install --frozen-lockfile
 bun run check
 bun run format:check
@@ -194,7 +195,7 @@ only locally as described:
    release was built with Node 26.13.1. Every playbook now requires
    ansible-core 2.22.0 or a later 2.22 patch release (the pre-flight).
 7. The next `./deploy/tf init -upgrade` and plan against the real state, with
-   hcloud 1.70.2 and Cloudflare 4.52.10; only the mocked tests have run. See
+   hcloud 1.70.2 and Cloudflare 5.29.0. Local tests use isolated provider mocks and synthetic state. See
    [Terraform after this release](#terraform-after-this-release) first.
 
 ## A failed or interrupted migration
@@ -454,12 +455,12 @@ WebRTC text and byte-exact file delivery, reload recovery with the received
 file retained, and same-identity tab replacement under the actual edge policy.
 
 See Cloudflare's [response-transform API workflow](https://developers.cloudflare.com/rules/transform/response-header-modification/create-api/)
-and the [version 4 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/4.52.10/docs/resources/ruleset).
+and the [version 5 provider ruleset schema](https://registry.terraform.io/providers/cloudflare/cloudflare/5.29.0/docs/resources/ruleset).
 
 ## Terraform after this release
 
 This release requires Terraform 1.17.2 or newer, moves hcloud to `~> 1.70` and
-Cloudflare to `~> 4.52`, and no longer names the `hashicorp/null` provider,
+Cloudflare to `~> 5.29.0`, and no longer names the `hashicorp/null` provider,
 which no resource here uses. Before the first `./deploy/tf init -upgrade`:
 
 1. Back up the state (`deploy/terraform/terraform.tfstate`) to private storage.
@@ -488,38 +489,66 @@ which no resource here uses. Before the first `./deploy/tf init -upgrade`:
 
 ## Cloudflare provider 5
 
-This configuration stays on the newest 4.x provider (`~> 4.52`; 4.52.10 on
-2026-11-26) although 5.29.0 is out. Version 5 changes every Cloudflare
-resource used here, and on 2026-11-26 the move could not keep two things this
-README relies on:
+The server uses Cloudflare provider 5.29.0. The six DNS record addresses
+have Terraform `moved` blocks. Their fully qualified DNS names, addresses,
+TTL and proxy settings are preserved. The two phase rulesets retain their
+resource addresses. Each opted-in phase lists zone rulesets, reads their
+rules by ID and blocks the plan when another owner or rule is present. A
+synthetic migration from the 4.52.10 schema preserved all six DNS IDs and
+the header ruleset with all five policies. Both plans produced zero creates,
+changes or deletes. A loopback API fixture added a dashboard rule and the
+real 5.29.0 provider refused the plan.
 
-- **The ownership checks' tests.** In version 5, `cloudflare_rulesets` lists a
-  zone's rulesets without their rules and has no `filter` or `include_rules`,
-  so each check has to read every ruleset of its phase again by id
-  (`data.cloudflare_ruleset`). The configuration rewritten that way validates,
-  but Terraform 1.17.2's test mocks cannot fill the nested-attribute
-  collections these data sources return
-  ([hashicorp/terraform#38369](https://github.com/hashicorp/terraform/issues/38369),
-  open): "incompatible types; expected object type, found tuple". The runs
-  that show a foreign ruleset or a dashboard-added rule stopping the plan
-  could not run (2 failed and 7 were skipped of 14).
-- **The TLS rollback.** Version 5 removes `cloudflare_zone_settings_override`.
-  Its replacement, one `cloudflare_zone_setting` per setting, keeps no
-  `initial_settings`, and its delete does nothing (provider 5.29.0 source), so
-  setting `manage_frontend_tls_settings = false` would no longer restore the
-  earlier values as described under [Frontend HTTPS and TLS](#frontend-https-and-tls).
+**Existing state.** Use the current 4.x checkout for the following inventory
+before switching to the new configuration. Keep the backup private. Terraform
+state can contain credentials.
 
-The move itself, once those are solved: rename the six `cloudflare_record`
-resources to `cloudflare_dns_record` with a `moved` block each (the provider
-moves their state; Terraform 1.8 or newer); write both rulesets in attribute
-syntax (`rules = [{ ... }]`, `action_parameters = { ... }`, `headers` as a
-map), whose state the provider upgrades on the first plan; and, if
-`./deploy/tf state list` shows `cloudflare_zone_settings_override.frontend_tls[0]`,
-remove it from state with the 4.x provider (`./deploy/tf state rm`, which leaves
-the settings at Cloudflare as they are) before switching, then import each new
-`cloudflare_zone_setting` as `<zone-id>/<setting-id>`. Back up the state first,
-and expect the first plan to show no replacement or destroy; `prevent_destroy`
-on both rulesets stops a plan that would replace one.
+```bash
+umask 077
+backup="$(mktemp ~/p2party-before-cloudflare-v5.XXXXXXXX)"
+./deploy/tf state pull > "$backup"
+test -s "$backup"
+./deploy/tf state list
+```
+
+1. Record the IDs and current values of the managed Cloudflare DNS records
+   and rulesets. If `cloudflare_zone_settings_override.frontend_tls[0]`
+   exists, read its `initial_settings` using
+   `./deploy/tf state show 'cloudflare_zone_settings_override.frontend_tls[0]'`.
+   Save the original `always_use_https` and `min_tls_version` values in
+   `frontend_tls_previous_settings` in the private variables file. Confirm the
+   current values in Cloudflare. If the originals cannot be established,
+   reconcile that state before migrating.
+2. For a state containing the old TLS override, remove only its Terraform
+   ownership with the **4.x** checkout. This command leaves the zone settings
+   in place. A state with no override skips this command and both imports.
+
+   ```bash
+   ./deploy/tf state rm 'cloudflare_zone_settings_override.frontend_tls[0]'
+   ```
+
+3. Switch to this checkout and run `./deploy/tf init -upgrade` and
+   `./deploy/tf validate`. For a previously managed override, keep
+   `manage_frontend_tls_settings = true` and import the two existing
+   settings. Use the actual zone ID.
+
+   ```bash
+   ./deploy/tf import 'cloudflare_zone_setting.frontend_tls["always_use_https"]' '<zone-id>/always_use_https'
+   ./deploy/tf import 'cloudflare_zone_setting.frontend_tls["min_tls_version"]' '<zone-id>/min_tls_version'
+   ```
+
+4. Save and review a normal refreshed plan against the actual state. Confirm
+   each existing DNS ID moves in place, existing rulesets retain their IDs,
+   and no DNS record, ruleset or unrelated host is created, replaced or
+   deleted by the provider migration. Review any changes separately before
+   applying that saved plan. Restore the state backup only after reconciling
+   remote changes and acquiring the normal state lock.
+
+The v5 setting resource leaves the remote value in place on deletion. The
+configuration restores both original values when the operator sets
+`manage_frontend_tls_settings = false` while keeping
+`frontend_tls_previous_settings`. A never-managed zone keeps that object
+null. Destruction is protected against accidentally clearing both inputs.
 
 ## Frontend HTTPS and TLS
 
@@ -603,8 +632,9 @@ must show only the change named, apart from drift you have reviewed:
    1.1 clients lose access in step 7. Write down the current Always Use HTTPS
    and Minimum TLS Version values (SSL/TLS → Edge Certificates); confirm the
    HSTS setting there is off.
-7. Set `manage_frontend_tls_settings = true`, plan, apply (one
-   `cloudflare_zone_settings_override` added). Check that
+7. In the same change, set `frontend_tls_previous_settings` to the two values
+   just recorded and `manage_frontend_tls_settings = true`. Review the two
+   `cloudflare_zone_setting` entries and apply the saved plan. Check that
    `http://p2party.com/`, `http://dev.p2party.com/` and `http://cdn.p2party.com/`
    answer 301 to HTTPS; that a TLS 1.1 handshake to each of the four hostnames
    is refused (allow legacy ciphers locally, for example
@@ -617,34 +647,18 @@ must show only the change named, apart from drift you have reviewed:
    HSTS value, on dev pages; record which headers the edge-generated www
    redirect carries; then repeat the header rule's browser checks on dev.
 
-If the apply in step 7 fails part-way:
+If step 7 fails part-way, check both values in Cloudflare against the
+private `frontend_tls_previous_settings` object and read both
+`cloudflare_zone_setting.frontend_tls` entries in Terraform state. Fix the
+reported error and plan again. To restore the original settings, keep the
+recorded object, set `manage_frontend_tls_settings = false`, and apply a
+reviewed plan that writes both original values. Verify both in Cloudflare.
+Keep the object in the private configuration while Terraform owns them.
 
-- See what Cloudflare now has: SSL/TLS → Edge Certificates shows Always Use
-  HTTPS and Minimum TLS Version. Compare them with the values written down in
-  step 6.
-- See what Terraform recorded: `./deploy/tf state list | grep frontend_tls`.
-  If the resource is listed,
-  `./deploy/tf state show 'cloudflare_zone_settings_override.frontend_tls[0]'`
-  shows whether it is tainted, and its `initial_settings` holds the values read
-  before the change.
-- Get back to a clean state: fix the cause (for example the token permission).
-  If the resource is in state with `initial_settings` filled in, either apply a
-  fresh plan with the flag still `true` (a tainted resource is destroyed, which
-  restores `initial_settings`, then created again), or set
-  `manage_frontend_tls_settings = false` and apply, which destroys it and
-  restores those values. If `initial_settings` is empty, or the resource is not
-  in state, run
-  `./deploy/tf state rm 'cloudflare_zone_settings_override.frontend_tls[0]'`
-  (when listed), set any changed value back by hand to what step 6 recorded,
-  and start step 7 again.
-
-For rollback, set `frontend_www_redirect_enabled = false` or
-`frontend_response_headers_all_app_hosts = false` and apply the reviewed plan;
-`prevent_destroy` protects the redirect phase as it does the header phase.
-Browsers cache the 301. Setting `manage_frontend_tls_settings = false` destroys
-the override, which restores the values the provider recorded when it was
-created; read them first with
-`./deploy/tf state show 'cloudflare_zone_settings_override.frontend_tls[0]'`.
+To roll back the www redirect or expanded headers, set
+`frontend_www_redirect_enabled = false` or
+`frontend_response_headers_all_app_hosts = false` and review the update. The
+rulesets retain their destruction protection. Browsers cache the 301.
 Browsers that received HSTS keep it until it expires. Fix the www bucket's own
 redirect to `https` as well, so disabling the edge rule does not bring the
 downgrade back.

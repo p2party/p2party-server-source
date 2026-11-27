@@ -1,20 +1,15 @@
-# These plans use provider mocks; they never read or modify infrastructure.
-# The configuration requires Terraform 1.17.2 or newer (p2party_main.tf).
-#
-# Each opt-in run starts from the deployment's live baseline (header rule
-# managed and enabled) and asserts that the other frontend resources stay as
-# they were, so a flag wired to a second resource fails here.
-#
-# "Zone settings stay unmanaged" reads one attribute through try() instead of
-# length() over the resource: when that assertion failed, Terraform 1.15.5
-# panicked while rendering the whole zone-settings object ("value has marks").
-# Terraform 1.17.2 reports such a failure normally.
-mock_provider "cloudflare" {
-  mock_data "cloudflare_rulesets" {
-    defaults = {
-      rulesets = []
-    }
-  }
+# Provider mocks and explicit inventory outputs keep these plans offline.
+# The two real phase inventories return rulesets and their rule refs.
+mock_provider "cloudflare" {}
+
+override_module {
+  target  = module.frontend_response_headers_inventory
+  outputs = { rulesets = [] }
+}
+
+override_module {
+  target  = module.frontend_redirects_inventory
+  outputs = { rulesets = [] }
 }
 
 mock_provider "hcloud" {}
@@ -30,7 +25,7 @@ run "existing_server_operation_does_not_manage_edge_tls_or_redirects" {
   command = plan
 
   assert {
-    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    condition     = length(cloudflare_zone_setting.frontend_tls) == 0
     error_message = "Default server operations must not take ownership of zone TLS settings."
   }
 
@@ -47,20 +42,21 @@ run "managed_tls_settings_enforce_https_and_tls12_only" {
     manage_frontend_response_headers  = true
     frontend_response_headers_enabled = true
     manage_frontend_tls_settings      = true
+    frontend_tls_previous_settings    = { always_use_https = "off", min_tls_version = "1.0" }
   }
 
   assert {
-    condition     = cloudflare_zone_settings_override.frontend_tls[0].settings[0].always_use_https == "on"
+    condition     = cloudflare_zone_setting.frontend_tls["always_use_https"].value == "on"
     error_message = "Plain HTTP must be redirected to HTTPS at the edge."
   }
 
   assert {
-    condition     = cloudflare_zone_settings_override.frontend_tls[0].settings[0].min_tls_version == "1.2"
+    condition     = cloudflare_zone_setting.frontend_tls["min_tls_version"].value == "1.2"
     error_message = "The edge must refuse TLS 1.0 and 1.1."
   }
 
   assert {
-    condition     = length(cloudflare_zone_settings_override.frontend_tls[0].settings[0].security_header) == 0
+    condition     = !contains(keys(cloudflare_zone_setting.frontend_tls), "security_header")
     error_message = "HSTS has one source, the response-header rule; the zone HSTS setting must stay unmanaged."
   }
 
@@ -90,7 +86,7 @@ run "new_redirect_phase_starts_disabled" {
   }
 
   assert {
-    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    condition     = length(cloudflare_zone_setting.frontend_tls) == 0
     error_message = "The redirect opt-in must not also change zone TLS settings."
   }
 
@@ -110,9 +106,9 @@ run "www_redirects_to_https_apex_keeping_path_and_query" {
     frontend_www_redirect_enabled     = true
   }
 
-  override_data {
-    target = data.cloudflare_rulesets.frontend_redirects[0]
-    values = {
+  override_module {
+    target = module.frontend_redirects_inventory[0]
+    outputs = {
       rulesets = [{
         name = "p2party frontend redirects"
         rules = [{
@@ -133,17 +129,17 @@ run "www_redirects_to_https_apex_keeping_path_and_query" {
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters[0].from_value[0].target_url[0].expression == "concat(\"https://p2party.com\", http.request.uri.path)"
+    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.target_url.expression == "concat(\"https://p2party.com\", http.request.uri.path)"
     error_message = "www must redirect to the HTTPS apex with the request path."
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters[0].from_value[0].preserve_query_string
+    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.preserve_query_string
     error_message = "The redirect must keep the query string."
   }
 
   assert {
-    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters[0].from_value[0].status_code == 301
+    condition     = cloudflare_ruleset.frontend_redirects[0].rules[0].action_parameters.from_value.status_code == 301
     error_message = "The canonical-host redirect is permanent."
   }
 
@@ -153,7 +149,7 @@ run "www_redirects_to_https_apex_keeping_path_and_query" {
   }
 
   assert {
-    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    condition     = length(cloudflare_zone_setting.frontend_tls) == 0
     error_message = "Activating the redirect must not also change zone TLS settings."
   }
 
@@ -170,9 +166,9 @@ run "existing_foreign_redirect_phase_is_not_replaced" {
     manage_frontend_www_redirect = true
   }
 
-  override_data {
-    target = data.cloudflare_rulesets.frontend_redirects[0]
-    values = {
+  override_module {
+    target = module.frontend_redirects_inventory[0]
+    outputs = {
       rulesets = [{
         name  = "Existing redirect policy"
         rules = []
@@ -190,9 +186,9 @@ run "dashboard_added_redirect_rule_is_not_deleted" {
     manage_frontend_www_redirect = true
   }
 
-  override_data {
-    target = data.cloudflare_rulesets.frontend_redirects[0]
-    values = {
+  override_module {
+    target = module.frontend_redirects_inventory[0]
+    outputs = {
       rulesets = [{
         name = "p2party frontend redirects"
         rules = [{
@@ -203,4 +199,22 @@ run "dashboard_added_redirect_rule_is_not_deleted" {
   }
 
   expect_failures = [cloudflare_ruleset.frontend_redirects[0]]
+}
+
+run "disabling_tls_restores_both_recorded_values" {
+  command = plan
+  variables {
+    manage_frontend_tls_settings   = false
+    frontend_tls_previous_settings = { always_use_https = "off", min_tls_version = "1.1" }
+  }
+  assert {
+    condition     = cloudflare_zone_setting.frontend_tls["always_use_https"].value == "off" && cloudflare_zone_setting.frontend_tls["min_tls_version"].value == "1.1"
+    error_message = "Opting out must actively restore both original values."
+  }
+}
+
+run "missing_tls_rollback_values_refuse_management" {
+  command = plan
+  variables { manage_frontend_tls_settings = true }
+  expect_failures = [cloudflare_zone_setting.frontend_tls["always_use_https"], cloudflare_zone_setting.frontend_tls["min_tls_version"]]
 }

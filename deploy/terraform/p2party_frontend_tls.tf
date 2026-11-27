@@ -12,37 +12,37 @@ locals {
   frontend_www_redirect_target   = "concat(\"https://p2party.com\", http.request.uri.path)"
 }
 
-# Records the zone's current values in `initial_settings` when created and
-# changes only the settings named here. Removing it restores those values.
-#
-# HSTS is deliberately not managed here. Its only source is the response-header
-# rule in p2party_frontend_headers.tf. Cloudflare's public documentation gives
-# no accepted range for the zone setting's max_age, so the rule's 63072000 could
-# fail mid-apply. It also does not say what happens when a response already
-# carries Strict-Transport-Security, so two values could be sent.
-resource "cloudflare_zone_settings_override" "frontend_tls" {
-  count = var.manage_frontend_tls_settings ? 1 : 0
-
-  zone_id = var.cloudflare_zone_id_p2party
-
-  settings {
+# v5 manages each setting separately. Its delete operation leaves the live
+# value in place, so disabling the policy must write back the recorded values.
+locals {
+  frontend_tls_values = var.manage_frontend_tls_settings ? {
     always_use_https = "on"
     min_tls_version  = "1.2"
+  } : var.frontend_tls_previous_settings
+}
+
+resource "cloudflare_zone_setting" "frontend_tls" {
+  for_each   = local.frontend_tls_values == null ? {} : local.frontend_tls_values
+  zone_id    = var.cloudflare_zone_id_p2party
+  setting_id = each.key
+  value      = each.value
+
+  lifecycle {
+    prevent_destroy = true
+    precondition {
+      condition     = var.frontend_tls_previous_settings != null
+      error_message = "Record the zone's previous always_use_https and min_tls_version values before managing TLS."
+    }
   }
 }
 
 # Same ownership guard as the response-header phase: an unmanaged ruleset or
 # a dashboard-added rule in this phase stops the plan instead of being deleted.
-data "cloudflare_rulesets" "frontend_redirects" {
-  count = var.manage_frontend_www_redirect ? 1 : 0
-
-  zone_id       = var.cloudflare_zone_id_p2party
-  include_rules = true
-
-  filter {
-    kind  = "zone"
-    phase = "http_request_dynamic_redirect"
-  }
+module "frontend_redirects_inventory" {
+  count   = var.manage_frontend_www_redirect ? 1 : 0
+  source  = "./modules/ruleset-inventory"
+  zone_id = var.cloudflare_zone_id_p2party
+  phase   = "http_request_dynamic_redirect"
 }
 
 # Runs at the edge before the request reaches the www S3 bucket, whose own
@@ -57,31 +57,27 @@ resource "cloudflare_ruleset" "frontend_redirects" {
   kind        = "zone"
   phase       = "http_request_dynamic_redirect"
 
-  rules {
+  rules = [{
     ref         = local.frontend_www_redirect_rule_ref
     description = "www.p2party.com to https://p2party.com with path and query"
     expression  = "(http.host eq \"www.p2party.com\")"
     action      = "redirect"
     enabled     = var.frontend_www_redirect_enabled
-
-    action_parameters {
-      from_value {
+    action_parameters = {
+      from_value = {
         status_code           = 301
         preserve_query_string = true
-
-        target_url {
-          expression = local.frontend_www_redirect_target
-        }
+        target_url            = { expression = local.frontend_www_redirect_target }
       }
     }
-  }
+  }]
 
   lifecycle {
     prevent_destroy = true
 
     precondition {
       condition = alltrue([
-        for ruleset in data.cloudflare_rulesets.frontend_redirects[0].rulesets :
+        for ruleset in module.frontend_redirects_inventory[0].rulesets :
         ruleset.name == local.frontend_redirect_ruleset_name && alltrue([
           for rule in ruleset.rules : rule.ref == local.frontend_www_redirect_rule_ref
         ])

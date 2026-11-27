@@ -69,6 +69,20 @@ variable "manage_frontend_tls_settings" {
   default     = false
 }
 
+variable "frontend_tls_previous_settings" {
+  description = "Record these original zone values before enabling TLS management. Disabling it restores them; null leaves a never-managed zone alone."
+  type        = object({ always_use_https = string, min_tls_version = string })
+  default     = null
+
+  validation {
+    condition = var.frontend_tls_previous_settings == null ? true : (
+      contains(["on", "off"], var.frontend_tls_previous_settings.always_use_https) &&
+      contains(["1.0", "1.1", "1.2", "1.3"], var.frontend_tls_previous_settings.min_tls_version)
+    )
+    error_message = "Record an on/off HTTPS setting and the existing minimum TLS version."
+  }
+}
+
 variable "manage_frontend_www_redirect" {
   description = "Manage the single-redirect ruleset for www after checking existing phase ownership; see deploy/README.md"
   type        = bool

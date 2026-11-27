@@ -47,6 +47,9 @@ deploy_wireguard = true
 # See ../README.md#frontend-https-and-tls for the order and the checks.
 # manage_frontend_www_redirect  = false
 # frontend_www_redirect_enabled = false
+# When enabling, record both original zone values in the same plan. Keep the
+# object when disabling so Terraform can restore the exact previous values.
+# frontend_tls_previous_settings = { always_use_https = "off", min_tls_version = "1.0" }
 # manage_frontend_tls_settings  = false
 
 # ============================================================================

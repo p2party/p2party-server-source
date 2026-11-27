@@ -1,12 +1,15 @@
-# These plans use provider mocks; they never read or modify infrastructure.
-# The configuration requires Terraform 1.17.2 or newer (p2party_main.tf).
-# The zone-settings assertions use try(); see tests/frontend_tls.tftest.hcl.
-mock_provider "cloudflare" {
-  mock_data "cloudflare_rulesets" {
-    defaults = {
-      rulesets = []
-    }
-  }
+# Provider mocks and explicit inventory outputs keep these plans offline.
+# The two real phase inventories return rulesets and their rule refs.
+mock_provider "cloudflare" {}
+
+override_module {
+  target  = module.frontend_response_headers_inventory
+  outputs = { rulesets = [] }
+}
+
+override_module {
+  target  = module.frontend_redirects_inventory
+  outputs = { rulesets = [] }
 }
 
 mock_provider "hcloud" {}
@@ -47,9 +50,9 @@ run "existing_foreign_phase_is_not_replaced" {
     manage_frontend_response_headers = true
   }
 
-  override_data {
-    target = data.cloudflare_rulesets.frontend_response_headers[0]
-    values = {
+  override_module {
+    target = module.frontend_response_headers_inventory[0]
+    outputs = {
       rulesets = [{
         name  = "Existing response policy"
         rules = []
@@ -67,9 +70,9 @@ run "dashboard_added_rule_is_not_deleted" {
     manage_frontend_response_headers = true
   }
 
-  override_data {
-    target = data.cloudflare_rulesets.frontend_response_headers[0]
-    values = {
+  override_module {
+    target = module.frontend_response_headers_inventory[0]
+    outputs = {
       rulesets = [{
         name = "p2party frontend response headers"
         rules = [{
@@ -90,9 +93,9 @@ run "previously_managed_rule_can_be_enabled" {
     frontend_response_headers_enabled = true
   }
 
-  override_data {
-    target = data.cloudflare_rulesets.frontend_response_headers[0]
-    values = {
+  override_module {
+    target = module.frontend_response_headers_inventory[0]
+    outputs = {
       rulesets = [{
         name = "p2party frontend response headers"
         rules = [{
@@ -124,15 +127,12 @@ run "live_rule_keeps_its_apex_match_and_hsts_value" {
   }
 
   assert {
-    condition = one([
-      for header in cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters[0].headers :
-      header.value if header.name == "Strict-Transport-Security"
-    ]) == "max-age=63072000; includeSubDomains; preload"
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters.headers["Strict-Transport-Security"].value == "max-age=63072000; includeSubDomains; preload"
     error_message = "The HSTS value served since 2026-09-09 must not change as a side effect."
   }
 
   assert {
-    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    condition     = length(cloudflare_zone_setting.frontend_tls) == 0
     error_message = "The live header flags must not also change zone TLS settings."
   }
 
@@ -157,15 +157,12 @@ run "header_rule_covers_every_app_hostname_after_opt_in" {
   }
 
   assert {
-    condition = one([
-      for header in cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters[0].headers :
-      header.value if header.name == "Strict-Transport-Security"
-    ]) == "max-age=63072000; includeSubDomains; preload"
+    condition     = cloudflare_ruleset.frontend_response_headers[0].rules[0].action_parameters.headers["Strict-Transport-Security"].value == "max-age=63072000; includeSubDomains; preload"
     error_message = "The rule is the only source of HSTS, so every app host must get the same value."
   }
 
   assert {
-    condition     = try(cloudflare_zone_settings_override.frontend_tls[0].zone_id, "unmanaged") == "unmanaged"
+    condition     = length(cloudflare_zone_setting.frontend_tls) == 0
     error_message = "The host opt-in must not also change zone TLS settings."
   }
 

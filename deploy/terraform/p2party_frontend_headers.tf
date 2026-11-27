@@ -40,16 +40,11 @@ locals {
 # A permission failure stops an opted-in plan. Missing API access must never be
 # interpreted as an empty phase, and dashboard-added rules must not be removed
 # silently by a later Terraform update.
-data "cloudflare_rulesets" "frontend_response_headers" {
-  count = var.manage_frontend_response_headers ? 1 : 0
-
-  zone_id       = var.cloudflare_zone_id_p2party
-  include_rules = true
-
-  filter {
-    kind  = "zone"
-    phase = "http_response_headers_transform"
-  }
+module "frontend_response_headers_inventory" {
+  count   = var.manage_frontend_response_headers ? 1 : 0
+  source  = "./modules/ruleset-inventory"
+  zone_id = var.cloudflare_zone_id_p2party
+  phase   = "http_response_headers_transform"
 }
 
 resource "cloudflare_ruleset" "frontend_response_headers" {
@@ -61,32 +56,26 @@ resource "cloudflare_ruleset" "frontend_response_headers" {
   kind        = "zone"
   phase       = "http_response_headers_transform"
 
-  rules {
+  rules = [{
     ref         = local.frontend_response_rule_ref
     description = "p2party.com frontend security headers"
     expression  = local.frontend_response_headers_expression
     action      = "rewrite"
     enabled     = var.frontend_response_headers_enabled
-
-    action_parameters {
-      dynamic "headers" {
-        for_each = local.frontend_response_headers
-
-        content {
-          name      = headers.key
-          operation = "set"
-          value     = headers.value
-        }
-      }
+    action_parameters = {
+      headers = { for name, value in local.frontend_response_headers : name => {
+        operation = "set"
+        value     = value
+      } }
     }
-  }
+  }]
 
   lifecycle {
     prevent_destroy = true
 
     precondition {
       condition = alltrue([
-        for ruleset in data.cloudflare_rulesets.frontend_response_headers[0].rulesets :
+        for ruleset in module.frontend_response_headers_inventory[0].rulesets :
         ruleset.name == local.frontend_response_ruleset_name && alltrue([
           for rule in ruleset.rules : rule.ref == local.frontend_response_rule_ref
         ])
