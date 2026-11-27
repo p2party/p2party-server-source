@@ -631,7 +631,11 @@ Before enabling any of them:
    The separate zone-wide TLS settings require **Zone → Zone Settings → Edit**
    only if enabling that policy. Keep the token in ignored `deploy/.env`.
 2. Inspect the `http_request_dynamic_redirect` phase (Rules → Redirect Rules)
-   and every Terraform state that might own it. On 2026-09-09 the zone had no
+   and every Terraform state that might own it. A 403 on the phase-specific
+   lookup or ruleset dry run means the token lacks access. If the existing
+   project ruleset is outside this state, verify its current rules and import
+   the matching ID into `cloudflare_ruleset.frontend_redirects[0]` before planning.
+   Keep any additional or independently managed rules in their owning configuration. On 2026-09-09 the zone had no
    ruleset in that phase. As with the header rule, the opt-in data source
    refuses a differently named ruleset or any additional rule, and a 403 is an
    unresolved ownership check. Also look for a Page Rule that forwards www; it
@@ -645,7 +649,7 @@ must show only the change named, apart from drift you have reviewed:
 
 4. Set `manage_frontend_www_redirect = true` in ignored `terraform.tfvars`, then
    `./deploy/tf plan -out=tfplan` and `./deploy/tf apply tfplan`. One ruleset
-   is added with its rule disabled.
+   is added with both rules disabled.
 5. Set `frontend_www_redirect_enabled = true`, plan, apply (one ruleset updated
    in place). The first rule adds a slash to public page directories before the S3 website origin can drop a query string. The second rule upgrades HTTP on the apex and redirects www to the HTTPS apex. Both rules apply only to the two website hostnames. Check that `http://p2party.com/r?x=1`, `https://www.p2party.com/r?x=1` and
    `http://www.p2party.com/r?x=1` answer 301 with
