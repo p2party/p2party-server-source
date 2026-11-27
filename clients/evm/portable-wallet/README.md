@@ -2,6 +2,14 @@
 
 Bring **your latest encrypted wallet file and its separate recovery code**. Together they open the signing keys and the original nonce for every receive request in the file. Anyone with both can spend those units. A public balance handle is enough to look up a balance. A sender needs the suite and full receive commitment.
 
+## Open the wallet in a browser
+
+Open the standalone restore tool in its own tab. **Choose the encrypted wallet file or paste its contents, then enter your separate recovery code.** The tool opens the existing wallet inside this browser. It displays the saved receive commitments and can verify spending access or sign a native Testnet 1 payment for export. The user needs a browser with Web Crypto. No installation, server or account is required. The downloadable HTML file contains the complete app and can be used on a disconnected computer. [Standalone restore tool and checksum](browser/README.md)
+
+The optional **Remember encrypted backup** setting saves the verified ciphertext in this browser. On the next visit, enter just the recovery code. Use **Forget** to remove the saved file. By default, reselect the file each time. The code, opened signing keys, nonces and signed transfers stay out of persistent browser storage. Locking the wallet, leaving the page or reloading clears the active signer.
+
+The local companion below can also create wallets, add receive requests, check a trusted replica’s balance snapshot and migrate original receive folders.
+
 ## Start the local companion
 
 Install Node.js 26.13.1 or later with ML-DSA-65 and SLH-DSA-SHA2-192s support on a trusted computer. From a verified copy of this repository, run the following commands. Installation downloads the locked dependencies, including the published Testnet 1 ledger client. The companion works offline after installation.
@@ -12,7 +20,7 @@ npm ci
 npm start
 ```
 
-Open the exact `http://127.0.0.1:PORT/` address printed in the terminal. The random port belongs to the local signer. A second browser on this computer can open the same address. On another computer, install the companion there and open its own local address. The hosted P2Party website can check public balances. Enter recovery codes only in your trusted local companion.
+Open the exact `http://127.0.0.1:PORT/` address printed in the terminal. The random port belongs to the local signer. A second browser on this computer can open the same address. On another computer, install the companion there and open its own local address. The hosted P2Party website can check public balances. Enter recovery codes only in a verified standalone restore tool or your trusted local companion.
 
 1. Choose **Create a new wallet**, select one of the two Testnet 1 suites and download the encrypted backup. Save its machine-generated code in a separate trusted place such as a password manager. Check the file by selecting it and entering the code from your separate copy.
 2. Open a confirmed request to see its full receive commitment and public balance handle. Share the suite and full commitment with one sender. For another payment, create a fresh request, save the updated file and check it first. Each commitment receives one unit once.
@@ -21,7 +29,7 @@ Open the exact `http://127.0.0.1:PORT/` address printed in the terminal. The ran
 
 Archive names include a wallet identifier and revision. **Each file covers only the receive requests present when it was saved.** A replacement with just an older valid file can restore that revision and cannot discover later nonces. After moving, use one device to add new requests and carry the updated file to other devices. Two devices that add requests independently produce separate histories, even if their revision numbers match. Retain both files if that happens. Browser storage contains only a tab's random session token. The local signer keeps unlocked wallet material in process memory until you close the wallet or stop it. Recovery is self-custodial. Protect both pieces against loss and keep separate backups.
 
-The local signer and command-line tools require a computer that runs the supported Node runtime. The automated browser test uses separate desktop Chromium profiles. A separate Chromium-to-Firefox 161 recovery check reproduced the original ML-DSA-65 commitment and verified an offline signature after the source signer stopped. A narrow viewport check covers the layout. Installation and signing on mobile operating systems need a separate release.
+The local companion and command-line tools require a computer that runs the supported Node runtime. The automated browser test uses separate desktop Chromium profiles. A separate Chromium-to-Firefox 161 recovery check reproduced the original ML-DSA-65 commitment and verified an offline signature after the source signer stopped. A narrow viewport check covers the layout. Installation and signing on mobile operating systems need a separate release.
 
 ## What someone with one address can see
 

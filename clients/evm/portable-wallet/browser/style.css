@@ -1,0 +1,313 @@
+:root {
+  color-scheme: light dark;
+  --paper: #fff;
+  --ink: #09090b;
+  --muted: #52525b;
+  --line: #d4d4d8;
+  --ground: #fafafa;
+  --orange: #eb5e28;
+  --grid: rgb(249 115 22/0.08);
+  font:
+    1rem/1.55 system-ui,
+    "Helvetica Neue",
+    Helvetica,
+    Arial,
+    sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  margin: 0;
+  color: var(--ink);
+  background: radial-gradient(var(--grid) 1px, transparent 1.5px) 0 0/24px 24px
+    var(--paper);
+}
+header {
+  border-bottom: 2px solid var(--ink);
+  background: var(--paper);
+}
+.bar {
+  max-width: 76rem;
+  margin: auto;
+  padding: 0.65rem clamp(1.25rem, 4vw, 2rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 1.6rem;
+  font-weight: 900;
+  letter-spacing: -0.055em;
+  line-height: 1;
+}
+.brand img {
+  object-fit: contain;
+}
+.network {
+  font-weight: 750;
+  font-size: 0.92rem;
+}
+main {
+  max-width: 76rem;
+  margin: auto;
+  padding: 0 clamp(1.25rem, 4vw, 2rem) 4rem;
+}
+.intro {
+  padding: clamp(2rem, 5vw, 4rem) 0 1.6rem;
+  max-width: 45rem;
+}
+h1,
+h2,
+h3 {
+  line-height: 1.1;
+  letter-spacing: -0.045em;
+  margin: 0;
+}
+h1 {
+  font-weight: 900;
+  font-size: clamp(2.35rem, 6vw, 3.75rem);
+  letter-spacing: -0.055em;
+}
+.intro p {
+  font-size: 1.125rem;
+  color: var(--muted);
+  margin: 0.75rem 0 0;
+}
+.card {
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 8px 8px 0 var(--orange);
+  padding: clamp(1.05rem, 4vw, 2.25rem);
+  max-width: 45rem;
+  margin-bottom: 1.65rem;
+}
+h2 {
+  font-size: 1.65rem;
+}
+h3 {
+  font-size: 1.25rem;
+  margin: 1.15rem 0 0.75rem;
+}
+.card-head,
+.actions,
+.code-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.card-head {
+  justify-content: space-between;
+}
+form {
+  display: grid;
+  gap: 0.65rem;
+  justify-items: start;
+  margin: 1.2rem 0 0.1rem;
+}
+p {
+  margin: 0.6rem 0 1rem;
+}
+.hint,
+.selection {
+  color: var(--muted);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+  margin: 0 0 0.45rem;
+}
+.selection:empty {
+  display: none;
+}
+input,
+button,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+input,
+textarea {
+  border: 2px solid var(--ink);
+  padding: 0.6rem 0.7rem;
+  background: var(--paper);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 0;
+}
+textarea {
+  resize: vertical;
+}
+button {
+  border: 2px solid var(--ink);
+  padding: 0.52rem 0.9rem;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 750;
+  cursor: pointer;
+  border-radius: 0;
+}
+button:hover:not(:disabled) {
+  box-shadow: 4px 4px 0 var(--orange);
+}
+.secondary {
+  background: var(--paper);
+  color: var(--ink);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.code-row {
+  width: 100%;
+  flex-wrap: nowrap;
+}
+.code-row input {
+  flex: 1;
+}
+.code-row button {
+  white-space: nowrap;
+}
+label,
+summary {
+  font-weight: 750;
+}
+summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+details {
+  width: 100%;
+}
+.drop {
+  width: 100%;
+  padding: 1rem;
+  border: 2px dashed var(--line);
+  background: var(--ground);
+}
+.drop p {
+  color: var(--muted);
+  margin: 0.25rem 0 0.8rem;
+  font-size: 0.95rem;
+}
+.drop input {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 0.9rem;
+}
+.drop input::file-selector-button {
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  margin-right: 0.55rem;
+  padding: 0.4rem 0.65rem;
+}
+.drop.is-over {
+  border-color: var(--orange);
+}
+#paste-panel[open] label {
+  display: block;
+  margin: 0.6rem 0 0.3rem;
+}
+#accounts details {
+  padding: 0.82rem 0;
+  border-top: 1px solid var(--line);
+}
+#payment-heading {
+  font-size: 1.25rem;
+}
+dl {
+  margin: 0.8rem 0;
+}
+dt {
+  font-size: 0.86rem;
+  color: var(--muted);
+  margin-top: 0.6rem;
+  font-weight: 700;
+}
+dd {
+  margin: 0.1rem 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+#status {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  max-width: 45rem;
+}
+.skip {
+  position: fixed;
+  left: 1rem;
+  top: 0.5rem;
+  transform: translateY(-175%);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 0.4rem 0.7rem;
+  border: 2px solid currentColor;
+}
+.skip:focus {
+  transform: none;
+}
+:focus-visible {
+  outline: 3px solid var(--orange);
+  outline-offset: 3px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #fafafa;
+    --muted: #d4d4d8;
+    --paper: #18181b;
+    --ground: #09090b;
+    --line: #71717a;
+    --grid: rgb(249 115 22/0.12);
+  }
+}
+@media (max-width: 25rem) {
+  .card {
+    box-shadow: 4px 4px 0 var(--orange);
+  }
+  .code-row button {
+    padding-inline: 0.5rem;
+  }
+}
+#saved-area {
+  max-width: 45rem;
+  margin-bottom: 1.3rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+#saved-area .actions {
+  margin-top: 0.55rem;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  line-height: 1.35;
+}
+.check input {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+}
+.check + .hint {
+  margin-left: 1.7rem;
+}
+#save-tool a {
+  color: inherit;
+  text-decoration-color: var(--orange);
+  text-underline-offset: 0.2em;
+}

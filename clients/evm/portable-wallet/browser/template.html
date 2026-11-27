@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="__WALLET_CSP__" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Restore wallet · p2party</title>
+    <link
+      rel="icon"
+      href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACYAAAA2CAMAAACcNRsHAAAAV1BMVEUAAAAZFxVtbm6lc0zu0aOhUwz7kAQlGhLYYRJSUVHm29OTk5L6+vqrn5c3NTWvsLDQ0NDrjyrdspt/gIBfWldbLg3yplSONx1kSyTsYyjUWSXnXiiwm2ydB12jAAAAAXRSTlMAQObYZgAAArZJREFUSMedlYtyozAMRYswCNn4AYkhhv3/79xrO7Rs00yZVSchMqdXspDFx8d/WkPUXMBapdoLYl3fdxfkuBv4SnIiV3JrtL6CmXE0F8RG2O/J2YzZ3yg3FnNXxH6Ve4r9JucPzF4S+0GOhV/ETnJcH0rTqmD4ENPf5Nho1WauGfpJzaXHyGo1W48/sv6W75FWUz/ke9zDJmVdczfkZ0uGyBorwX04DwiWY8W+i0PfL8p5H0btjcc1BD9apxb0Xuz6CGztIwyRRQdD4rKJE4R1Qz/EyLFggDt4XWTci9Hax8POj3gjYSzGYUW4AxtWZvJqWdcpres2reuitHEchzOWuihBLdMAZHt+0qQ0QeGEdXxTS0r7dsb2tKgbd19Y5D/LlPY97U8E1x3/laal5Rj7tRaE2wVr+7ZntCpVNyVwtSDY7wMBtxVlAVCxL3d51IJg15mK4oOXCKFtO7tpiuXcNrGdUoqkg7XYWg6X9kg4X3AfwB6xtAiD2lww2jMFl/Pa4dqR+JbdNNX26ZBphyeNsrOW7O0reHLssrtPsfTbgCiraMec19tZqbklzdXtkERXYuZCbk4brNvgSl8GOdwNWO23Up47jWghLbfaukToqIDLkitZ+g3UPGopFRA9ot384WK/4A5szgJGRDBmyLnIuRzoOZPX8YAyhoeLhg3HWXEtNirHuUEX39a1YEIEIfRkKKKMfikjwudlwd1ynJqqg2dQMHBcguUt1ZVQMJ/PCdSAl+OcEy8/NQlltE5Fl3P3IO0oOZrkzLxgE1gt+dT5aKFjUQF8Ox+wVQre2YzmtdE+R7EBRHV8IDhahZzUOQcx+zmJ+bnJnyycxr8b35v+mmANvcfoNOLec/++Dd9xZ61i4l+hIK9zt/m+3fDm9dvc7Sep/f39C65p3J2MobtrrrwFX+wvupBDYurfpacAAAAASUVORK5CYII="
+    />
+    <style>
+      __WALLET_STYLE__
+    </style>
+  </head>
+  <body>
+    <a href="#main" class="skip">Skip to wallet</a>
+    <header>
+      <div class="bar">
+        <span class="brand"
+          ><img
+            alt=""
+            width="32"
+            height="32"
+            src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACYAAAA2CAMAAACcNRsHAAAAV1BMVEUAAAAZFxVtbm6lc0zu0aOhUwz7kAQlGhLYYRJSUVHm29OTk5L6+vqrn5c3NTWvsLDQ0NDrjyrdspt/gIBfWldbLg3yplSONx1kSyTsYyjUWSXnXiiwm2ydB12jAAAAAXRSTlMAQObYZgAAArZJREFUSMedlYtyozAMRYswCNn4AYkhhv3/79xrO7Rs00yZVSchMqdXspDFx8d/WkPUXMBapdoLYl3fdxfkuBv4SnIiV3JrtL6CmXE0F8RG2O/J2YzZ3yg3FnNXxH6Ve4r9JucPzF4S+0GOhV/ETnJcH0rTqmD4ENPf5Nho1WauGfpJzaXHyGo1W48/sv6W75FWUz/ke9zDJmVdczfkZ0uGyBorwX04DwiWY8W+i0PfL8p5H0btjcc1BD9apxb0Xuz6CGztIwyRRQdD4rKJE4R1Qz/EyLFggDt4XWTci9Hax8POj3gjYSzGYUW4AxtWZvJqWdcpres2reuitHEchzOWuihBLdMAZHt+0qQ0QeGEdXxTS0r7dsb2tKgbd19Y5D/LlPY97U8E1x3/laal5Rj7tRaE2wVr+7ZntCpVNyVwtSDY7wMBtxVlAVCxL3d51IJg15mK4oOXCKFtO7tpiuXcNrGdUoqkg7XYWg6X9kg4X3AfwB6xtAiD2lww2jMFl/Pa4dqR+JbdNNX26ZBphyeNsrOW7O0reHLssrtPsfTbgCiraMec19tZqbklzdXtkERXYuZCbk4brNvgSl8GOdwNWO23Up47jWghLbfaukToqIDLkitZ+g3UPGopFRA9ot384WK/4A5szgJGRDBmyLnIuRzoOZPX8YAyhoeLhg3HWXEtNirHuUEX39a1YEIEIfRkKKKMfikjwudlwd1ynJqqg2dQMHBcguUt1ZVQMJ/PCdSAl+OcEy8/NQlltE5Fl3P3IO0oOZrkzLxgE1gt+dT5aKFjUQF8Ox+wVQre2YzmtdE+R7EBRHV8IDhahZzUOQcx+zmJ+bnJnyycxr8b35v+mmANvcfoNOLec/++Dd9xZ61i4l+hIK9zt/m+3fDm9dvc7Sep/f39C65p3J2MobtrrrwFX+wvupBDYurfpacAAAAASUVORK5CYII="
+          />p2party</span
+        ><span class="network">Testnet 1</span>
+      </div>
+    </header>
+    <main id="main">
+      <div class="intro">
+        <h1 id="title" tabindex="-1">Restore your wallet</h1>
+        <p id="intro">
+          Bring your encrypted backup and the recovery code you saved
+          separately. This browser opens them offline.
+        </p>
+      </div>
+      <div id="saved-area" hidden>
+        <strong>Encrypted wallet saved on this device</strong>
+        <div class="actions">
+          <button id="use-saved" type="button" class="secondary">
+            Use saved wallet</button
+          ><button id="forget" type="button" class="secondary">
+            Forget saved wallet
+          </button>
+        </div>
+      </div>
+      <noscript
+        >Enable JavaScript to restore your wallet on this device.</noscript
+      >
+      <section class="card" id="restore" aria-labelledby="restore-heading">
+        <h2 id="restore-heading">Open a backup</h2>
+        <form id="restore-form" autocomplete="off">
+          <div id="drop" class="drop">
+            <label for="archive">Encrypted backup file</label>
+            <p id="drop-help">
+              Choose your .jwe file, drop it here, or paste a copied file.
+            </p>
+            <input
+              id="archive"
+              type="file"
+              accept=".jwe,.json,text/plain,application/json,application/octet-stream"
+              aria-describedby="drop-help"
+            />
+          </div>
+          <details id="paste-panel">
+            <summary>Paste encrypted contents</summary>
+            <label for="archive-text">Encrypted backup text</label
+            ><textarea
+              id="archive-text"
+              rows="3"
+              spellcheck="false"
+              autocapitalize="off"
+              autocomplete="off"
+            ></textarea>
+          </details>
+          <p id="chosen" class="selection" aria-live="polite"></p>
+          <label for="code">Recovery code</label>
+          <div class="code-row">
+            <input
+              id="code"
+              type="password"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              required
+              aria-describedby="code-help"
+            /><button
+              id="show-code"
+              class="secondary"
+              type="button"
+              aria-pressed="false"
+            >
+              Show code
+            </button>
+          </div>
+          <p id="code-help" class="hint">
+            Enter the code that belongs to this backup.
+          </p>
+          <label class="check"
+            ><input type="checkbox" id="remember" />Remember encrypted wallet on
+            this device</label
+          >
+          <p class="hint">
+            With this option, you can reopen the saved backup here using your
+            recovery code.
+          </p>
+          <button type="submit" id="open">Restore wallet</button>
+        </form>
+        <details id="legacy-panel">
+          <summary>Import an older command-line wallet</summary>
+          <p>
+            Each original receive folder holds one request. Use its two private
+            files and the full public commitment from your saved receive
+            descriptor.
+          </p>
+          <form id="legacy-form" autocomplete="off">
+            <label for="legacy-key">Spending key (key.pk8)</label
+            ><input type="file" id="legacy-key" required />
+            <label for="legacy-nonce">Receive nonce (nonce)</label
+            ><input type="file" id="legacy-nonce" required />
+            <label for="legacy-commitment"
+              >Expected full receive commitment</label
+            ><input
+              type="text"
+              id="legacy-commitment"
+              autocomplete="off"
+              spellcheck="false"
+              required
+            />
+            <button type="submit" id="legacy-convert">
+              Create encrypted backup
+            </button>
+          </form>
+          <p id="legacy-status" role="status"></p>
+          <div id="legacy-result" hidden>
+            <a id="legacy-download" download>Download encrypted backup</a>
+            <button type="button" class="secondary" id="legacy-show-code">
+              Show new recovery code
+            </button>
+            <p><code id="legacy-code"></code></p>
+            <p>
+              Save both. Open the downloaded file with its new code in the
+              restore form above.
+            </p>
+          </div>
+        </details>
+      </section>
+      <section
+        id="overview"
+        class="card"
+        hidden
+        aria-labelledby="accounts-heading"
+      >
+        <div class="card-head">
+          <h2 id="accounts-heading">Receive requests</h2>
+          <button type="button" class="secondary" id="lock">Lock wallet</button>
+        </div>
+        <p id="accounts-count"></p>
+        <div id="accounts"></div>
+      </section>
+      <section
+        class="card"
+        id="payment"
+        hidden
+        aria-labelledby="payment-heading"
+      >
+        <details id="payment-panel">
+          <summary id="payment-heading">Sign an offline payment</summary>
+          <p>
+            Choose an unsigned Testnet 1 request. You can review the recipient
+            and whole-unit amount before signing.
+          </p>
+          <form id="review-form" autocomplete="off">
+            <label for="request">Unsigned payment request (.json)</label
+            ><input
+              type="file"
+              id="request"
+              accept=".json,application/json"
+              required
+            />
+            <button type="submit" class="secondary" id="review">
+              Review payment
+            </button>
+          </form>
+          <div id="review-panel" hidden>
+            <h3 tabindex="-1" id="review-heading">Review this payment</h3>
+            <dl id="review-details"></dl>
+            <p>
+              Check the recipient’s full commitment through a trusted channel.
+              Anyone with the signed file can submit this payment.
+            </p>
+            <div class="actions">
+              <button type="button" id="sign">Sign this payment</button
+              ><button type="button" class="secondary" id="cancel">
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div id="signed-panel" hidden>
+            <h3 tabindex="-1" id="signed-heading">Payment signed</h3>
+            <p>
+              Save the signed file to submit it from a connected device. This
+              wallet signs offline.
+            </p>
+            <button id="download" type="button">Download signed payment</button>
+          </div>
+        </details>
+      </section>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
+      <p id="save-tool" hidden>
+        <a href="./restore-wallet.html" download="p2party-restore-wallet.html"
+          >Download the offline wallet tool</a
+        >
+      </p>
+    </main>
+    <script>
+      __WALLET_SCRIPT__;
+    </script>
+  </body>
+</html>

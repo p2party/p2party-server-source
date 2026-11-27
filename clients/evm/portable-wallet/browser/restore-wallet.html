@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'sha256-HleYqWFl2Th+sd3yxrmxCYJ6es5Nwd+3GeqoyM1bb48='; style-src 'sha256-MYFYUBNnT9AugQP7+rmDay5vMVMGfp9jI9zA7pnM9Fg='; img-src data:; form-action 'none'; base-uri 'none'; object-src 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Restore wallet · p2party</title>
+    <link
+      rel="icon"
+      href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACYAAAA2CAMAAACcNRsHAAAAV1BMVEUAAAAZFxVtbm6lc0zu0aOhUwz7kAQlGhLYYRJSUVHm29OTk5L6+vqrn5c3NTWvsLDQ0NDrjyrdspt/gIBfWldbLg3yplSONx1kSyTsYyjUWSXnXiiwm2ydB12jAAAAAXRSTlMAQObYZgAAArZJREFUSMedlYtyozAMRYswCNn4AYkhhv3/79xrO7Rs00yZVSchMqdXspDFx8d/WkPUXMBapdoLYl3fdxfkuBv4SnIiV3JrtL6CmXE0F8RG2O/J2YzZ3yg3FnNXxH6Ve4r9JucPzF4S+0GOhV/ETnJcH0rTqmD4ENPf5Nho1WauGfpJzaXHyGo1W48/sv6W75FWUz/ke9zDJmVdczfkZ0uGyBorwX04DwiWY8W+i0PfL8p5H0btjcc1BD9apxb0Xuz6CGztIwyRRQdD4rKJE4R1Qz/EyLFggDt4XWTci9Hax8POj3gjYSzGYUW4AxtWZvJqWdcpres2reuitHEchzOWuihBLdMAZHt+0qQ0QeGEdXxTS0r7dsb2tKgbd19Y5D/LlPY97U8E1x3/laal5Rj7tRaE2wVr+7ZntCpVNyVwtSDY7wMBtxVlAVCxL3d51IJg15mK4oOXCKFtO7tpiuXcNrGdUoqkg7XYWg6X9kg4X3AfwB6xtAiD2lww2jMFl/Pa4dqR+JbdNNX26ZBphyeNsrOW7O0reHLssrtPsfTbgCiraMec19tZqbklzdXtkERXYuZCbk4brNvgSl8GOdwNWO23Up47jWghLbfaukToqIDLkitZ+g3UPGopFRA9ot384WK/4A5szgJGRDBmyLnIuRzoOZPX8YAyhoeLhg3HWXEtNirHuUEX39a1YEIEIfRkKKKMfikjwudlwd1ynJqqg2dQMHBcguUt1ZVQMJ/PCdSAl+OcEy8/NQlltE5Fl3P3IO0oOZrkzLxgE1gt+dT5aKFjUQF8Ox+wVQre2YzmtdE+R7EBRHV8IDhahZzUOQcx+zmJ+bnJnyycxr8b35v+mmANvcfoNOLec/++Dd9xZ61i4l+hIK9zt/m+3fDm9dvc7Sep/f39C65p3J2MobtrrrwFX+wvupBDYurfpacAAAAASUVORK5CYII="
+    />
+    <style>
+      :root {
+  color-scheme: light dark;
+  --paper: #fff;
+  --ink: #09090b;
+  --muted: #52525b;
+  --line: #d4d4d8;
+  --ground: #fafafa;
+  --orange: #eb5e28;
+  --grid: rgb(249 115 22/0.08);
+  font:
+    1rem/1.55 system-ui,
+    "Helvetica Neue",
+    Helvetica,
+    Arial,
+    sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  margin: 0;
+  color: var(--ink);
+  background: radial-gradient(var(--grid) 1px, transparent 1.5px) 0 0/24px 24px
+    var(--paper);
+}
+header {
+  border-bottom: 2px solid var(--ink);
+  background: var(--paper);
+}
+.bar {
+  max-width: 76rem;
+  margin: auto;
+  padding: 0.65rem clamp(1.25rem, 4vw, 2rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 1.6rem;
+  font-weight: 900;
+  letter-spacing: -0.055em;
+  line-height: 1;
+}
+.brand img {
+  object-fit: contain;
+}
+.network {
+  font-weight: 750;
+  font-size: 0.92rem;
+}
+main {
+  max-width: 76rem;
+  margin: auto;
+  padding: 0 clamp(1.25rem, 4vw, 2rem) 4rem;
+}
+.intro {
+  padding: clamp(2rem, 5vw, 4rem) 0 1.6rem;
+  max-width: 45rem;
+}
+h1,
+h2,
+h3 {
+  line-height: 1.1;
+  letter-spacing: -0.045em;
+  margin: 0;
+}
+h1 {
+  font-weight: 900;
+  font-size: clamp(2.35rem, 6vw, 3.75rem);
+  letter-spacing: -0.055em;
+}
+.intro p {
+  font-size: 1.125rem;
+  color: var(--muted);
+  margin: 0.75rem 0 0;
+}
+.card {
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 8px 8px 0 var(--orange);
+  padding: clamp(1.05rem, 4vw, 2.25rem);
+  max-width: 45rem;
+  margin-bottom: 1.65rem;
+}
+h2 {
+  font-size: 1.65rem;
+}
+h3 {
+  font-size: 1.25rem;
+  margin: 1.15rem 0 0.75rem;
+}
+.card-head,
+.actions,
+.code-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.card-head {
+  justify-content: space-between;
+}
+form {
+  display: grid;
+  gap: 0.65rem;
+  justify-items: start;
+  margin: 1.2rem 0 0.1rem;
+}
+p {
+  margin: 0.6rem 0 1rem;
+}
+.hint,
+.selection {
+  color: var(--muted);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+  margin: 0 0 0.45rem;
+}
+.selection:empty {
+  display: none;
+}
+input,
+button,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+input,
+textarea {
+  border: 2px solid var(--ink);
+  padding: 0.6rem 0.7rem;
+  background: var(--paper);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 0;
+}
+textarea {
+  resize: vertical;
+}
+button {
+  border: 2px solid var(--ink);
+  padding: 0.52rem 0.9rem;
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 750;
+  cursor: pointer;
+  border-radius: 0;
+}
+button:hover:not(:disabled) {
+  box-shadow: 4px 4px 0 var(--orange);
+}
+.secondary {
+  background: var(--paper);
+  color: var(--ink);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.code-row {
+  width: 100%;
+  flex-wrap: nowrap;
+}
+.code-row input {
+  flex: 1;
+}
+.code-row button {
+  white-space: nowrap;
+}
+label,
+summary {
+  font-weight: 750;
+}
+summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+details {
+  width: 100%;
+}
+.drop {
+  width: 100%;
+  padding: 1rem;
+  border: 2px dashed var(--line);
+  background: var(--ground);
+}
+.drop p {
+  color: var(--muted);
+  margin: 0.25rem 0 0.8rem;
+  font-size: 0.95rem;
+}
+.drop input {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 0.9rem;
+}
+.drop input::file-selector-button {
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  margin-right: 0.55rem;
+  padding: 0.4rem 0.65rem;
+}
+.drop.is-over {
+  border-color: var(--orange);
+}
+#paste-panel[open] label {
+  display: block;
+  margin: 0.6rem 0 0.3rem;
+}
+#accounts details {
+  padding: 0.82rem 0;
+  border-top: 1px solid var(--line);
+}
+#payment-heading {
+  font-size: 1.25rem;
+}
+dl {
+  margin: 0.8rem 0;
+}
+dt {
+  font-size: 0.86rem;
+  color: var(--muted);
+  margin-top: 0.6rem;
+  font-weight: 700;
+}
+dd {
+  margin: 0.1rem 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+#status {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  max-width: 45rem;
+}
+.skip {
+  position: fixed;
+  left: 1rem;
+  top: 0.5rem;
+  transform: translateY(-175%);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 0.4rem 0.7rem;
+  border: 2px solid currentColor;
+}
+.skip:focus {
+  transform: none;
+}
+:focus-visible {
+  outline: 3px solid var(--orange);
+  outline-offset: 3px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #fafafa;
+    --muted: #d4d4d8;
+    --paper: #18181b;
+    --ground: #09090b;
+    --line: #71717a;
+    --grid: rgb(249 115 22/0.12);
+  }
+}
+@media (max-width: 25rem) {
+  .card {
+    box-shadow: 4px 4px 0 var(--orange);
+  }
+  .code-row button {
+    padding-inline: 0.5rem;
+  }
+}
+#saved-area {
+  max-width: 45rem;
+  margin-bottom: 1.3rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+#saved-area .actions {
+  margin-top: 0.55rem;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  line-height: 1.35;
+}
+.check input {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+}
+.check + .hint {
+  margin-left: 1.7rem;
+}
+#save-tool a {
+  color: inherit;
+  text-decoration-color: var(--orange);
+  text-underline-offset: 0.2em;
+}
+
+    </style>
+  </head>
+  <body>
+    <a href="#main" class="skip">Skip to wallet</a>
+    <header>
+      <div class="bar">
+        <span class="brand"
+          ><img
+            alt=""
+            width="32"
+            height="32"
+            src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACYAAAA2CAMAAACcNRsHAAAAV1BMVEUAAAAZFxVtbm6lc0zu0aOhUwz7kAQlGhLYYRJSUVHm29OTk5L6+vqrn5c3NTWvsLDQ0NDrjyrdspt/gIBfWldbLg3yplSONx1kSyTsYyjUWSXnXiiwm2ydB12jAAAAAXRSTlMAQObYZgAAArZJREFUSMedlYtyozAMRYswCNn4AYkhhv3/79xrO7Rs00yZVSchMqdXspDFx8d/WkPUXMBapdoLYl3fdxfkuBv4SnIiV3JrtL6CmXE0F8RG2O/J2YzZ3yg3FnNXxH6Ve4r9JucPzF4S+0GOhV/ETnJcH0rTqmD4ENPf5Nho1WauGfpJzaXHyGo1W48/sv6W75FWUz/ke9zDJmVdczfkZ0uGyBorwX04DwiWY8W+i0PfL8p5H0btjcc1BD9apxb0Xuz6CGztIwyRRQdD4rKJE4R1Qz/EyLFggDt4XWTci9Hax8POj3gjYSzGYUW4AxtWZvJqWdcpres2reuitHEchzOWuihBLdMAZHt+0qQ0QeGEdXxTS0r7dsb2tKgbd19Y5D/LlPY97U8E1x3/laal5Rj7tRaE2wVr+7ZntCpVNyVwtSDY7wMBtxVlAVCxL3d51IJg15mK4oOXCKFtO7tpiuXcNrGdUoqkg7XYWg6X9kg4X3AfwB6xtAiD2lww2jMFl/Pa4dqR+JbdNNX26ZBphyeNsrOW7O0reHLssrtPsfTbgCiraMec19tZqbklzdXtkERXYuZCbk4brNvgSl8GOdwNWO23Up47jWghLbfaukToqIDLkitZ+g3UPGopFRA9ot384WK/4A5szgJGRDBmyLnIuRzoOZPX8YAyhoeLhg3HWXEtNirHuUEX39a1YEIEIfRkKKKMfikjwudlwd1ynJqqg2dQMHBcguUt1ZVQMJ/PCdSAl+OcEy8/NQlltE5Fl3P3IO0oOZrkzLxgE1gt+dT5aKFjUQF8Ox+wVQre2YzmtdE+R7EBRHV8IDhahZzUOQcx+zmJ+bnJnyycxr8b35v+mmANvcfoNOLec/++Dd9xZ61i4l+hIK9zt/m+3fDm9dvc7Sep/f39C65p3J2MobtrrrwFX+wvupBDYurfpacAAAAASUVORK5CYII="
+          />p2party</span
+        ><span class="network">Testnet 1</span>
+      </div>
+    </header>
+    <main id="main">
+      <div class="intro">
+        <h1 id="title" tabindex="-1">Restore your wallet</h1>
+        <p id="intro">
+          Bring your encrypted backup and the recovery code you saved
+          separately. This browser opens them offline.
+        </p>
+      </div>
+      <div id="saved-area" hidden>
+        <strong>Encrypted wallet saved on this device</strong>
+        <div class="actions">
+          <button id="use-saved" type="button" class="secondary">
+            Use saved wallet</button
+          ><button id="forget" type="button" class="secondary">
+            Forget saved wallet
+          </button>
+        </div>
+      </div>
+      <noscript
+        >Enable JavaScript to restore your wallet on this device.</noscript
+      >
+      <section class="card" id="restore" aria-labelledby="restore-heading">
+        <h2 id="restore-heading">Open a backup</h2>
+        <form id="restore-form" autocomplete="off">
+          <div id="drop" class="drop">
+            <label for="archive">Encrypted backup file</label>
+            <p id="drop-help">
+              Choose your .jwe file, drop it here, or paste a copied file.
+            </p>
+            <input
+              id="archive"
+              type="file"
+              accept=".jwe,.json,text/plain,application/json,application/octet-stream"
+              aria-describedby="drop-help"
+            />
+          </div>
+          <details id="paste-panel">
+            <summary>Paste encrypted contents</summary>
+            <label for="archive-text">Encrypted backup text</label
+            ><textarea
+              id="archive-text"
+              rows="3"
+              spellcheck="false"
+              autocapitalize="off"
+              autocomplete="off"
+            ></textarea>
+          </details>
+          <p id="chosen" class="selection" aria-live="polite"></p>
+          <label for="code">Recovery code</label>
+          <div class="code-row">
+            <input
+              id="code"
+              type="password"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              required
+              aria-describedby="code-help"
+            /><button
+              id="show-code"
+              class="secondary"
+              type="button"
+              aria-pressed="false"
+            >
+              Show code
+            </button>
+          </div>
+          <p id="code-help" class="hint">
+            Enter the code that belongs to this backup.
+          </p>
+          <label class="check"
+            ><input type="checkbox" id="remember" />Remember encrypted wallet on
+            this device</label
+          >
+          <p class="hint">
+            With this option, you can reopen the saved backup here using your
+            recovery code.
+          </p>
+          <button type="submit" id="open">Restore wallet</button>
+        </form>
+        <details id="legacy-panel">
+          <summary>Import an older command-line wallet</summary>
+          <p>
+            Each original receive folder holds one request. Use its two private
+            files and the full public commitment from your saved receive
+            descriptor.
+          </p>
+          <form id="legacy-form" autocomplete="off">
+            <label for="legacy-key">Spending key (key.pk8)</label
+            ><input type="file" id="legacy-key" required />
+            <label for="legacy-nonce">Receive nonce (nonce)</label
+            ><input type="file" id="legacy-nonce" required />
+            <label for="legacy-commitment"
+              >Expected full receive commitment</label
+            ><input
+              type="text"
+              id="legacy-commitment"
+              autocomplete="off"
+              spellcheck="false"
+              required
+            />
+            <button type="submit" id="legacy-convert">
+              Create encrypted backup
+            </button>
+          </form>
+          <p id="legacy-status" role="status"></p>
+          <div id="legacy-result" hidden>
+            <a id="legacy-download" download>Download encrypted backup</a>
+            <button type="button" class="secondary" id="legacy-show-code">
+              Show new recovery code
+            </button>
+            <p><code id="legacy-code"></code></p>
+            <p>
+              Save both. Open the downloaded file with its new code in the
+              restore form above.
+            </p>
+          </div>
+        </details>
+      </section>
+      <section
+        id="overview"
+        class="card"
+        hidden
+        aria-labelledby="accounts-heading"
+      >
+        <div class="card-head">
+          <h2 id="accounts-heading">Receive requests</h2>
+          <button type="button" class="secondary" id="lock">Lock wallet</button>
+        </div>
+        <p id="accounts-count"></p>
+        <div id="accounts"></div>
+      </section>
+      <section
+        class="card"
+        id="payment"
+        hidden
+        aria-labelledby="payment-heading"
+      >
+        <details id="payment-panel">
+          <summary id="payment-heading">Sign an offline payment</summary>
+          <p>
+            Choose an unsigned Testnet 1 request. You can review the recipient
+            and whole-unit amount before signing.
+          </p>
+          <form id="review-form" autocomplete="off">
+            <label for="request">Unsigned payment request (.json)</label
+            ><input
+              type="file"
+              id="request"
+              accept=".json,application/json"
+              required
+            />
+            <button type="submit" class="secondary" id="review">
+              Review payment
+            </button>
+          </form>
+          <div id="review-panel" hidden>
+            <h3 tabindex="-1" id="review-heading">Review this payment</h3>
+            <dl id="review-details"></dl>
+            <p>
+              Check the recipient’s full commitment through a trusted channel.
+              Anyone with the signed file can submit this payment.
+            </p>
+            <div class="actions">
+              <button type="button" id="sign">Sign this payment</button
+              ><button type="button" class="secondary" id="cancel">
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div id="signed-panel" hidden>
+            <h3 tabindex="-1" id="signed-heading">Payment signed</h3>
+            <p>
+              Save the signed file to submit it from a connected device. This
+              wallet signs offline.
+            </p>
+            <button id="download" type="button">Download signed payment</button>
+          </div>
+        </details>
+      </section>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
+      <p id="save-tool" hidden>
+        <a href="./restore-wallet.html" download="p2party-restore-wallet.html"
+          >Download the offline wallet tool</a
+        >
+      </p>
+    </main>
+    <script>
+      "use strict";(()=>{var qo=Object.defineProperty;var Zo=(e,t)=>{for(var r in t)qo(e,r,{get:t[r],enumerable:!0})};var Br=new TextEncoder,sr=new TextDecoder,hn=new TextDecoder("utf-8",{fatal:!0}),or=2**32;function _e(...e){let t=e.reduce((o,{length:s})=>o+s,0),r=new Uint8Array(t),n=0;for(let o of e)r.set(o,n),n+=o.length;return r}function Rr(e,t,r){if(t<0||t>=or)throw new RangeError(`value must be >= 0 and <= ${or-1}. Received ${t}`);e.set([t>>>24,t>>>16,t>>>8,t&255],r)}function Kr(e){let t=Math.floor(e/or),r=e%or,n=new Uint8Array(8);return Rr(n,t,0),Rr(n,r,4),n}function ir(e){let t=new Uint8Array(4);return Rr(t,e),t}var Qo=/[^\x00-\x7f]/;function Qe(e){if(typeof e=="string"&&e.length>=128){if(Qo.test(e))throw new TypeError("non-ASCII string encountered in encode()");return Br.encode(e)}let t=new Uint8Array(e.length);for(let r=0;r<e.length;r++){let n=e.charCodeAt(r);if(n>127)throw new TypeError("non-ASCII string encountered in encode()");t[r]=n}return t}function yn(e,t=!1){if(Uint8Array.prototype.toBase64)return e.toBase64({alphabet:t?"base64url":"base64",omitPadding:t});let r=32768,n=[];for(let s=0;s<e.length;s+=r)n.push(String.fromCharCode.apply(null,e.subarray(s,s+r)));let o=btoa(n.join(""));return t?o.replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_"):o}function gn(e,t=!1){if(Uint8Array.fromBase64)return Uint8Array.fromBase64(e,{alphabet:t?"base64url":"base64"});if(t){if(e.includes("+")||e.includes("/"))throw new TypeError("Invalid base64url");e=e.replace(/-/g,"+").replace(/_/g,"/")}let r=atob(e),n=new Uint8Array(r.length);for(let o=0;o<r.length;o++)n[o]=r.charCodeAt(o);return n}async function mn(e,t){let r=`SHA-${e.slice(-3)}`;return new Uint8Array(await crypto.subtle.digest(r,t))}var wt=class extends Error{static code="ERR_JOSE_GENERIC";code="ERR_JOSE_GENERIC";constructor(t,r){super(t,r),this.name=this.constructor.name,Error.captureStackTrace?.(this,this.constructor)}};var Bt=class extends wt{static code="ERR_JOSE_ALG_NOT_ALLOWED";code="ERR_JOSE_ALG_NOT_ALLOWED"},fe=class extends wt{static code="ERR_JOSE_NOT_SUPPORTED";code="ERR_JOSE_NOT_SUPPORTED"},Kt=class extends wt{static code="ERR_JWE_DECRYPTION_FAILED";code="ERR_JWE_DECRYPTION_FAILED";constructor(t="decryption operation failed",r){super(t,r)}},k=class extends wt{static code="ERR_JWE_INVALID";code="ERR_JWE_INVALID"};var Le={};Zo(Le,{decode:()=>bt,encode:()=>me});var es="The input to be decoded is not correctly encoded.";function bt(e){try{return gn(typeof e=="string"?e:sr.decode(e),!0)}catch(t){throw new TypeError(es,{cause:t})}}function me(e){return yn(typeof e=="string"?Br.encode(e):e,!0)}function Re(e,t){if(!(e instanceof Uint8Array))throw new TypeError(`${t} must be an instance of Uint8Array`)}function Be(e){if(typeof e!="object"||e===null||Object.prototype.toString.call(e)!=="[object Object]")return!1;let t=Object.getPrototypeOf(e);return t===null||Object.getPrototypeOf(t)===null}function cr(...e){let t=new Set;for(let r of e)if(r)for(let n of Object.keys(r)){if(t.has(n))return!1;t.add(n)}return!0}function Ut(e,t){if(e!==void 0)throw new TypeError(`${t} can only be called once`)}function ke(e,t,r){try{return bt(e)}catch(n){throw new r(`Failed to base64url decode the ${t}`,{cause:n})}}function wn(e,t,r){try{return Qe(e)}catch(n){throw new r(`The ${t} is not a valid base64url string`,{cause:n})}}function bn(e,t,r){let n;try{n=JSON.parse(hn.decode(bt(e)))}catch(o){throw new t(r,{cause:o})}if(!Be(n))throw new t(r);return n}var ar={__proto__:null};function Ur(e,t){if(t!==void 0&&(!Array.isArray(t)||t.some(r=>typeof r!="string")))throw new TypeError(`"${e}" option must be an array of strings`);return t===void 0?void 0:new Set(t)}function xn(e,t){let{crit:r}=t??{};if(Array.isArray(r)&&new Set(r).size!==r.length)throw new e('"crit" (Critical) Header Parameter MUST NOT contain duplicate values')}function fr(e,t,r,n,o){if(o.crit!==void 0&&n?.crit===void 0)throw new e('"crit" (Critical) Header Parameter MUST be integrity protected');if(!n||n.crit===void 0)return[];if(!Array.isArray(n.crit)||n.crit.length===0||n.crit.some(i=>typeof i!="string"||i.length===0))throw new e('"crit" (Critical) Header Parameter MUST be an array of non-empty strings when present');let s=r===void 0?t:{__proto__:null,...r,...t};for(let i of n.crit){if(!(i in s))throw new fe(`Extension Header Parameter "${i}" is not recognized`);if(!Object.hasOwn(o,i)||o[i]===void 0)throw new e(`Extension Header Parameter "${i}" is missing`);if(s[i]&&(!Object.hasOwn(n,i)||n[i]===void 0))throw new e(`Extension Header Parameter "${i}" MUST be integrity protected`)}return n.crit}function dr(e,t){let r,n;try{r=JSON.stringify(t),n=JSON.parse(r)}catch(o){throw new e("JOSE Header is not valid JSON",{cause:o})}if(!Be(n))throw new e("JOSE Header is not a JSON object");return[n,r]}var ts=e=>e[Symbol.toStringTag],rs=(e,t,r)=>{let{alg:n}=e;if(t.use!==void 0){let o=r==="sign"||r==="verify"?"sig":"enc";if(t.use!==o)throw new TypeError(`Invalid key for this operation, its "use" must be "${o}" when present`)}if(t.kty==="AKP"&&t.alg===void 0)throw new TypeError('missing "alg" (Algorithm) Parameter value');if(t.alg!==void 0&&t.alg!==n)throw new TypeError(`Invalid key for this operation, its "alg" must be "${n}" when present`);if(Array.isArray(t.key_ops)){let o=r==="encrypt"||r==="decrypt"?e.ops?.[r==="encrypt"?0:1]:r;if(o&&!t.key_ops.includes(o))throw new TypeError(`Invalid key for this operation, its "key_ops" must include "${o}" when present`)}};async function et(e,t,r){let{alg:n,secret:o}=e,s=r==="decrypt"||r==="sign";if(o&&t instanceof Uint8Array)return t;let i,c;if(Be(t)){if(i=cs(t),typeof i.kty!="string")throw En(n,t,o);if(!(o?i.kty==="oct"&&typeof i.k=="string":i.kty!=="oct"&&(s?i.kty==="AKP"&&typeof i.priv=="string"||typeof i.d=="string":i.d===void 0&&i.priv===void 0)))throw new TypeError(o?'JSON Web Key for symmetric algorithms must have JWK "kty" (Key Type) equal to "oct" and the JWK "k" (Key Value) present':`JSON Web Key for this operation must be a ${s?"private":"public"} JWK`);if(rs(e,i,r),i.kty==="oct")return bt(i.k);if(!Object.isFrozen(t)){let{key_ops:h}=t;Array.isArray(h)&&Object.freeze(h),Object.freeze(t)}}else{if(!ss(t))throw En(n,t,o);let h=o?"secret":s?"private":"public";if(t.type!==h&&(o||["secret","public","private"].includes(t.type)))throw new TypeError(`${ts(t)} instances must be of type "${h}" for the ${n} algorithm`);if(xt(t))return t;if(c=t,c.type==="secret")return c.export()}Pr||=new WeakMap;let a=t,f=Pr.get(a);if(f?.[n])return f[n];if(f||Pr.set(a,f={}),c&&typeof c.toCryptoKey=="function"){let h=c.type==="public",d=ns[c.asymmetricKeyDetails?.namedCurve],m=e.resolve?.({crv:d,asymmetricKeyType:c.asymmetricKeyType})??e.subtle;return f[n]=c.toCryptoKey(m,h,e.usages[h?0:1])}return i??=c.export({format:"jwk"}),i.alg=n,f[n]=await Mr(e,i)}var Pr,ns={__proto__:null,prime256v1:"P-256",secp384r1:"P-384",secp521r1:"P-521"};function ur(e){if(!xt(e))throw new Error("CryptoKey instance expected")}var xt=e=>{if(e?.[Symbol.toStringTag]==="CryptoKey")return!0;try{return e instanceof CryptoKey}catch{return!1}},os=e=>e?.[Symbol.toStringTag]==="KeyObject",ss=e=>xt(e)||os(e);function An(e,t,...r){if(r.length>2){let n=r.pop();e+=`one of type ${r.join(", ")}, or ${n}.`}else r.length===2?e+=`one of type ${r[0]} or ${r[1]}.`:e+=`of type ${r[0]}.`;return t==null?e+=` Received ${t}`:typeof t=="function"&&t.name?e+=` Received function ${t.name}`:typeof t=="object"&&t!=null&&t.constructor?.name&&(e+=` Received an instance of ${t.constructor.name}`),e}var pr=(e,...t)=>An("Key must be ",e,...t);function En(e,t,r){let n=["CryptoKey","KeyObject","JSON Web Key"];return r&&n.push("Uint8Array"),new TypeError(An(`Key for the ${e} algorithm must be `,t,...n))}var lr=(e,t="algorithm.name")=>new TypeError(`CryptoKey does not support this operation, its ${t} must be ${e}`);function Wr(e,t){if(t&&!e.usages.includes(t))throw new TypeError(`CryptoKey does not support this operation, its usages must include ${t}.`)}function vn(e,t){let{modulusLength:r}=t.algorithm;if(typeof r!="number"||r<2048)throw new TypeError(`${e} requires key modulusLength to be 2048 bits or larger`)}function Nr(e,t,r){let n=e.algorithm;if(n.name!==t.name)throw lr(t.name);if(t.hash&&n.hash?.name!==t.hash)throw lr(t.hash,"algorithm.hash");if(t.namedCurve&&n.namedCurve!==t.namedCurve)throw lr(t.namedCurve,"algorithm.namedCurve");if(t.length!==void 0&&n.length!==t.length)throw lr(t.length,"algorithm.length");Wr(e,r)}function is(e){return{__proto__:null,...e}}function cs(e){let t=is(e);if(t.ext!==void 0&&typeof t.ext!="boolean")throw new TypeError('"ext" (Extractable) Parameter must be a boolean');if(t.key_ops!==void 0){let r=t.key_ops,n=Array.isArray(r)?[...r]:void 0;if(!n||n.some(o=>typeof o!="string")||new Set(n).size!==n.length)throw new TypeError('"key_ops" (Key Operations) Parameter must be an array of unique strings');t.key_ops=n}return t}async function Mr(e,t,r){if(!e.kty.includes(t.kty))throw new fe('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');let n=e.resolve?.({kty:t.kty,crv:t.crv})??e.subtle,o=!!(t.d||t.priv),s={...t,ext:r??t.ext};return s.kty!=="AKP"&&delete s.alg,delete s.use,crypto.subtle.importKey("jwk",s,n,s.ext??!o,t.key_ops??e.usages[o?1:0])}async function tt(e,t,r,n=!1){return e instanceof Uint8Array&&(e=await crypto.subtle.importKey("raw",e,t,n,[r])),Nr(e,t,r),e}var Pt=e=>crypto.getRandomValues(new Uint8Array(e.cekBits>>3));function hr(e,t){let r=e.byteLength<<3;if(r!==t)throw new k(`Invalid Content Encryption Key length. Expected ${t} bits, got ${r} bits`)}var as=e=>crypto.getRandomValues(new Uint8Array(e.ivBits>>3));function Tn(e,t){if(t.length<<3!==e.ivBits)throw new k("Invalid Initialization Vector length")}async function Sn(e,t,r){if(!(t instanceof Uint8Array))throw new TypeError(pr(t,"Uint8Array"));let n=e.cekBits>>1,o=await crypto.subtle.importKey("raw",t.subarray(n>>3),"AES-CBC",!1,[r]),s=await crypto.subtle.importKey("raw",t.subarray(0,n>>3),{hash:`SHA-${n<<1}`,name:"HMAC"},!1,["sign"]);return[o,s,n]}async function _n(e,t,r){return new Uint8Array((await crypto.subtle.sign("HMAC",e,t)).slice(0,r>>3))}async function fs(e,t,r,n,o){let[s,i,c]=await Sn(e,r,"encrypt"),a=new Uint8Array(await crypto.subtle.encrypt({iv:n,name:"AES-CBC"},s,t)),f=Kr(o.length*8),h=_e(o,n,a,f),d=await _n(i,h,c);return{ciphertext:a,tag:d,iv:n}}async function ds(e,t){let r={name:"HMAC",hash:"SHA-256"},n=await crypto.subtle.generateKey(r,!1,["sign","verify"]),o=await crypto.subtle.sign(r,n,e);return crypto.subtle.verify(r,n,o,t)}async function ls(e,t,r,n,o,s){let[i,c,a]=await Sn(e,t,"decrypt"),f=Kr(s.length*8),h=_e(s,n,r,f),d=await _n(c,h,a);try{if(await ds(o,d))return new Uint8Array(await crypto.subtle.decrypt({iv:n,name:"AES-CBC"},i,r))}catch{}throw new Kt}async function yr(e,t,r,n,o){if(!xt(r)&&!(r instanceof Uint8Array))throw new TypeError(pr(r,"CryptoKey","KeyObject","Uint8Array","JSON Web Key"));if(n?Tn(e,n):n=as(e),r instanceof Uint8Array&&hr(r,e.cekBits),e.cbc)return fs(e,t,r,n,o);let s=await tt(r,e.subtle,"encrypt"),i=new Uint8Array(await crypto.subtle.encrypt({additionalData:o,iv:n,name:"AES-GCM",tagLength:128},s,t));return{ciphertext:i.subarray(0,-16),tag:i.subarray(-16),iv:n}}async function gr(e,t,r,n,o,s){if(!xt(t)&&!(t instanceof Uint8Array))throw new TypeError(pr(t,"CryptoKey","KeyObject","Uint8Array","JSON Web Key"));if(!n)throw new k("JWE Initialization Vector missing");if(!o)throw new k("JWE Authentication Tag missing");if(!e.cbc&&o.length!==16)throw new k("Invalid Authentication Tag length");if(Tn(e,n),t instanceof Uint8Array&&hr(t,e.cekBits),e.cbc)return ls(e,t,r,n,o,s);let i=await tt(t,e.subtle,"decrypt");try{return new Uint8Array(await crypto.subtle.decrypt({additionalData:s,iv:n,name:"AES-GCM",tagLength:128},i,_e(r,o)))}catch{throw new Kt}}function jr(e){let t={__proto__:null};for(let r in e)t[r]={...e[r],alg:r};return t}var us=[["encrypt","wrapKey"],["decrypt","unwrapKey"]],ps=[[],["deriveBits"]],br=[[],[]];function mr(e){return{kty:["RSA"],mode:"key-encryption",subtle:{name:"RSA-OAEP",hash:`SHA-${e}`},usages:us,ops:["wrapKey","unwrapKey"]}}function wr(e){return{kty:["EC","OKP"],mode:e,subtle:{name:"ECDH"},resolve:({kty:t,crv:r,asymmetricKeyType:n})=>{if(r==="X25519"||n==="x25519")return{name:"X25519"};if(t==="OKP")throw new fe('Invalid or unsupported JWK "alg" (Algorithm) Parameter value');return{name:"ECDH",namedCurve:r}},usages:ps,ops:[void 0,"deriveBits"]}}function Et(e,t=!1){return{kty:["oct"],mode:"key-wrapping",secret:!0,subtle:{name:t?"AES-GCM":"AES-KW",length:e},usages:br,ops:t?["encrypt","decrypt"]:["wrapKey","unwrapKey"]}}function Dr(){return{kty:["oct"],mode:"key-wrapping",secret:!0,subtle:{name:"PBKDF2"},usages:br,ops:["deriveBits","deriveBits"]}}var Wt=jr({dir:{kty:["oct"],mode:"direct-encryption",secret:!0,subtle:{name:"AES-GCM"},usages:br,ops:["encrypt","decrypt"]},"RSA-OAEP":mr(1),"RSA-OAEP-256":mr(256),"RSA-OAEP-384":mr(384),"RSA-OAEP-512":mr(512),"ECDH-ES":wr("direct-key-agreement"),"ECDH-ES+A128KW":wr("key-agreement-with-key-wrapping"),"ECDH-ES+A192KW":wr("key-agreement-with-key-wrapping"),"ECDH-ES+A256KW":wr("key-agreement-with-key-wrapping"),A128KW:Et(128),A192KW:Et(192),A256KW:Et(256),A128GCMKW:Et(128,!0),A192GCMKW:Et(192,!0),A256GCMKW:Et(256,!0),"PBES2-HS256+A128KW":Dr(),"PBES2-HS384+A192KW":Dr(),"PBES2-HS512+A256KW":Dr()}),hs=["encrypt","decrypt"];function At(e,t=!1){return{kty:["oct"],secret:!0,subtle:{name:t?"AES-CBC":"AES-GCM",length:e},usages:br,ops:hs,cekBits:e,ivBits:t?128:96,cbc:t}}var ys=jr({A128GCM:At(128),A192GCM:At(192),A256GCM:At(256),"A128CBC-HS256":At(256,!0),"A192CBC-HS384":At(384,!0),"A256CBC-HS512":At(512,!0)});function kn(e,t){throw new fe(`Invalid or unsupported "${e}" (JWE ${t}) header value`)}function Ke(e){return(typeof e=="string"?Wt[e]:void 0)??kn("alg","Algorithm")}function rt(e){return e.mode==="key-wrapping"||e.mode==="key-encryption"||e.mode==="key-agreement-with-key-wrapping"}function nt(e){return(typeof e=="string"?ys[e]:void 0)??kn("enc","Encryption Algorithm")}function On(e,t){if(e.algorithm.name!=="ECDH"&&e.algorithm.name!=="X25519")throw new TypeError("CryptoKey does not support this operation, its algorithm.name must be ECDH or X25519");Wr(e,t)}async function gs(e,t,r){let n=await tt(t,Ke(e).subtle,"wrapKey",!0),o=await crypto.subtle.importKey("raw",r,{hash:"SHA-256",name:"HMAC"},!0,["sign"]);return new Uint8Array(await crypto.subtle.wrapKey("raw",o,n,"AES-KW"))}async function ms(e,t,r){let n=await tt(t,Ke(e).subtle,"unwrapKey",!0),o=await crypto.subtle.unwrapKey("raw",r,n,"AES-KW",{hash:"SHA-256",name:"HMAC"},!0,["sign"]);return new Uint8Array(await crypto.subtle.exportKey("raw",o))}function Ln(e,t,r){Nr(t,Ke(e).subtle,r),vn(e,t)}async function Cn(e,t,r,n){if(!(e instanceof Uint8Array)||e.length<8)throw new k("PBES2 Salt Input must be 8 or more octets");if(!Number.isSafeInteger(r)||Math.sign(r)!==1)throw new k("PBES2 Count Input must be a positive integer");let o=_e(Qe(t),Uint8Array.of(0),e),s=parseInt(t.slice(13,16),10),i={hash:`SHA-${t.slice(8,11)}`,iterations:r,name:"PBKDF2",salt:o},c=await tt(n,Ke(t).subtle,"deriveBits");return new Uint8Array(await crypto.subtle.deriveBits(i,c,s))}function Jr(e){return _e(ir(e.length),e)}async function ws(e,t,r){let n=t>>3,o=32,s=Math.ceil(n/o),i=new Uint8Array(s*o);for(let c=1;c<=s;c++){let a=await mn("sha256",_e(ir(c),e,r));i.set(a,(c-1)*o)}return i.slice(0,n)}async function Hn(e,t,r,n,o=new Uint8Array,s=new Uint8Array){On(e),On(t,"deriveBits");let i=_e(Jr(Qe(r)),Jr(o),Jr(s),ir(n)),c=new Uint8Array(await crypto.subtle.deriveBits({name:e.algorithm.name,public:e},t,e.algorithm.name==="X25519"?256:Math.ceil(parseInt(e.algorithm.namedCurve.slice(-3),10)/8)<<3));return ws(c,n,i)}function Rn(e){ur(e);let t=e.algorithm.namedCurve;if(t!=="P-256"&&t!=="P-384"&&t!=="P-521"&&e.algorithm.name!=="X25519")throw new fe("ECDH with the provided key is not allowed or not supported by your javascript runtime")}function xr(e,t){let r=e[t];if(r!==void 0){if(typeof r!="string")throw new k(`JOSE Header "${t}" (Agreement Party${t==="apu"?"U":"V"}Info) invalid`);return ke(r,t,k)}}function Bn(e,t){if(!(e===void 0||t===void 0||e.byteLength!==t.byteLength)){for(let r=0;r<e.byteLength;r++)if(e[r]!==t[r])return;throw new k('JOSE Header "apu" and "apv" values must be distinct')}}function bs(e){if(e===void 0)throw new k("JWE Encrypted Key missing")}function In(e){if(e!==void 0)throw new k("Encountered unexpected JWE Encrypted Key")}function Kn(e){if(e!==void 0&&e!==1/0&&(!Number.isSafeInteger(e)||e<1))throw new TypeError("maxPBES2Count must be a positive safe integer or Infinity")}async function Un(e,t,r,n,o,s){let{alg:i}=e,c=e.mode;if(c==="direct-encryption")return In(n),r;let a=c==="direct-key-agreement";switch(a?In(n):bs(n),e.subtle.name){case"ECDH":{let{epk:f}=o;if(!Be(f)||["d","k","p","q","dp","dq","qi","oth","priv"].some(v=>Object.hasOwn(f,v)))throw new k('JOSE Header "epk" (Ephemeral Public Key) missing or invalid');Rn(r);let h=await Mr(e,f),d=xr(o,"apu"),m=xr(o,"apv");Bn(d,m);let E=await Hn(h,r,a?t.alg:i,a?t.cekBits:parseInt(i.slice(-5,-2),10),d,m);if(a)return E;r=E;break}case"RSA-OAEP":return ur(r),Ln(i,r,"decrypt"),new Uint8Array(await crypto.subtle.decrypt("RSA-OAEP",r,n));case"PBKDF2":{if(typeof o.p2c!="number")throw new k('JOSE Header "p2c" (PBES2 Count) missing or invalid');let f=s??1e4;if(o.p2c>f)throw new k('JOSE Header "p2c" (PBES2 Count) out is of acceptable bounds');if(typeof o.p2s!="string")throw new k('JOSE Header "p2s" (PBES2 Salt) missing or invalid');let h=ke(o.p2s,"p2s",k);r=await Cn(h,i,o.p2c,r);break}case"AES-GCM":{if(typeof o.iv!="string")throw new k('JOSE Header "iv" (Initialization Vector) missing or invalid');if(typeof o.tag!="string")throw new k('JOSE Header "tag" (Authentication Tag) missing or invalid');let f=ke(o.iv,"iv",k),h=ke(o.tag,"tag",k);if(f.byteLength!==12)throw new k("Invalid Initialization Vector length");if(h.byteLength!==16)throw new k("Invalid Authentication Tag length");return gr(nt(i.slice(0,-2)),r,n,f,h,new Uint8Array)}}return ms(i.slice(-6),r,n)}async function Pn(e,t,r,n,o,s={}){let{alg:i,mode:c}=e,a=rt(e);if(o!==void 0&&!a)throw new TypeError(`setContentEncryptionKey cannot be called with JWE "alg" (Algorithm) Header ${i}`);let f=await et(c==="direct-encryption"?t:e,r,"encrypt");if(c==="direct-encryption")return[f,void 0,void 0];let h=a?o??Pt(t):void 0;h&&hr(h,t.cekBits);let d,m;switch(e.subtle.name){case"ECDH":{Rn(f);let{apu:E,apv:v}=s;E!==void 0&&Re(E,'"apu"'),v!==void 0&&Re(v,'"apv"');let O=E??xr(n,"apu"),R=v??xr(n,"apv");Bn(O,R);let F;s.epk!==void 0?F=await et(e,s.epk,"decrypt"):F=(await crypto.subtle.generateKey(f.algorithm,!0,["deriveBits"])).privateKey;let z=crypto.subtle,g=F;if(!g.extractable){if(typeof z.getPublicKey!="function")throw new TypeError('CryptoKey for "epk" must be extractable');g=await z.getPublicKey(F,[])}let{x:S,y:_,crv:N,kty:U}=await z.exportKey("jwk",g),u=c==="direct-key-agreement",l=await Hn(f,F,u?t.alg:i,u?t.cekBits:parseInt(i.slice(-5,-2),10),O,R),A={x:S,crv:N,kty:U};if(U==="EC"&&(A.y=_),m={epk:A},E!==void 0&&(m.apu=me(E)),v!==void 0&&(m.apv=me(v)),u)return[l,void 0,m];f=l;break}case"RSA-OAEP":{ur(f),Ln(i,f,"encrypt"),d=new Uint8Array(await crypto.subtle.encrypt("RSA-OAEP",f,h));break}case"PBKDF2":{let{p2c:E=2048,p2s:v=crypto.getRandomValues(new Uint8Array(16))}=s;f=await Cn(v,i,E,f),m={p2c:E,p2s:me(v)};break}case"AES-GCM":{let E=s.iv===void 0?crypto.getRandomValues(new Uint8Array(12)):s.iv;if(!(E instanceof Uint8Array))throw new TypeError('"iv" must be an instance of Uint8Array');let v=await yr(nt(i.slice(0,-2)),h,f,E,new Uint8Array);d=v.ciphertext,m={iv:me(v.iv),tag:me(v.tag)}}}if(d??=await gs(i.slice(-6),f,h),!(d instanceof Uint8Array)||!d.byteLength)throw new TypeError("JWE key management algorithm did not produce an Encrypted Key");return[h,d,m]}function Er(e,t){if(e.zip!==void 0&&e.zip!=="DEF")throw new fe('Unsupported JWE "zip" (Compression Algorithm) Header Parameter value.');if(e.zip!==void 0&&!t?.zip)throw new k('JWE "zip" (Compression Algorithm) Header Parameter MUST be in a protected header.')}function Wn(e){if(typeof globalThis[e]>"u")throw new fe(`JWE "zip" (Compression Algorithm) Header Parameter requires the ${e} API.`)}async function Nn(e,t,r=1/0){let n=e.writable.getWriter();n.write(t).catch(()=>{}),n.close().catch(()=>{});let o=[],s=0,i=e.readable.getReader();for(;;){let{value:c,done:a}=await i.read();if(a)break;if(o.push(c),s+=c.byteLength,r!==1/0&&s>r)throw await i.cancel().catch(()=>{}),new k("Decompressed plaintext exceeded the configured limit")}return _e(...o)}async function Mn(e){return Wn("CompressionStream"),Nn(new CompressionStream("deflate-raw"),e)}async function jn(e,t){return Wn("DecompressionStream"),Nn(new DecompressionStream("deflate-raw"),e,t)}function xs(e){let{protected:t,ciphertext:r,iv:n,tag:o,aad:s}=e,i;return t!==void 0&&(i=bn(t,k,"JWE Protected Header is invalid")),[i,ke(r,"ciphertext",k),n!==void 0?ke(n,"iv",k):void 0,o!==void 0?ke(o,"tag",k):void 0,wn((t??"")+(s!==void 0?`.${s}`:""),"aad",k)]}function Dn(e){let t=e&&Ur("keyManagementAlgorithms",e.keyManagementAlgorithms),r=e&&Ur("contentEncryptionAlgorithms",e.contentEncryptionAlgorithms),{crit:n,maxPBES2Count:o,maxDecompressedLength:s}=e??{};Kn(o);let i=s??25e4;if(i!==0&&i!==1/0&&(!Number.isSafeInteger(i)||i<1))throw new TypeError("maxDecompressedLength must be 0, a positive safe integer, or Infinity");return[t,r,n,o,s]}async function Es(e,t,r,n=xs(e)){let[o,s,i,c,a]=n,{header:f,unprotected:h,aad:d}=e,m;if(f!==void 0||h!==void 0){if(!cr(o,f,h))throw new k("JWE Protected, JWE Unprotected Header, and JWE Per-Recipient Unprotected Header Parameter names must be disjoint");m={...o,...f,...h}}else m=o??{};let[E,v,O,R,F]=t,{encrypted_key:z}=e;fr(k,ar,O,o,m),Er(m,o);let{alg:g,enc:S}=m;if(typeof g!="string"||!g)throw new k("missing JWE Algorithm (alg) in JWE Header");let _=Wt[g];if(z===""&&(!_||!rt(_)))throw new k("JWE Encrypted Key incorrect type");let N=_?.mode==="integrated-encryption";if(!N&&(typeof S!="string"||!S))throw new k("missing JWE Encryption Algorithm (enc) in JWE Header");if(E&&!E.has(g)||!E&&g.startsWith("PBES2"))throw new Bt('"alg" (Algorithm) Header Parameter value not allowed');let U;if(N){if(S!==void 0)throw new k('JWE "enc" (Encryption Algorithm) Header Parameter must not be present for integrated encryption');if(i?.byteLength)throw new k("JWE Initialization Vector must be empty for integrated encryption");if(c?.byteLength)throw new k("JWE Authentication Tag must be empty for integrated encryption")}else{if(v&&!v.has(S))throw new Bt('"enc" (Encryption Algorithm) Header Parameter value not allowed');U=nt(S)}let u;if(z!==void 0)try{u=ke(z,"encrypted_key",k)}catch(J){if(!_||!rt(_))throw J;u=new Uint8Array}let l=!1;typeof r=="function"&&(r=await r(o,e),l=!0);let A=_??Ke(g);rt(A)&&u===void 0&&(u=new Uint8Array);let I=await et(A.mode==="direct-encryption"?U:A,r,"decrypt"),K;if(A.mode==="integrated-encryption")K=await A.decrypt(I,u,s,a,o,m);else{let J=U,q;try{q=await Un(A,J,I,u,m,R),rt(A)&&q instanceof Uint8Array&&q.byteLength<<3!==J.cekBits&&(q=Pt(J))}catch(se){if(se instanceof TypeError||se instanceof k||se instanceof fe)throw se;q=Pt(J)}K=await gr(J,q,s,i,c,a)}if(m.zip==="DEF"){let J=F??25e4;if(J===0)throw new fe('JWE "zip" (Compression Algorithm) Header Parameter is not supported.');K=await jn(K,J).catch(q=>{throw q instanceof k||q instanceof fe?q:new k("Failed to decompress plaintext",{cause:q})})}return{plaintext:K,...o&&{protectedHeader:o},...d!==void 0&&{additionalAuthenticatedData:ke(d,"aad",k)},...h&&{sharedUnprotectedHeader:h},...f&&{unprotectedHeader:f},...l&&{key:I}}}async function Jn(e,t,r){if(e instanceof Uint8Array&&(e=sr.decode(e)),typeof e!="string")throw new k("Compact JWE must be a string or Uint8Array");let{0:n,1:o,2:s,3:i,4:c,length:a}=e.split(".");if(a!==5)throw new k("Invalid Compact JWE");return Es({ciphertext:i,iv:s||void 0,protected:n,tag:c||void 0,encrypted_key:o||void 0},t,r)}async function Fr(e,t,r){return Jn(e,Dn(r),t)}function Fn(e,t,r){if(!cr(e,t,r))throw new k("JWE Protected, JWE Shared Unprotected and JWE Per-Recipient Header Parameter names must be disjoint")}function As(e,t,r=!1){if(!e[1]&&!e[2]&&!e[3])throw new k("either setProtectedHeader, setUnprotectedHeader, or sharedUnprotectedHeader must be called before #encrypt()");t!==void 0&&(e[8]=t?.crit);let[,n,o,s,i,c,a,f,h]=e;if(i!==void 0&&Re(i,"JWE Additional Authenticated Data"),c!==void 0&&Re(c,"JWE Content Encryption Key"),a!==void 0&&Re(a,"JWE Initialization Vector"),!r&&n!==void 0&&(n=dr(k,n)[0],e[1]=n),o!==void 0&&(o=dr(k,o)[0],e[2]=o),!r&&s!==void 0&&(s=dr(k,s)[0],e[3]=s),f!==void 0&&!Be(f))throw new TypeError("JWE Key Management Parameters must be an object");Fn(n,o,s);let d={...n,...o,...s};xn(k,n),fr(k,ar,h,n,d),Er(d,n);let{alg:m,enc:E}=d;if(typeof m!="string"||!m)throw new k('JWE "alg" (Algorithm) Header Parameter missing or invalid');let v=Wt[m];if(v?.mode==="integrated-encryption"){if(E!==void 0)throw new k('JWE "enc" (Encryption Algorithm) Header Parameter must not be present for integrated encryption');if(c!==void 0)throw new TypeError(`setContentEncryptionKey cannot be called with JWE "alg" (Algorithm) Header ${m}`);if(a!==void 0)throw new TypeError(`setInitializationVector cannot be called with JWE "alg" (Algorithm) Header ${m}`);return[d,void 0,v]}if(typeof E!="string"||!E)throw new k('JWE "enc" (Encryption Algorithm) Header Parameter missing or invalid');return[d,nt(E),v]}async function vs(e,t,r){let[n,o,s]=t,[i,c,a,f,h,d,m,E,,v]=e,O=c,R=a,F=s??Ke(n.alg),z,g,S;F.mode==="integrated-encryption"?S=await et(F,r,"encrypt"):[S,z,g]=await Pn(F,o,r,n,d,E),g&&(v?R=R?{...R,...g}:g:O=O?{...O,...g}:g,Fn(O,R,f));let _=O?me(JSON.stringify(O)):"",N=h?.byteLength?me(h):void 0,U=Qe(N?`${_}.${N}`:_),u=i;n.zip==="DEF"&&(u=await Mn(u).catch(J=>{throw J instanceof fe?J:new k("Failed to compress plaintext",{cause:J})}));let l,A,I;F.mode==="integrated-encryption"?[z,l]=await F.encrypt(S,u,U,O,n,E):{ciphertext:l,tag:A,iv:I}=await yr(o,u,S,m,U);let K={ciphertext:me(l)};return I&&(K.iv=me(I)),A&&(K.tag=me(A)),z?.byteLength&&(K.encrypted_key=me(z)),N&&(K.aad=N),O&&(K.protected=_),f&&(K.unprotected=f),R&&(K.header=R),K}async function $n(e,t,r){return vs(e,As(e,r),t)}function zn(e){return[e.protected,e.encrypted_key,e.iv,e.ciphertext,e.tag].join(".")}var Nt=class{#e;constructor(t){Re(t,"plaintext"),this.#e=[t]}setContentEncryptionKey(t){return Ut(this.#e[5],"setContentEncryptionKey"),this.#e[5]=t,this}setInitializationVector(t){return Ut(this.#e[6],"setInitializationVector"),this.#e[6]=t,this}setProtectedHeader(t){return Ut(this.#e[1],"setProtectedHeader"),this.#e[1]=t,this}setKeyManagementParameters(t){return Ut(this.#e[7],"setKeyManagementParameters"),this.#e[7]=t,this}async encrypt(t,r){return zn(await $n([...this.#e],t,r))}};var Ar=BigInt(4294967295),Gn=BigInt(32);function Ts(e,t=!1){return t?{h:Number(e&Ar),l:Number(e>>Gn&Ar)}:{h:Number(e>>Gn&Ar)|0,l:Number(e&Ar)|0}}function vr(e,t=!1){let r=e.length,n=new Uint32Array(r),o=new Uint32Array(r);for(let s=0;s<r;s++){let{h:i,l:c}=Ts(e[s],t);[n[s],o[s]]=[i,c]}return[n,o]}var Ss=e=>e/2**32|0,_s=e=>e>>>0;function Vn(e,t,r,n){let o=Ss(r),s=_s(r);e.setUint32(t,n?s:o,n),e.setUint32(t+4,n?o:s,n)}var $r=(e,t,r)=>e>>>r,zr=(e,t,r)=>e<<32-r|t>>>r,ot=(e,t,r)=>e>>>r|t<<32-r,st=(e,t,r)=>e<<32-r|t>>>r,Mt=(e,t,r)=>e<<64-r|t>>>r-32,jt=(e,t,r)=>e>>>r-32|t<<64-r;function Ce(e,t,r,n){let o=(t>>>0)+(n>>>0);return{h:e+r+(o/2**32|0)|0,l:o|0}}var Xn=(e,t,r)=>(e>>>0)+(t>>>0)+(r>>>0),Yn=(e,t,r,n)=>t+r+n+(e/2**32|0)|0,qn=(e,t,r,n)=>(e>>>0)+(t>>>0)+(r>>>0)+(n>>>0),Zn=(e,t,r,n,o)=>t+r+n+o+(e/2**32|0)|0,Qn=(e,t,r,n,o)=>(e>>>0)+(t>>>0)+(r>>>0)+(n>>>0)+(o>>>0),eo=(e,t,r,n,o,s)=>t+r+n+o+s+(e/2**32|0)|0;function Dt(e){return e instanceof Uint8Array||ArrayBuffer.isView(e)&&e.constructor.name==="Uint8Array"&&"BYTES_PER_ELEMENT"in e&&e.BYTES_PER_ELEMENT===1}var Tr=e=>e?`"${e}" `:"";function le(e,t=""){if(typeof e!="number")throw new TypeError(Tr(t)+"expected number, got "+typeof e);if(!Number.isSafeInteger(e)||e<0)throw new RangeError(Tr(t)+"expected integer >= 0, got "+e);return e}function no(e,t=""){if(typeof e!="boolean")throw new TypeError(Tr(t)+"expected boolean, got type="+typeof e);return e}function Q(e,t,r=""){if(Dt(e)&&(t===void 0||e.length===t))return e;t!==void 0&&le(t,"length");let n=Dt(e),o=t!==void 0?` of length ${t}`:"",s=n?`length=${e.length}`:`type=${typeof e}`,i=Tr(r)+"expected Uint8Array"+o+", got "+s;throw n?new RangeError(i):new TypeError(i)}function Sr(e){if(typeof e!="function"||typeof e.create!="function")throw new TypeError("expected hash wrapped by utils.createHasher");if(le(e.outputLen),le(e.blockLen),e.outputLen<1||e.blockLen<1)throw new Error("hash blockLen / outputLen must be >= 1")}var Os=(e,t)=>{if(e===null||typeof e!="object"||Array.isArray(e))throw new TypeError((t==="object"?"":`"${t}" `)+"expected object, got type="+typeof e)},to=(e,t)=>{Os(e,t);let r=Object.getPrototypeOf(e);if(r!==Object.prototype&&r!==null)throw new TypeError(`"${t}" expected plain object`);if(Object.hasOwn(e,"__proto__"))throw new TypeError(`"${t}.__proto__" is not allowed`)};function Ue(e,t=!0){if(e.destroyed)throw new Error("hash was destroyed");if(t&&e.finished)throw new Error("digest() was already called")}function vt(e,t){Q(e,void 0,"output");let r=t.outputLen;if(!(e.length>=r))throw new RangeError('"output" expected length >= '+r)}function Gr(e){return new Uint32Array(e.buffer,e.byteOffset,Math.floor(e.byteLength/4))}function Oe(...e){for(let t=0;t<e.length;t++)e[t].fill(0)}function Tt(e){return new DataView(e.buffer,e.byteOffset,e.byteLength)}function Ie(e,t){return e<<32-t|e>>>t}var oo=new Uint8Array(new Uint32Array([287454020]).buffer)[0]===68;function Is(e){return e<<24&4278190080|e<<8&16711680|e>>>8&65280|e>>>24&255}function Ls(e){for(let t=0;t<e.length;t++)e[t]=Is(e[t]);return e}var Vr=oo?e=>e:Ls,so=typeof Uint8Array.from([]).toHex=="function"&&typeof Uint8Array.fromHex=="function",Cs=Array.from({length:256},(e,t)=>t.toString(16).padStart(2,"0"));function je(e){if(Q(e),so)return e.toHex();let t="";for(let r=0;r<e.length;r++)t+=Cs[e[r]];return t}function ro(e){return e>=48&&e<=57?e-48:e>=65&&e<=70?e-55:e>=97&&e<=102?e-87:void 0}function it(e){if(typeof e!="string")throw new TypeError("hex string expected, got "+typeof e);if(so)try{return Uint8Array.fromHex(e)}catch(o){throw o instanceof SyntaxError?new RangeError(o.message):o}let t=e.length,r=t/2;if(t%2)throw new RangeError("hex string expected, got unpadded hex of length "+t);let n=new Uint8Array(r);for(let o=0,s=0;o<r;o++,s+=2){let i=ro(e.charCodeAt(s)),c=ro(e.charCodeAt(s+1));if(i===void 0||c===void 0){let a=e[s]+e[s+1];throw new RangeError('hex string expected, got non-hex character "'+a+'" at index '+s)}n[o]=i*16+c}return n}function io(e){if(typeof e!="string")throw new TypeError("string expected");let t=new TextEncoder().encode(e);try{return new Uint8Array(t)}finally{Oe(t)}}function we(...e){let t=0;for(let n=0;n<e.length;n++){let o=e[n];Q(o),t+=o.length}let r=new Uint8Array(t);for(let n=0,o=0;n<e.length;n++){let s=e[n];r.set(s,o),o+=s.length}return r}function Xr(e,t,r="opts"){return to(e,"defaults"),t!==void 0&&to(t,r),Object.assign(Object.create(null),e,t)}function St(e,t={}){if(typeof e!="function")throw new TypeError('"hashCons" expected function, got type='+typeof e);t=Xr({},t,"info");let r=(o,s)=>e(s).update(o).digest(),n=e(void 0);return r.outputLen=n.outputLen,r.blockLen=n.blockLen,r.canXOF=n.canXOF,r.create=o=>e(o),Object.assign(r,t),Object.freeze(r)}function Yr(e=32){le(e,"bytesLength");let t=typeof globalThis=="object"?globalThis.crypto:null;if(typeof t?.getRandomValues!="function")throw new Error("crypto.getRandomValues must be defined");if(e>65536)throw new RangeError(`"bytesLength" expected <= 65536, got ${e}`);return t.getRandomValues(new Uint8Array(e))}var _t=e=>({oid:Uint8Array.from([6,9,96,134,72,1,101,3,4,2,e])});function co(e,t,r){return e&t^~e&r}function ao(e,t,r){return e&t^e&r^t&r}var Jt=class{blockLen;outputLen;canXOF=!1;padOffset;isLE;buffer;view;finished=!1;length=0;pos=0;destroyed=!1;constructor(t,r,n,o){this.blockLen=t,this.outputLen=r,this.padOffset=n,this.isLE=o,this.buffer=new Uint8Array(t),this.view=Tt(this.buffer)}update(t){Ue(this),Q(t);let{view:r,buffer:n,blockLen:o}=this,s=t.length,i=!1;for(let c=0;c<s;){let a=Math.min(o-this.pos,s-c);if(a===o){let f=Tt(t);for(;o<=s-c;c+=o)this.process(f,c);i=!0;continue}n.set(c===0&&a===s?t:t.subarray(c,c+a),this.pos),this.pos+=a,c+=a,this.pos===o&&(this.process(r,0),this.pos=0,i=!0)}return this.length+=t.length,i&&this.roundClean(),this}digestInto(t){Ue(this),vt(t,this),this.finished=!0;let{buffer:r,view:n,blockLen:o,isLE:s}=this,{pos:i}=this;r[i++]=128,r.fill(0,i),this.padOffset>o-i&&(this.process(n,0),r.fill(0)),Vn(n,o-8,this.length*8,s),this.process(n,0),this.roundClean();let c=t===r?n:Tt(t),a=this.outputLen,f=a/4,h=this.get();if(a%4||f>h.length)throw new Error("invalid outputLen");for(let d=0;d<f;d++)c.setUint32(4*d,h[d],s)}digest(){let{buffer:t,outputLen:r}=this;this.digestInto(t);let n=t.slice(0,r);return this.destroy(),n}_cloneIntoMeta(t){let{buffer:r,length:n,finished:o,destroyed:s,pos:i}=this;return t.destroyed=s,t.finished=o,t.length=n,t.pos=i,i&&t.buffer.set(r),t}clone(){return this._cloneInto()}},fo=Uint32Array.from([1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225]);var lo=Uint32Array.from([1779033703,4089235720,3144134277,2227873595,1013904242,4271175723,2773480762,1595750129,1359893119,2917565137,2600822924,725511199,528734635,4215389547,1541459225,327033209]);var Hs=Uint32Array.from([1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,2428436474,2756734187,3204031479,3329325298]),De=new Uint32Array(64),qr=class extends Jt{A=0;B=0;C=0;D=0;E=0;F=0;G=0;H=0;constructor(t,r){super(64,t,8,!1),this.A=r[0]|0,this.B=r[1]|0,this.C=r[2]|0,this.D=r[3]|0,this.E=r[4]|0,this.F=r[5]|0,this.G=r[6]|0,this.H=r[7]|0}get(){let{A:t,B:r,C:n,D:o,E:s,F:i,G:c,H:a}=this;return[t,r,n,o,s,i,c,a]}set(t,r,n,o,s,i,c,a){this.A=t|0,this.B=r|0,this.C=n|0,this.D=o|0,this.E=s|0,this.F=i|0,this.G=c|0,this.H=a|0}_cloneInto(t){return(t||=new this.constructor).set(...this.get()),this._cloneIntoMeta(t)}process(t,r){for(let d=0;d<16;d++,r+=4)De[d]=t.getUint32(r,!1);for(let d=16;d<64;d++){let m=De[d-15],E=De[d-2],v=Ie(m,7)^Ie(m,18)^m>>>3,O=Ie(E,17)^Ie(E,19)^E>>>10;De[d]=O+De[d-7]+v+De[d-16]|0}let{A:n,B:o,C:s,D:i,E:c,F:a,G:f,H:h}=this;for(let d=0;d<64;d++){let m=Ie(c,6)^Ie(c,11)^Ie(c,25),E=h+m+co(c,a,f)+Hs[d]+De[d]|0,O=(Ie(n,2)^Ie(n,13)^Ie(n,22))+ao(n,o,s)|0;h=f,f=a,a=c,c=i+E|0,i=s,s=o,o=n,n=E+O|0}n=n+this.A|0,o=o+this.B|0,s=s+this.C|0,i=i+this.D|0,c=c+this.E|0,a=a+this.F|0,f=f+this.G|0,h=h+this.H|0,this.set(n,o,s,i,c,a,f,h)}roundClean(){Oe(De)}destroy(){this.destroyed=!0,this.set(0,0,0,0,0,0,0,0),Oe(this.buffer)}},Zr=class extends qr{constructor(){super(32,fo)}};var uo=vr(["0x428a2f98d728ae22","0x7137449123ef65cd","0xb5c0fbcfec4d3b2f","0xe9b5dba58189dbbc","0x3956c25bf348b538","0x59f111f1b605d019","0x923f82a4af194f9b","0xab1c5ed5da6d8118","0xd807aa98a3030242","0x12835b0145706fbe","0x243185be4ee4b28c","0x550c7dc3d5ffb4e2","0x72be5d74f27b896f","0x80deb1fe3b1696b1","0x9bdc06a725c71235","0xc19bf174cf692694","0xe49b69c19ef14ad2","0xefbe4786384f25e3","0x0fc19dc68b8cd5b5","0x240ca1cc77ac9c65","0x2de92c6f592b0275","0x4a7484aa6ea6e483","0x5cb0a9dcbd41fbd4","0x76f988da831153b5","0x983e5152ee66dfab","0xa831c66d2db43210","0xb00327c898fb213f","0xbf597fc7beef0ee4","0xc6e00bf33da88fc2","0xd5a79147930aa725","0x06ca6351e003826f","0x142929670a0e6e70","0x27b70a8546d22ffc","0x2e1b21385c26c926","0x4d2c6dfc5ac42aed","0x53380d139d95b3df","0x650a73548baf63de","0x766a0abb3c77b2a8","0x81c2c92e47edaee6","0x92722c851482353b","0xa2bfe8a14cf10364","0xa81a664bbc423001","0xc24b8b70d0f89791","0xc76c51a30654be30","0xd192e819d6ef5218","0xd69906245565a910","0xf40e35855771202a","0x106aa07032bbd1b8","0x19a4c116b8d2d0c8","0x1e376c085141ab53","0x2748774cdf8eeb99","0x34b0bcb5e19b48a8","0x391c0cb3c5c95a63","0x4ed8aa4ae3418acb","0x5b9cca4f7763e373","0x682e6ff3d6b2b8a3","0x748f82ee5defb2fc","0x78a5636f43172f60","0x84c87814a1f0ab72","0x8cc702081a6439ec","0x90befffa23631e28","0xa4506cebde82bde9","0xbef9a3f7b2c67915","0xc67178f2e372532b","0xca273eceea26619c","0xd186b8c721c0c207","0xeada7dd6cde0eb1e","0xf57d4f7fee6ed178","0x06f067aa72176fba","0x0a637dc5a2c898a6","0x113f9804bef90dae","0x1b710b35131c471b","0x28db77f523047d84","0x32caab7b40c72493","0x3c9ebe0a15c9bebc","0x431d67c49c100d4c","0x4cc5d4becb3e42b6","0x597f299cfc657e2a","0x5fcb6fab3ad6faec","0x6c44198c4a475817"].map(e=>BigInt(e))),Rs=uo[0],Bs=uo[1],Je=new Uint32Array(80),Fe=new Uint32Array(80),Qr=class extends Jt{Ah=0;Al=0;Bh=0;Bl=0;Ch=0;Cl=0;Dh=0;Dl=0;Eh=0;El=0;Fh=0;Fl=0;Gh=0;Gl=0;Hh=0;Hl=0;constructor(t,r){super(128,t,16,!1),this.Ah=r[0]|0,this.Al=r[1]|0,this.Bh=r[2]|0,this.Bl=r[3]|0,this.Ch=r[4]|0,this.Cl=r[5]|0,this.Dh=r[6]|0,this.Dl=r[7]|0,this.Eh=r[8]|0,this.El=r[9]|0,this.Fh=r[10]|0,this.Fl=r[11]|0,this.Gh=r[12]|0,this.Gl=r[13]|0,this.Hh=r[14]|0,this.Hl=r[15]|0}get(){let{Ah:t,Al:r,Bh:n,Bl:o,Ch:s,Cl:i,Dh:c,Dl:a,Eh:f,El:h,Fh:d,Fl:m,Gh:E,Gl:v,Hh:O,Hl:R}=this;return[t,r,n,o,s,i,c,a,f,h,d,m,E,v,O,R]}set(t,r,n,o,s,i,c,a,f,h,d,m,E,v,O,R){this.Ah=t|0,this.Al=r|0,this.Bh=n|0,this.Bl=o|0,this.Ch=s|0,this.Cl=i|0,this.Dh=c|0,this.Dl=a|0,this.Eh=f|0,this.El=h|0,this.Fh=d|0,this.Fl=m|0,this.Gh=E|0,this.Gl=v|0,this.Hh=O|0,this.Hl=R|0}_cloneInto(t){return(t||=new this.constructor).set(...this.get()),this._cloneIntoMeta(t)}process(t,r){for(let g=0;g<16;g++,r+=4)Je[g]=t.getUint32(r),Fe[g]=t.getUint32(r+=4);for(let g=16;g<80;g++){let S=Je[g-15]|0,_=Fe[g-15]|0,N=ot(S,_,1)^ot(S,_,8)^$r(S,_,7),U=st(S,_,1)^st(S,_,8)^zr(S,_,7),u=Je[g-2]|0,l=Fe[g-2]|0,A=ot(u,l,19)^Mt(u,l,61)^$r(u,l,6),I=st(u,l,19)^jt(u,l,61)^zr(u,l,6),K=qn(U,I,Fe[g-7],Fe[g-16]),J=Zn(K,N,A,Je[g-7],Je[g-16]);Je[g]=J|0,Fe[g]=K|0}let{Ah:n,Al:o,Bh:s,Bl:i,Ch:c,Cl:a,Dh:f,Dl:h,Eh:d,El:m,Fh:E,Fl:v,Gh:O,Gl:R,Hh:F,Hl:z}=this;for(let g=0;g<80;g++){let S=ot(d,m,14)^ot(d,m,18)^Mt(d,m,41),_=st(d,m,14)^st(d,m,18)^jt(d,m,41),N=d&E^~d&O,U=m&v^~m&R,u=Qn(z,_,U,Bs[g],Fe[g]),l=eo(u,F,S,N,Rs[g],Je[g]),A=u|0,I=ot(n,o,28)^Mt(n,o,34)^Mt(n,o,39),K=st(n,o,28)^jt(n,o,34)^jt(n,o,39),J=n&s^n&c^s&c,q=o&i^o&a^i&a;F=O|0,z=R|0,O=E|0,R=v|0,E=d|0,v=m|0,{h:d,l:m}=Ce(f|0,h|0,l|0,A|0),f=c|0,h=a|0,c=s|0,a=i|0,s=n|0,i=o|0;let se=Xn(A,K,q);n=Yn(se,l,I,J),o=se|0}({h:n,l:o}=Ce(this.Ah|0,this.Al|0,n|0,o|0)),{h:s,l:i}=Ce(this.Bh|0,this.Bl|0,s|0,i|0),{h:c,l:a}=Ce(this.Ch|0,this.Cl|0,c|0,a|0),{h:f,l:h}=Ce(this.Dh|0,this.Dl|0,f|0,h|0),{h:d,l:m}=Ce(this.Eh|0,this.El|0,d|0,m|0),{h:E,l:v}=Ce(this.Fh|0,this.Fl|0,E|0,v|0),{h:O,l:R}=Ce(this.Gh|0,this.Gl|0,O|0,R|0),{h:F,l:z}=Ce(this.Hh|0,this.Hl|0,F|0,z|0),this.set(n,o,s,i,c,a,f,h,d,m,E,v,O,R,F,z)}roundClean(){Oe(Je,Fe)}destroy(){this.destroyed=!0,Oe(this.buffer),this.set(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)}},en=class extends Qr{constructor(){super(64,lo)}};var po=St(()=>new Zr,_t(1));var ct=St(()=>new en,_t(3));var Ks=BigInt(0),Ft=BigInt(1),Us=BigInt(2),Ps=BigInt(7),Ws=BigInt(256),Ns=BigInt(113),go=[],mo=[],wo=[];for(let e=0,t=Ft,r=1,n=0;e<24;e++){[r,n]=[n,(2*r+3*n)%5],go.push(2*(5*n+r)),mo.push((e+1)*(e+2)/2%64);let o=Ks;for(let s=0;s<7;s++)t=(t<<Ft^(t>>Ps)*Ns)%Ws,t&Us&&(o^=Ft<<(Ft<<BigInt(s))-Ft);wo.push(o)}var bo=vr(wo,!0),Ms=bo[0],js=bo[1],Ds=(e,t,r)=>e<<r|t>>>32-r,Js=(e,t,r)=>t<<r|e>>>32-r,Fs=(e,t,r)=>t<<r-32|e>>>64-r,$s=(e,t,r)=>e<<r-32|t>>>64-r,ho=(e,t,r)=>r>32?Fs(e,t,r):Ds(e,t,r),yo=(e,t,r)=>r>32?$s(e,t,r):Js(e,t,r),kt=new Uint32Array(10);function zs(e,t=24){if(!(e instanceof Uint32Array))throw new TypeError('"s" expected Uint32Array(50), got type='+typeof e);if(e.length!==50)throw new RangeError('"s" expected Uint32Array(50), got length='+e.length);if(le(t,"rounds"),t<1||t>24)throw new Error('"rounds" expected integer 1..24');for(let r=24-t;r<24;r++){for(let s=0;s<10;s++)kt[s]=e[s]^e[s+10]^e[s+20]^e[s+30]^e[s+40];for(let s=0;s<10;s+=2){let i=(s+8)%10,c=(s+2)%10,a=kt[c],f=kt[c+1],h=ho(a,f,1)^kt[i],d=yo(a,f,1)^kt[i+1];for(let m=0;m<50;m+=10)e[s+m]^=h,e[s+m+1]^=d}let n=e[2],o=e[3];for(let s=0;s<24;s++){let i=mo[s],c=ho(n,o,i),a=yo(n,o,i),f=go[s];n=e[f],o=e[f+1],e[f]=c,e[f+1]=a}for(let s=0;s<50;s+=10){let i=e[s],c=e[s+1],a=e[s+2],f=e[s+3];e[s]^=~e[s+2]&e[s+4],e[s+1]^=~e[s+3]&e[s+5],e[s+2]^=~e[s+4]&e[s+6],e[s+3]^=~e[s+5]&e[s+7],e[s+4]^=~e[s+6]&e[s+8],e[s+5]^=~e[s+7]&e[s+9],e[s+6]^=~e[s+8]&i,e[s+7]^=~e[s+9]&c,e[s+8]^=~i&a,e[s+9]^=~c&f}e[0]^=Ms[r],e[1]^=js[r]}Oe(kt)}var _r=class e{state;pos=0;posOut=0;finished=!1;state32;destroyed=!1;blockLen;suffix;outputLen;canXOF;enableXOF=!1;rounds;constructor(t,r,n,o=!1,s=24){if(le(t,"blockLen"),le(r,"suffix"),le(s,"rounds"),no(o,"enableXOF"),this.blockLen=t,this.suffix=r,this.outputLen=n,this.enableXOF=o,this.canXOF=o,this.rounds=s,le(n,"outputLen"),!(0<t&&t<200))throw new Error('"blockLen" must be 1..199');this.state=new Uint8Array(200),this.state32=Gr(this.state)}clone(){return this._cloneInto()}keccak(){Vr(this.state32),zs(this.state32,this.rounds),Vr(this.state32),this.posOut=0,this.pos=0}update(t){Ue(this),Q(t);let{blockLen:r,state:n,state32:o}=this,s=t.length,i=r%4===0&&t.byteOffset%4===0,c=r/4,a=i&&s>=r?Gr(t):void 0;for(let f=0;f<s;){if(a!==void 0&&this.pos===0&&f%4===0&&s-f>=r){for(let d=0,m=f/4;d<c;d++)o[d]^=a[m+d];f+=r,this.pos=r,this.keccak();continue}let h=Math.min(r-this.pos,s-f);for(let d=0;d<h;d++)n[this.pos++]^=t[f++];this.pos===r&&this.keccak()}return this}finish(){if(this.finished)return;this.finished=!0;let{state:t,suffix:r,pos:n,blockLen:o}=this;t[n]^=r,(r&128)!==0&&n===o-1&&this.keccak(),t[o-1]^=128,this.keccak()}writeInto(t){Ue(this,!1),Q(t),this.finish();let r=this.state,{blockLen:n}=this;for(let o=0,s=t.length;o<s;){this.posOut>=n&&this.keccak();let i=Math.min(n-this.posOut,s-o);t.set(r.subarray(this.posOut,this.posOut+i),o),this.posOut+=i,o+=i}return t}xofInto(t){if(!this.enableXOF)throw new Error("XOF is not enabled");return this.writeInto(t)}xof(t){return le(t),this.xofInto(new Uint8Array(t))}digestInto(t){if(vt(t,this),this.finished)throw new Error("digest() was already called");this.writeInto(t.length===this.outputLen?t:t.subarray(0,this.outputLen)),this.destroy()}digest(){let t=new Uint8Array(this.outputLen);return this.digestInto(t),t}destroy(){this.destroyed=!0,Oe(this.state)}_cloneInto(t){let{blockLen:r,suffix:n,outputLen:o,rounds:s,enableXOF:i}=this;return t||=new e(r,n,o,i,s),t.blockLen=r,t.state32.set(this.state32),t.pos=this.pos,t.posOut=this.posOut,t.finished=this.finished,t.rounds=s,t.suffix=n,t.outputLen=o,t.enableXOF=i,t.canXOF=this.canXOF,t.destroyed=this.destroyed,t}},Gs=(e,t,r,n={})=>St(()=>new _r(t,e,r),n);var xo=Gs(1,136,32);var Eo=(e,t,r,n={})=>St((o={})=>(o=Xr({},o),new _r(t,e,o.dkLen===void 0?r:o.dkLen,!0)),n),Ao=Eo(31,168,16,_t(11)),be=Eo(31,136,32,_t(12));var Pe=e=>`0x${je(e)}`;function at(e,t){if(typeof e!="string"||e.length!==2+t*2||!/^0x[0-9a-fA-F]+$/.test(e))throw new Error(`Expected ${t} hex bytes`);return it(e.slice(2))}function vo(e){if(typeof e!="string"||!/^0x(?:0|[1-9a-f][0-9a-f]{0,15})$/.test(e))throw new Error("Expected a canonical unsigned 64-bit quantity");return BigInt(e)}function $t(e){if(e===1)return{key:1952,signature:3309};if(e===2)return{key:48,signature:16224};throw new Error("Unknown post-quantum suite")}function kr(e,t){return ct(we(Uint8Array.of(e.length),io(e),t))}function tn(e){return $t(e.suite),{suite:e.suite,commitment:Pe(at(e.commitment,64))}}function zt(e){let{suite:t,commitment:r}=tn(e);return Pe(xo(we(Uint8Array.of(t),at(r,64))).subarray(12))}function ft(e,t){let{suite:r,publicKey:n}=e;if(t.length!==32||n.length!==$t(r).key)throw new Error("Invalid receive nonce or public key length");return{suite:r,commitment:Pe(kr("unit/owner",we(Uint8Array.of(r),ct(t),ct(n))))}}async function rn({chainId:e,input:t,recipient:r,expiryHeight:n},o,s){let{key:i,signature:c}=$t(o.suite),a=ft(o,s),f=tn(r),h=vo(t.weight);if(a.suite!==t.suite||a.commitment!==tn(t).commitment||t.spentHeight!==null)throw new Error("Signing key and nonce must open the unspent input commitment");if(a.commitment===f.commitment)throw new Error("The recipient needs a fresh commitment");if(h===0n||(h&h-1n)!==0n||n<0n||n>0xffffffffffffffffn)throw new Error("Invalid unit weight or expiry height");let d=new Uint8Array(244+i),m=new DataView(d.buffer);d.set([1,1]),d.set(at(e,32),2),d.set(at(t.id,64),34),m.setBigUint64(98,h),m.setBigUint64(106,n),d.set([a.suite,f.suite],114),d.set(at(f.commitment,64),116),d.set(ct(s),180),d.set(o.publicKey,244);let E=await o.sign(kr("move/body",d));if(E.length!==c)throw new Error("Signer returned an invalid post-quantum signature length");return Pe(we(d,E))}function Or(e,t){if(typeof e!="string"||e.length!==2+5505*2&&e.length!==2+16516*2)throw new Error("Expected a complete native signed transfer");let r=at(e,(e.length-2)/2),{key:n,signature:o}=$t(r[114]);if($t(r[115]),r[0]!==1||r[1]!==1||r.length!==244+n+o||Pe(r.subarray(2,34))!==t)throw new Error("Wrong native transfer format or chain");let s=kr("move/id",r);return{id:Pe(s),inputId:Pe(r.subarray(34,98)),outputId:Pe(kr("unit/id",we(s,new Uint8Array(4))))}}var lt="0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73c760",Vt="0x38d42d50a5a6d5ceb43fd6f63235e542716b1df5ccff59161c5fd7810aed17c6",So="0x672e21c7b187a36b7f61f219ceb1d3c34fbf3eb5d39ec9723a7ed168fd0fc7a1",To=2*1024*1024,nn={alg:"dir",enc:"A256GCM",typ:"p2party-wallet+jwe"},Vs=Le.encode(new TextEncoder().encode(JSON.stringify(nn))),_o=new Map([[1,"ml-dsa-65"],[2,"slh-dsa-sha2-192s"]]),Xs=64,Ys=new TextDecoder("utf-8",{fatal:!0}),$e=class extends Error{};function dt(e,t){if(!e)throw new $e(t)}function Gt(e,t){return e!==null&&typeof e=="object"&&!Array.isArray(e)&&Object.keys(e).length===t.length&&t.every(r=>Object.hasOwn(e,r))}function qs(e){dt(_o.has(e),"Select a supported Testnet 1 signing suite.")}function Ot(e,t,r){if(typeof e!="string"||e.length>Math.ceil(r*4/3)||!/^[A-Za-z0-9_-]+$/.test(e))throw new Error("Invalid encoding");let n=Le.decode(e);if(n.length<t||n.length>r||Le.encode(n)!==e)throw new Error("Invalid encoding");return n}async function ko(e,t){let r,n;try{if(typeof e!="string"||e.length>To||!e.startsWith(Vs+".."))throw new Error;let o=e.split(".");if(o.length!==5||o[2].length!==16||o[4].length!==22||/[^A-Za-z0-9_-]/.test(o.slice(2).join("")))throw new Error;if(Ot(o[4],16,16),Ot(o[3],1,To).fill(0),typeof t!="string"||!/^P2W1-[A-Za-z0-9_-]{43}$/.test(t))throw new Error;r=Ot(t.slice(5),32,32),{plaintext:n}=await Fr(e,r,{keyManagementAlgorithms:["dir"],contentEncryptionAlgorithms:["A256GCM"]});let i=JSON.parse(Ys.decode(n));if(!Gt(i,["version","chainId","genesis","walletId","revision","receives"])||i.version!==1||i.chainId!==lt||i.genesis!==Vt||typeof i.walletId!="string"||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(i.walletId)||!Array.isArray(i.receives)||i.receives.length<1||i.receives.length>Xs||i.revision!==i.receives.length)throw new Error;if(i.receives.some(c=>!Gt(c,["key","nonce","suite","commitment"])||!_o.has(c.suite))||new Set(i.receives.map(c=>c.commitment)).size!==i.receives.length)throw new Error;return{key:r,data:i}}catch{throw r?.fill(0),new $e("Could not open this Testnet 1 backup. Check the file and its recovery code.")}finally{n?.fill(0)}}function Oo(e,t){dt(Gt(e,["chainId","genesis","input","recipient","expiryHeight"])&&e.chainId===lt&&e.genesis===Vt,"Choose a transfer request for Testnet 1.");let{input:r,recipient:n,expiryHeight:o}=e,s=a=>typeof a=="string"&&a.length===130&&/^0x[0-9a-f]{128}$/.test(a),i=a=>typeof a=="string"&&a.length<=18&&/^0x(?:0|[1-9a-f][0-9a-f]{0,15})$/.test(a)&&"0x"+BigInt(a).toString(16)===a;dt(Gt(r,["id","suite","commitment","weight","createdHeight","spentHeight"])&&s(r.id)&&s(r.commitment)&&i(r.weight)&&i(r.createdHeight)&&r.spentHeight===null,"Provide the complete unspent unit from demos_getUnit.");let c=BigInt(r.weight);return dt(c>0n&&(c&c-1n)===0n,"The input must be a whole native unit of valid weight."),dt(t.some(a=>a.commitment===r.commitment&&a.suite===r.suite),"This backup cannot spend the selected input."),dt(Gt(n,["suite","commitment"])&&s(n.commitment)&&n.commitment!==r.commitment,"Provide a fresh full recipient commitment and suite."),qs(n.suite),dt(i(o)&&BigInt(o)>BigInt(r.createdHeight),"Choose a finite expiry after the input creation height."),{chainId:lt,genesis:Vt,inputId:r.id,source:r.commitment,sourceSuite:r.suite,weight:c.toString(),recipient:{...n},readHandle:zt(n),expiry:BigInt(o).toString()}}var Zs=le;function on(e,t="object"){if(e===null||typeof e!="object"||Array.isArray(e))throw new TypeError(t==="object"?"expected valid options object":`"${t}" expected object, got type=${typeof e}`);return e}var Io=BigInt(0);var Qs=e=>e?`"${e}" `:"";function Lo(e,t=""){if(typeof e!="boolean")throw new TypeError(Qs(t)+"expected boolean, got type="+typeof e);return e}function ei(e){if(typeof e=="bigint"){if(!ri(e))throw new RangeError("positive bigint expected, got "+e)}else Zs(e);return e}function ti(e){if(typeof e!="string")throw new TypeError("hex string expected, got "+typeof e);return e===""?Io:BigInt("0x"+e)}function sn(e){return ti(je(e))}function Co(e,t){if(le(t),t===0)throw new Error("zero output length is invalid");e=ei(e);let r=t*2,n=e.toString(16);if(n.length>r)throw new RangeError("number is too large");return it(n.padStart(r,"0"))}function ri(e){return typeof e=="bigint"&&Io<=e}function Ho(e,t={},r={},n="object"){on(e,n),on(t,"fields"),on(r,"optFields");function o(i,c,a){let f=n==="object"?`param "${String(i)}"`:`"${n}.${String(i)}"`,h=e[i];if(!Object.hasOwn(e,i)&&(a?h!==void 0:c!=="function"))throw new TypeError(`${f} is invalid: expected own property`);if(a&&h===void 0)return;let d=typeof h;if(d!==c||h===null)throw new TypeError(`${f} is invalid: expected ${c}, got ${d}`)}let s=(i,c)=>Object.entries(i).forEach(([a,f])=>o(a,f,c));s(t,!1),s(r,!0)}function Xt(e,t="n"){if(typeof e!="number")throw new TypeError(`wrong u32 integer "${t}": expected number, got type=${typeof e}`);if(!Number.isSafeInteger(e)||e<0||e>4294967295)throw new RangeError(`wrong u32 integer "${t}": expected 0..4294967295, got ${e}`);return e}function Bo(e){return Xt(e,"x"),(e&e-1)===0&&e!==0}function cn(e,t){if(Xt(e),typeof t!="number")throw new TypeError('"bits" expected number, got type='+typeof t);if(!Number.isSafeInteger(t)||t<0||t>32)throw new Error(`expected integer 0 <= bits <= 32, got ${t}`);let r=0;for(let n=0;n<t;n++,e>>>=1)r=r<<1|e&1;return r>>>0}function Ko(e){return Xt(e),31-Math.clz32(e)}function Ro(e){if(!e||typeof e!="object"||typeof e.length!="number")throw new TypeError('"values" expected array-like, got type='+typeof e);let t=e.length;if(!Bo(t))throw new Error("expected positive power-of-two length, got "+t);let r=Ko(t);for(let n=0;n<t;n++){let o=cn(n,r);if(n<o){let s=e[n];e[n]=e[o],e[o]=s}}return e}var an=(e,t)=>{Ho(t,{N:"number",roots:"object",dit:"boolean"},{invertButterflies:"boolean",skipStages:"number",brp:"boolean"},"coreOpts");let{N:r,roots:n,dit:o,invertButterflies:s=!1,skipStages:i=0,brp:c=!0}=t;Xt(r,"coreOpts.N");let a=Ko(r);if(!Bo(r))throw new Error("FFT: Polynomial size should be power of two");Xt(i,"coreOpts.skipStages");let f=a===0?0:a-1;if(i>f)throw new Error(`FFT: wrong skipStages: expected 0 <= skipStages <= ${f}`);if(n.length!==r)throw new Error(`FFT: wrong roots length: expected ${r}, got ${n.length}`);let h=o!==s;return d=>{if(d.length!==r)throw new Error("FFT: wrong Polynomial length");o&&c&&Ro(d);for(let m=0,E=1;m<a-i;m++){let v=o?m+1+i:a-m,O=1<<v,R=O>>1,F=r>>v;for(let z=0;z<r;z+=O)for(let g=0,S=E++;g<R;g++){let _=s?o?r-S:S:g*F,N=z+g,U=z+g+R,u=n[_],l=d[U],A=d[N];if(h){let I=e.mul(l,u);d[N]=e.add(A,I),d[U]=e.sub(A,I)}else s?(d[N]=e.add(l,A),d[U]=e.mul(e.sub(l,A),u)):(d[N]=e.add(A,l),d[U]=e.mul(e.sub(A,l),u))}}return!o&&c&&Ro(d),d}};var Te=Q;var It=Yr;function ni(e,t,r=()=>{}){if(!Array.isArray(e))throw new TypeError(`"${t}" expected array, got type=${typeof e}`);for(let n=0;n<e.length;n++)r(e[n],`${t}[${n}]`);return e}function oi(e,t="object"){if(e===null||typeof e!="object"||Array.isArray(e))throw new TypeError(t==="object"?"expected valid options object":`"${t}" expected object, got type=${typeof e}`);return e}function Yt(e,t){if(e=Q(e),t=Q(t),e.length!==t.length)return!1;let r=0;for(let n=0;n<e.length;n++)r|=e[n]^t[n];return r===0}function We(e){return new Uint8Array(Q(e))}function si(e){if(Dt(e))throw new TypeError('"opts" expected object, got Uint8Array');oi(e,"opts");let t=Object.getPrototypeOf(e);if(t!==null&&t!==Object.prototype)throw new TypeError('"opts" expected a plain object')}var ii=Object.freeze(["context"]),ci=Object.freeze(["context","extraEntropy"]);function Ir(e,t){si(e);let r=Object.assign(Object.create(null),e);for(let[n,o]of Object.entries(r))if(o!==void 0&&!t.includes(n))throw new TypeError('unexpected option "'+String(n)+'"; expected one of: '+t.join(", "));return Object.freeze(r)}function ut(e,t=ii){let r=Ir(e,t);return r.context!==void 0&&Q(r.context,void 0,"opts.context"),r}function ze(e,t=ci){let r=Ir(e,t);return r.context!==void 0&&Q(r.context,void 0,"opts.context"),r.extraEntropy!==!1&&r.extraEntropy!==void 0&&Q(r.extraEntropy,void 0,"opts.extraEntropy"),r}function Ee(e,...t){let r=o=>typeof o=="number"?o:o.bytesLen,n=t.reduce((o,s)=>o+r(s),0);return{bytesLen:n,encode:o=>{let s=new Uint8Array(n);for(let i=0,c=0;i<t.length;i++){let a=t[i],f=r(a),h=typeof a=="number"?o[i]:a.encode(o[i]);Q(h,f,e),s.set(h,c),typeof a!="number"&&h.fill(0),c+=f}return s},decode:o=>{Q(o,n,e);let s=[];for(let i of t){let c=r(i),a=o.subarray(0,c);s.push(typeof i=="number"?a:i.decode(a)),o=o.subarray(c)}return s}}}function He(e,t){let r=e,n=t*r.bytesLen;return{bytesLen:n,encode:o=>{let s=ni(o,"u");if(s.length!==t)throw new RangeError(`vecCoder.encode: wrong length=${s.length}. Expected: ${t}`);let i=new Uint8Array(n);for(let c=0,a=0;c<s.length;c++){let f=r.encode(s[c]);i.set(f,a),f.fill(0),a+=f.length}return i},decode:o=>{Q(o,n);let s=[];for(let i=0;i<o.length;i+=r.bytesLen)s.push(r.decode(o.subarray(i,i+r.bytesLen)));return s}}}function te(...e){for(let t of e)if(Array.isArray(t))for(let r of t)r.fill(0);else t.fill(0)}function Lt(e){if(le(e,"bits"),e>32)throw new RangeError('"bits" expected <= 32, got '+e);return e===32?4294967295:~(-1<<e)>>>0}var Uo=Uint8Array.of();function Ct(e,t=Uo){if(Q(e,void 0,"msg"),Q(t,void 0,"ctx"),t.length>255)throw new RangeError("context should be 255 bytes or less");return we(new Uint8Array([0,t.length]),t,e)}var ai=Uint8Array.from([6,9,96,134,72,1,101,3,4,2]),fi={"060960864801650304020b":32,"060960864801650304020c":64};function qt(e,t=0){if(typeof e!="function"||typeof e.create!="function")throw new TypeError('"hash" expected hash function, got type='+typeof e);Sr(e),le(t,"requiredStrength");let r=e.oid;if(Q(r,void 0,"hash.oid"),!Yt(r.subarray(0,10),ai))throw new Error('"hash.oid" is invalid: expected NIST hash');let n=fi[je(r)];if(n!==void 0&&e.outputLen!==n)throw new Error("Pre-hash XOF output length must be "+n+" bytes for this OID, got: "+e.outputLen);let o=e.outputLen*8/2;if(t>o)throw new Error("Pre-hash security strength too low: "+o+", required: "+t)}function Ht(e,t,r=Uo){if(qt(e),Q(t,void 0,"msg"),Q(r,void 0,"ctx"),r.length>255)throw new RangeError("context should be 255 bytes or less");let n=e(t);return we(new Uint8Array([1,r.length]),r,e.oid,n)}var Po=e=>{let{newPoly:t,N:r,Q:n,F:o,ROOT_OF_UNITY:s,brvBits:i,isKyber:c}=e,a=(g,S=n)=>{let _=g%S|0;return(_>=0?_|0:S+_|0)|0},f=(g,S=n)=>{let _=a(g,S)|0;return(_>S>>1?_-S|0:_)|0};function h(){let g=t(r);for(let S=0;S<r;S++){let _=cn(S,i),N=BigInt(s)**BigInt(_)%BigInt(n);g[S]=Number(N)|0}return g}let d=h(),m=g=>{throw new Error("not implemented")},E=c?{add:(g,S)=>{let _=g+S|0;return _>=n?_-n|0:_},sub:(g,S)=>{let _=g-S|0;return _<0?_+n|0:_},mul:(g,S)=>a((g|0)*(S|0))|0,inv:m}:{add:(g,S)=>a((g|0)+(S|0))|0,sub:(g,S)=>a((g|0)-(S|0))|0,mul:(g,S)=>a((g|0)*(S|0))|0,inv:m},v={N:r,roots:d,invertButterflies:!0,skipStages:c?1:0,brp:!1},O=an(E,{dit:!1,...v}),R=an(E,{dit:!0,...v}),F={encode:g=>O(g),decode:g=>{R(g);for(let S=0;S<g.length;S++)g[S]=a(o*g[S]);return g}};return{mod:a,smod:f,nttZetas:d,NTT:{encode:g=>F.encode(g),decode:g=>F.decode(g)},bitsCoder:(g,S)=>{for(let U=0,u=0;U<r;U++)u+=g,u>32&&Lt(u),u%=8;let _=Lt(g),N=g*(r/8);return{bytesLen:N,encode:U=>{let u=U,l=new Uint8Array(N);for(let A=0,I=0,K=0,J=0;A<u.length;A++)for(I|=(S.encode(u[A])&_)<<K,K+=g;K>=8;K-=8,I>>=8)l[J++]=I&255;return l},decode:U=>{let u=t(r);for(let l=0,A=0,I=0,K=0;l<U.length;l++)for(A|=U[l]<<I,I+=8;I>=g;I-=g,A>>=g)u[K++]=S.decode(A&_);return u}}}}},Wo=e=>(t,r)=>{r||(r=e.blockLen);let n=new Uint8Array(t.length+2);n.set(t);let o=t.length,s=new Uint8Array(r),i=e.create({}),c=0,a=0;return{stats:()=>({calls:c,xofs:a}),get:(f,h)=>(n[o+0]=f,n[o+1]=h,i.destroy(),i=e.create({}).update(n),c++,()=>(a++,i.xofInto(s))),clean:()=>{i.destroy(),te(s,n)}}},No=Wo(Ao),Mo=Wo(be);var jo=Object.freeze(["extraEntropy","externalMu"]),di=Object.freeze(["externalMu"]);function Do(e,t){let r=Ir(e,t);return r.externalMu!==void 0&&Lo(r.externalMu,"opts.externalMu"),r}var re=256,Xe=8380417,li=1753,ui=8347681,pt=13,fn=Math.floor((Xe-1)/88)|0,dn=Math.floor((Xe-1)/32)|0,pi=Object.freeze({2:Object.freeze({K:4,L:4,D:pt,GAMMA1:2**17,GAMMA2:fn,TAU:39,ETA:2,OMEGA:80}),3:Object.freeze({K:6,L:5,D:pt,GAMMA1:2**19,GAMMA2:dn,TAU:49,ETA:4,OMEGA:55}),5:Object.freeze({K:8,L:7,D:pt,GAMMA1:2**19,GAMMA2:dn,TAU:60,ETA:2,OMEGA:75})}),Ae=e=>new Int32Array(e),Z=Po({N:re,Q:Xe,F:ui,ROOT_OF_UNITY:li,newPoly:Ae,isKyber:!1,brvBits:8}),Jo=e=>e,Zt=(e,t=Jo,r=Jo)=>Z.bitsCoder(e,{encode:n=>t(r(n)),decode:n=>r(t(n))}),Ge=(e,t)=>{let r=e,n=t;for(let o=0;o<r.length;o++)r[o]=Z.mod(r[o]+n[o]);return r},Fo=(e,t)=>{let r=e,n=t;for(let o=0;o<r.length;o++)r[o]=Z.mod(r[o]-n[o]);return r},hi=e=>{let t=e;for(let r=0;r<re;r++)t[r]<<=pt;return t},Qt=(e,t)=>{let r=e;for(let n=0;n<re;n++)if(Math.abs(Z.smod(r[n]))>=t)return!0;return!1},Ve=(e,t)=>{let r=e,n=t,o=Ae(re);for(let s=0;s<r.length;s++)o[s]=Z.mod(r[s]*n[s]);return o};function Lr(e){let t=e,r=Ae(re);for(let n=0;n<re;){let o=t();if(o.length%3)throw new Error("RejNTTPoly: unaligned block");for(let s=0;n<re&&s<=o.length-3;s+=3){let i=(o[s+0]|o[s+1]<<8|o[s+2]<<16)&8388607;i<Xe&&(r[n++]=i)}}return r}function yi(e){let t=e,{K:r,L:n,GAMMA1:o,GAMMA2:s,TAU:i,ETA:c,OMEGA:a}=t,{CRH_BYTES:f,TR_BYTES:h,C_TILDE_BYTES:d,XOF128:m,XOF256:E,securityLevel:v}=t;if(![2,4].includes(c))throw new Error("Wrong ETA");if(![1<<17,1<<19].includes(o))throw new Error("Wrong GAMMA1");if(![fn,dn].includes(s))throw new Error("Wrong GAMMA2");let O=i*c,R=x=>{let C=Z.mod(x),T=Z.smod(C,2*s)|0;return C-T===Xe-1?{r1:0,r0:T-1|0}:{r1:Math.floor((C-T)/(2*s))|0,r0:T}},F=x=>R(x).r1,z=x=>R(x).r0,g=(x,C)=>x<=s||x>Xe-s||x===Xe-s&&C===0?0:1,S=Math.floor((Xe-1)/(2*s)),_=(x,C)=>{let{r1:T,r0:p}=R(C);return x===1?p>0?Z.mod(T+1,S)|0:Z.mod(T-1,S)|0:T|0},N=x=>{let C=Z.mod(x),T=Z.smod(C,2**pt)|0;return{r1:Math.floor((C-T)/2**pt)|0,r0:T}},U={bytesLen:a+r,encode:x=>{let C=x;if(C===!1)throw new Error("hint.encode: hint is false");let T=new Uint8Array(a+r);for(let p=0,y=0;p<r;p++){for(let w=0;w<re;w++)C[p][w]!==0&&(T[y++]=w);T[a+p]=y}return T},decode:x=>{let C=[],T=0;for(let p=0;p<r;p++){let y=Ae(re);if(x[a+p]<T||x[a+p]>a)return!1;for(let w=T;w<x[a+p];w++){if(w>T&&x[w]<=x[w-1])return!1;y[x[w]]=1}T=x[a+p],C.push(y)}for(let p=T;p<a;p++)if(x[p]!==0)return!1;return C}},u=Zt(c===2?3:4,x=>c-x,x=>{if(!(-c<=x&&x<=c))throw new Error(`malformed key s1/s3 ${x} outside of ETA range [${-c}, ${c}]`);return x}),l=Zt(13,x=>(1<<pt-1)-x),A=Zt(10),I=Zt(o===1<<17?18:20,x=>Z.smod(o-x)),K=Zt(s===fn?6:4),J=He(K,r),q=Ee("publicKey",32,He(A,r)),se=Ee("secretKey",32,32,h,He(u,n),He(u,r),He(l,r)),Se=Ee("signature",d,He(I,n),U),qe=c===2?x=>x<15?2-x%5:!1:x=>x<9?4-x:!1;function er(x){let C=x,T=Ae(re);for(let p=0;p<re;){let y=C();for(let w=0;p<re&&w<y.length;w+=1){let b=qe(y[w]&15),L=qe(y[w]>>4&15);b!==!1&&(T[p++]=b),p<re&&L!==!1&&(T[p++]=L)}}return T}let tr=x=>{let C=Ae(re),T=be.create({}).update(x),p=new Uint8Array(be.blockLen);T.xofInto(p);let y=p.slice(0,8);for(let w=re-i,b=8,L=0,B=0;w<re;w++){let P=w+1;for(;P>w;)P=p[b++],!(b<be.blockLen)&&(T.xofInto(p),b=0);C[w]=C[P],C[P]=1-((y[L]>>B++&1)<<1),B>=8&&(L++,B=0)}return C},Rt=x=>{let C=x,T=Ae(re),p=Ae(re);for(let y=0;y<C.length;y++){let{r0:w,r1:b}=N(C[y]);T[y]=w,p[y]=b}return{r0:T,r1:p}},rr=(x,C)=>{let T=x,p=C;for(let y=0;y<re;y++)T[y]=_(p[y],T[y]);return T},yt=(x,C)=>{let T=x,p=C,y=Ae(re),w=0;for(let b=0;b<re;b++){let L=g(T[b],p[b]);y[b]=L,w+=L}return{v:y,cnt:w}},Ne=32,Ze=Ee("seed",32,64,32),xe=Object.freeze({info:Object.freeze({type:"internal-ml-dsa"}),lengths:Object.freeze({secretKey:se.bytesLen,publicKey:q.bytesLen,seed:32,signature:Se.bytesLen,signRand:Ne}),keygen:x=>{let C=new Uint8Array(34),T=x===void 0;T&&(x=It(32)),Te(x,32,"seed"),C.set(x),T&&te(x),C[32]=r,C[33]=n;let[p,y,w]=Ze.decode(be(C,{dkLen:Ze.bytesLen})),b=E(y),L=[];for(let H=0;H<n;H++)L.push(er(b.get(H&255,H>>8&255)));let B=[];for(let H=n;H<n+r;H++)B.push(er(b.get(H&255,H>>8&255)));let P=L.map(H=>Z.NTT.encode(H.slice())),M=[],j=[],D=m(p),W=Ae(re);for(let H=0;H<r;H++){te(W);for(let X=0;X<n;X++){let Y=Lr(D.get(X,H));Ge(W,Ve(Y,P[X]))}Z.NTT.decode(W);let{r0:ce,r1:$}=Rt(Ge(W,B[H]));M.push(ce),j.push($)}let G=q.encode([p,j]),ee=be(G,{dkLen:h}),de=se.encode([p,w,ee,L,B,M]);return D.clean(),b.clean(),te(p,y,w,L,B,P,W,M,j,ee,C),{publicKey:G,secretKey:de}},getPublicKey:x=>{let[C,T,p,y,w,b]=se.decode(x),L=m(C),B=y.map(j=>Z.NTT.encode(j.slice())),P=[],M=Ae(re);for(let j=0;j<r;j++){M.fill(0);for(let W=0;W<n;W++){let G=Lr(L.get(W,j));Ge(M,Ve(G,B[W]))}Z.NTT.decode(M),Ge(M,w[j]);let{r1:D}=Rt(M);P.push(D)}return L.clean(),te(M,B,b,y,w),q.encode([C,P])},sign:(x,C,T={})=>{T=ze(T,jo),T=Do(T,jo);let{extraEntropy:p,externalMu:y=!1}=T;y&&Te(x,f,"mu");let w=p===!1||p===void 0,b=p===!1?new Uint8Array(32):p===void 0?It(Ne):p;Te(b,32,"extraEntropy");let L=(()=>{try{return se.decode(C)}catch($){throw w&&te(b),$}})(),[B,P,M,j,D,W]=L,G=[],ee=m(B);for(let $=0;$<r;$++){let X=[];for(let Y=0;Y<n;Y++)X.push(Lr(ee.get(Y,$)));G.push(X)}ee.clean();for(let $=0;$<n;$++)Z.NTT.encode(j[$]);for(let $=0;$<r;$++)Z.NTT.encode(D[$]),Z.NTT.encode(W[$]);let de=y?x:be.create({dkLen:f}).update(M).update(x).digest(),H=be.create({dkLen:f}).update(P).update(b).update(de).digest();w&&te(b),Te(H,f);let ce=E(H,I.bytesLen);e:for(let $=0;;){let X=[];for(let V=0;V<n;V++,$++)X.push(I.decode(ce.get($&255,$>>8)()));let Y=X.map(V=>Z.NTT.encode(V.slice())),oe=[];for(let V=0;V<r;V++){let ie=Ae(re);for(let ge=0;ge<n;ge++)Ge(ie,Ve(G[V][ge],Y[ge]));Z.NTT.decode(ie),oe.push(ie)}let ue=oe.map(V=>V.map(F)),pe=be.create({dkLen:d}).update(de).update(J.encode(ue)).digest(),he=Z.NTT.encode(tr(pe)),ne=j.map(V=>Ve(V,he));for(let V=0;V<n;V++)if(Ge(Z.NTT.decode(ne[V]),X[V]),Qt(ne[V],o-O)){te(pe,ne,he,ue,oe,Y,X);continue e}let Me=0,ae=[];for(let V=0;V<r;V++){let ie=Z.NTT.decode(Ve(D[V],he)),ge=Fo(oe[V],ie).map(z);if(Qt(ge,s-O)){te(pe,ne,he,ue,oe,Y,X,ae,ie,ge);continue e}let gt=Z.NTT.decode(Ve(W[V],he));if(Qt(gt,s)){te(pe,ne,he,ue,oe,Y,X,ae,ie,ge,gt);continue e}Ge(ge,gt);let mt=yt(ge,ue[V]);ae.push(mt.v),Me+=mt.cnt}if(Me>a){te(pe,ne,he,ue,oe,Y,X,ae);continue}ce.clean();let ve=Se.encode([pe,ne,ae]);return te(pe,ne,ae,he,ue,oe,Y,X,H,j,D,W,...G),y||te(de),ve}throw new Error("Unreachable code path reached, report this error")},verify:(x,C,T,p={})=>{p=Do(p,di);let{externalMu:y=!1}=p;y&&Te(C,f,"mu");let[w,b]=q.decode(T),L=be(T,{dkLen:h});if(x.length!==Se.bytesLen)return!1;let[B,P,M]=Se.decode(x);if(M===!1)return!1;for(let H=0;H<n;H++)if(Qt(P[H],o-O))return!1;let j=y?C:be.create({dkLen:f}).update(L).update(C).digest(),D=Z.NTT.encode(tr(B)),W=P.map(H=>H.slice());for(let H=0;H<n;H++)Z.NTT.encode(W[H]);let G=[],ee=m(w);for(let H=0;H<r;H++){let ce=Ve(Z.NTT.encode(hi(b[H])),D),$=Ae(re);for(let Y=0;Y<n;Y++){let oe=Lr(ee.get(Y,H));Ge($,Ve(oe,W[Y]))}let X=Z.NTT.decode(Fo($,ce));G.push(rr(X,M[H]))}ee.clean();let de=be.create({dkLen:d}).update(j).update(J.encode(G)).digest();for(let H of M)if(!(H.reduce(($,X)=>$+X,0)<=a))return!1;for(let H of P)if(Qt(H,o-O))return!1;return Yt(B,de)}});return Object.freeze({info:Object.freeze({type:"ml-dsa"}),internal:xe,securityLevel:v,keygen:xe.keygen,lengths:xe.lengths,getPublicKey:xe.getPublicKey,sign:(x,C,T={})=>{T=ze(T);let p=Ct(x,T.context),y=xe.sign(p,C,{extraEntropy:T.extraEntropy,externalMu:!1});return te(p),y},verify:(x,C,T,p={})=>(p=ut(p),Te(x,void 0,"signature"),xe.verify(x,Ct(C,p.context),T,{externalMu:!1})),prehash:x=>{qt(x,v);let C=x;return Object.freeze({info:Object.freeze({type:"hashml-dsa"}),securityLevel:v,lengths:xe.lengths,keygen:xe.keygen,getPublicKey:xe.getPublicKey,sign:(T,p,y={})=>{y=ze(y);let w=Ht(C,T,y.context),b=xe.sign(w,p,{extraEntropy:y.extraEntropy,externalMu:!1});return te(w),b},verify:(T,p,y,w={})=>(w=ut(w),Te(T,void 0,"signature"),xe.verify(T,Ht(C,p,w.context),y,{externalMu:!1}))})}})}var Ye=yi({...pi[3],CRH_BYTES:64,TR_BYTES:64,C_TILDE_BYTES:48,XOF128:No,XOF256:Mo,securityLevel:192});var Cr=class{oHash;iHash;blockLen;outputLen;canXOF=!1;finished=!1;destroyed=!1;constructor(t,r){if(Sr(t),Q(r,void 0,"key"),this.iHash=t.create(),typeof this.iHash.update!="function")throw new Error("expected Hash instance");this.blockLen=this.iHash.blockLen,this.outputLen=this.iHash.outputLen;let n=this.blockLen,o=new Uint8Array(n);o.set(r.length>n?t.create().update(r).digest():r);for(let s=0;s<o.length;s++)o[s]^=54;this.iHash.update(o),this.oHash=t.create();for(let s=0;s<o.length;s++)o[s]^=106;this.oHash.update(o),Oe(o)}update(t){return Ue(this),this.iHash.update(t),this}digestInto(t){Ue(this),vt(t,this),this.finished=!0;let r=t.subarray(0,this.outputLen);this.iHash.digestInto(r),this.oHash.update(r),this.oHash.digestInto(r),this.destroy()}digest(){let t=new Uint8Array(this.oHash.outputLen);return this.digestInto(t),t}_cloneInto(t){t||=Object.create(Object.getPrototypeOf(this),{});let{oHash:r,iHash:n,finished:o,destroyed:s,blockLen:i,outputLen:c,canXOF:a}=this;return t=t,t.finished=o,t.destroyed=s,t.blockLen=i,t.outputLen=c,t.canXOF=a,t.oHash=r._cloneInto(t.oHash),t.iHash=n._cloneInto(t.iHash),t}clone(){return this._cloneInto()}destroy(){this.destroyed=!0,this.oHash.destroy(),this.iHash.destroy()}},$o=(()=>{let e=((t,r,n)=>new Cr(t,r).update(n).digest());return e.create=(t,r)=>new Cr(t,r),e})();var gi=Object.freeze(["extraEntropy"]),mi=Object.freeze([]),wi=Object.freeze({"128f":Object.freeze({W:16,N:16,H:66,D:22,K:33,A:6,securityLevel:128}),"128s":Object.freeze({W:16,N:16,H:63,D:7,K:14,A:12,securityLevel:128}),"192f":Object.freeze({W:16,N:24,H:66,D:22,K:33,A:8,securityLevel:192}),"192s":Object.freeze({W:16,N:24,H:63,D:7,K:17,A:14,securityLevel:192}),"256f":Object.freeze({W:16,N:32,H:68,D:17,K:35,A:9,securityLevel:256}),"256s":Object.freeze({W:16,N:32,H:64,D:8,K:22,A:14,securityLevel:256})}),ye={WOTS:0,WOTSPK:1,HASHTREE:2,FORSTREE:3,FORSPK:4,WOTSPRF:5,FORSPRF:6},ln=(e,t)=>{let r=Lt(t);return n=>{let o=new Uint32Array(e);for(let s=0,i=0,c=0,a=0;s<e;s++){for(;c<t;)a=a<<8|n[i++],c+=8;c-=t,o[s]=a>>>c&r}return o}},zo=BigInt(1),bi=BigInt(8),xi=BigInt(255);function un(e){return(zo<<BigInt(e))-zo}function Ei(e,t){let r=t,{N:n,W:o,H:s,D:i,K:c,A:a,securityLevel:f}=e,h=r.getContext(e);if(o!==16)throw new Error("Unsupported Winternitz parameter");let d=4,m=Math.floor(8*n/d),E=n<=8?2:n<=136?3:4,v=Math.floor(s/i),O=m+E,R=22,F=0,z=1,g=9,S=12,_=13,N=17,U=18,u=21;r.isCompressed||(R=32,F+=3,z+=7,g+=10,S+=10,_+=10,N+=10,U+=10,u+=10);let l=(p,y=new Uint8Array(R))=>{let w=Object.hasOwn(p,"type")?p.type:void 0,b=Object.hasOwn(p,"height")?p.height:void 0,L=Object.hasOwn(p,"tree")?p.tree:void 0,B=Object.hasOwn(p,"layer")?p.layer:void 0,P=Object.hasOwn(p,"index")?p.index:void 0,M=Object.hasOwn(p,"chain")?p.chain:void 0,j=Object.hasOwn(p,"hash")?p.hash:void 0,D=Object.hasOwn(p,"keypair")?p.keypair:void 0,W=Object.hasOwn(p,"subtreeAddr")?p.subtreeAddr:void 0,G=Object.hasOwn(p,"keypairAddr")?p.keypairAddr:void 0;if(b!==void 0&&(y[N]=b),B!==void 0&&(y[F]=B),w!==void 0&&(y[g]=w),M!==void 0&&(y[N]=M),j!==void 0&&(y[u]=j),P!==void 0&&(y[U+0]=P>>>24,y[U+1]=P>>>16,y[U+2]=P>>>8,y[U+3]=P),W&&y.set(W.subarray(0,z+8)),L!==void 0){let ee=L;for(let de=7;de>=0;de--,ee>>=bi)y[z+de]=Number(ee&xi)}return D!==void 0&&(y[_]=D,v>8&&(y[S]=D>>>8)),G&&(y.set(G.subarray(0,z+8)),y[_]=G[_],v>8&&(y[S]=G[S])),y},A=ln(E,d),I=p=>{let y=ln(m,d)(p),w=0;for(let B=0;B<y.length;B++)w+=o-1-y[B];w<<=(8-E*d%8)%8;let b=A(Co(w,Math.ceil(E*d/8))),L=new Uint32Array(O);return L.set(y),L.set(b,y.length),L},K=ln(c,a),J=v*(i-1),q=v,se=Ee("hashedMessage",Math.ceil(a*c/8),Math.ceil(J/8),Math.ceil(v/8)),Se=(p,y,w,b)=>{let B=b.Hmsg(p,y,w,se.bytesLen),[P,M,j]=se.decode(B),D=sn(M)&un(J),W=Number(sn(j))&Lt(q);return{tree:D,leafIdx:W,md:P}},qe=(p,y)=>function(b,L,B,P,M){let j=b,D=y,W=(1<<p)-1,G=new Uint8Array(p*n),ee=new Uint8Array(p*n),de=new Uint8Array(2*n),H=de.subarray(0,n),ce=de.subarray(n);for(let $=0;;$++){let X=$+B;ce.set(D(L,X,j,M));let Y=0;for(let oe=$,ue=B,pe=L;;Y++,oe>>>=1,pe>>>=1,ue>>>=1){if(Y===p)return{root:ce,authPath:ee};if((oe^pe)===1&&ee.subarray(Y*n).set(ce),(oe&1)===0&&$<W)break;l({height:Y+1,index:(oe>>1)+(ue>>1)},P),H.set(G.subarray(Y*n).subarray(0,n)),ce.set(j.thashN(2,de,P))}G.subarray(Y*n).set(ce)}throw new Error("Unreachable code path reached, report this error")},er=qe(v,(p,y,w,b)=>{let L=w,B=new Uint8Array(O*n),P=y===p?0:-1>>>0;l({keypair:y},b.leafAddr),l({keypair:y},b.pkAddr);for(let M=0;M<O;M++){let j=b.wotsSteps[M]|P,D=B.subarray(M*n,(M+1)*n);l({chain:M,hash:0,type:ye.WOTSPRF},b.leafAddr),D.set(L.PRFaddr(b.leafAddr)),l({type:ye.WOTS},b.leafAddr);for(let W=0;W===j&&b.wotsSig.subarray(M*n).set(D),W!==o-1;W++)l({hash:W},b.leafAddr),D.set(L.thash1(D,b.leafAddr))}return L.thashN(O,B,b.pkAddr)}),tr=qe(a,(p,y,w,b)=>{let L=w;l({type:ye.FORSPRF,index:y},b);let B=L.PRFaddr(b);return l({type:ye.FORSTREE},b),L.thash1(B,b)}),Rt=(p,y,w,b,L=new Uint8Array(n))=>{l({type:ye.HASHTREE},w);let B={wotsSig:new Uint8Array(x.bytesLen),wotsSteps:I(L),leafAddr:l({subtreeAddr:y}),pkAddr:l({type:ye.WOTSPK,subtreeAddr:y})},{root:P,authPath:M}=er(p,b,0,w,B);return{root:P,sigWots:B.wotsSig.subarray(0,O*n),sigAuth:M}},rr=(p,y,w,b,L,B,P)=>{let M=B,j=new Uint8Array(2*n),D=j.subarray(0,n),W=j.subarray(n,2*n);(y&1)!==0?(W.set(p.subarray(0,n)),D.set(b.subarray(0,n))):(D.set(p.subarray(0,n)),W.set(b.subarray(0,n))),y>>>=1,w>>>=1;for(let G=0;G<L-1;G++,y>>=1,w>>=1){l({height:G+1,index:y+w},P);let ee=b.subarray((G+1)*n,(G+2)*n);(y&1)!==0?(W.set(M.thashN(2,j,P)),D.set(ee)):(j.set(M.thashN(2,j,P)),W.set(ee))}return l({height:L,index:y+w},P),M.thashN(2,j,P)},yt=Ee("seed",n,n,n),Ne=Ee("publicKey",n,n),Ze=Ee("secretKey",n,n,Ne.bytesLen),xe=He(Ee("fors",n,n*a),c),x=He(Ee("wots",O*n,v*n),i),C=Ee("signature",n,xe,x),T=Object.freeze({info:Object.freeze({type:"internal-slh-dsa"}),lengths:Object.freeze({publicKey:Ne.bytesLen,secretKey:Ze.bytesLen,signature:C.bytesLen,seed:yt.bytesLen,signRand:n}),keygen(p){p!==void 0&&Te(p,yt.bytesLen,"seed"),p=p===void 0?It(yt.bytesLen):We(p);let[y,w,b]=yt.decode(p),L=h(b,y),B=l({layer:i-1}),P=l({layer:i-1}),{root:M}=Rt(L,P,B,-1>>>0),j=Ne.encode([b,M]),D=Ze.encode([y,w,j]);return L.clean(),te(y,w,M,P,B),{publicKey:j,secretKey:D}},getPublicKey:p=>{let[y,w,b]=Ze.decode(p);return Uint8Array.from(b)},sign:(p,y,w={})=>{w=ze(w,gi);let{extraEntropy:b}=w,[L,B,P]=Ze.decode(y),[M,j]=Ne.decode(P);b===!1?b=We(M):b===void 0?b=It(n):b=We(b),Te(b,n);let D=h(M,L),W=D.PRFmsg(B,b,p),{tree:G,leafIdx:ee,md:de}=Se(W,P,p,D),H=l({type:ye.WOTS,tree:G,keypair:ee}),ce=[],$=l({keypairAddr:H}),X=l({keypairAddr:H}),Y=K(de),oe=[];for(let ae=0;ae<Y.length;ae++){let ve=ae<<a;l({type:ye.FORSPRF,height:0,index:Y[ae]+ve},X);let V=We(D.PRFaddr(X));l({type:ye.FORSTREE},X);let{root:ie,authPath:ge}=tr(D,Y[ae],ve,X,$);ce.push(ie),oe.push([V,ge])}let ue=l({type:ye.FORSPK,keypairAddr:H}),pe=We(D.thashN(c,we(...ce),ue)),he=l({type:ye.HASHTREE}),ne=[];for(let ae=0;ae<i;ae++,G>>=BigInt(v)){l({tree:G,layer:ae},he),l({subtreeAddr:he,keypair:ee},H);let{sigWots:ve,sigAuth:V,root:ie}=Rt(D,H,he,ee,pe);pe.set(ie),te(ie),ne.push([ve,V]),ee=Number(G&un(v))}D.clean();let Me=C.encode([W,oe,ne]);return te(W,b,he,H,$,X,Y,ce),Me},verify:(p,y,w,b={})=>{ut(b,mi);let[L,B]=Ne.decode(w),P=w;if(Te(p,void 0,"signature"),p.length!==C.bytesLen)return!1;let[M,j,D]=C.decode(p),W=h(L),{tree:G,leafIdx:ee,md:de}=Se(M,P,y,W),H=l({type:ye.WOTS,tree:G,keypair:ee}),ce=[],$=l({type:ye.FORSTREE,keypairAddr:H}),X=K(de);for(let ne=0;ne<j.length;ne++){let[Me,ae]=j[ne],ve=ne<<a;l({height:0,index:X[ne]+ve},$);let V=W.thash1(Me,$);ce.push(We(rr(V,X[ne],ve,ae,a,W,$)))}let Y=l({type:ye.FORSPK,keypairAddr:H}),oe=We(W.thashN(c,we(...ce),Y)),ue=l({type:ye.HASHTREE}),pe=l({type:ye.WOTSPK}),he=new Uint8Array(O*n);for(let ne=0;ne<D.length;ne++,G>>=BigInt(v)){let[Me,ae]=D[ne];l({tree:G,layer:ne},ue),l({subtreeAddr:ue,keypair:ee},H),l({keypairAddr:H},pe);let ve=I(oe);for(let ie=0;ie<O;ie++){l({chain:ie},H);let ge=o-1-ve[ie],gt=ve[ie],mt=he.subarray(ie*n);mt.set(Me.subarray(ie*n,(ie+1)*n));for(let nr=gt;nr<gt+ge&&nr<o;nr++)l({hash:nr},H),mt.set(W.thash1(mt,H))}let V=W.thashN(O,he,pe);oe=We(rr(V,ee,0,ae,v,W,ue)),ee=Number(G&un(v))}return Yt(oe,B)}});return Object.freeze({info:Object.freeze({type:"slh-dsa"}),internal:T,securityLevel:f,lengths:T.lengths,keygen:T.keygen,getPublicKey:T.getPublicKey,sign:(p,y,w={})=>{w=ze(w);let b=Ct(p,w.context),L=T.sign(b,y,{extraEntropy:w.extraEntropy});return te(b),L},verify:(p,y,w,b={})=>(b=ut(b),T.verify(p,Ct(y,b.context),w)),prehash:p=>{qt(p,f);let y=p;return Object.freeze({info:Object.freeze({type:"hashslh-dsa"}),lengths:T.lengths,keygen:T.keygen,getPublicKey:T.getPublicKey,sign:(w,b,L={})=>{L=ze(L);let B=Ht(y,w,L.context),P=T.sign(B,b,{extraEntropy:L.extraEntropy});return te(B),P},verify:(w,b,L,B={})=>(B=ut(B),T.verify(w,Ht(y,b,B.context),L))})}})}var Ai=(e,t)=>r=>(n,o)=>{let{N:s}=r,i={prf:0,thash:0,hmsg:0,gen_message_random:0,mgf1:0},c=new Uint8Array(4),a=Tt(c),f=e.create().update(n).update(new Uint8Array(e.blockLen-s)),h=t.create().update(n).update(new Uint8Array(t.blockLen-s)),d=f.clone(),m=h.clone(),E=new Uint8Array(e.outputLen),v=new Uint8Array(t.outputLen),O=new Uint8Array(e.outputLen),R=E.subarray(0,s),F=v.subarray(0,s),z=O.subarray(0,s);function g(_,N,U){i.mgf1++;let u=new Uint8Array(Math.ceil(N/U.outputLen)*U.outputLen);if(N>2**32)throw new Error("mask too long");for(let l=0,A=u;A.length;l++)a.setUint32(0,l,!1),U.create().update(_).update(c).digestInto(A),A=A.subarray(U.outputLen);return te(u.subarray(N)),u.subarray(0,N)}let S=(_,N,U,u)=>(l,A,I)=>{i.thash++;let K=l*s;return _._cloneInto(N).update(I).update(A.length===K?A:A.subarray(0,K)).digestInto(U),u};return{PRFaddr:_=>{if(!o)throw new Error("No sk seed");return i.prf++,f._cloneInto(d).update(_).update(o).digestInto(O),z},PRFmsg:(_,N,U)=>(i.gen_message_random++,$o.create(t,_).update(N).update(U).digest().subarray(0,s)),Hmsg:(_,N,U,u)=>{i.hmsg++;let l=we(_.subarray(0,s),N.subarray(0,s),t.create().update(_.subarray(0,s)).update(N).update(U).digest());return g(l,u,t)},thash1:S(f,d,E,R).bind(null,1),thashN:S(h,m,v,F),clean:()=>{f.destroy(),h.destroy(),d.destroy(),m.destroy(),te(E,v,O)}}};var vi={isCompressed:!0,getContext:Ai(po,ct)};var Go=Ei(wi["192s"],vi);var Ti=it("020100300b0609608648016503040312"),Si=it("020100300b0609608648016503040316");function pn(e,t){if(e.length!==t.length)return!1;let r=0;for(let n=0;n<e.length;n++)r|=e[n]^t[n];return r===0}function ht(e,t){if(e.length<2||e[0]!==t)throw new Error("Invalid native key");let r=e[1],n=2;if(r&128){let o=r&127;if(o<1||o>2||e.length<2+o||e[2]===0)throw new Error("Invalid native key");r=0;for(let s=0;s<o;s++)r=r*256+e[n++];if(r<128)throw new Error("Invalid native key")}if(r!==e.length-n)throw new Error("Invalid native key");return e.subarray(n)}function _i(e){if(e[0]===128)return Ye.keygen(ht(e,128));if(e[0]===4){let s=ht(e,4);if(s.length!==Ye.lengths.secretKey)throw new Error("Invalid ML key length");let i=Ye.getPublicKey(s),c=crypto.getRandomValues(new Uint8Array(32));if(!Ye.verify(Ye.sign(c,s),c,i))throw new Error("Inconsistent ML key");return{secretKey:s.slice(),publicKey:i}}let t=ht(e,48),r=ht(t.subarray(0,34),4),n=ht(t.subarray(34),4),o=Ye.keygen(r);if(!pn(o.secretKey,n))throw o.secretKey.fill(0),new Error("Inconsistent ML key");return o}function Hr(e,t){let r=ht(e,48),n=t===1?Ti:Si;if(t!==1&&t!==2||!pn(r.subarray(0,n.length),n))throw new Error("Wrong signing suite");let o=ht(r.subarray(n.length),4),s=t===1?Ye:Go,i;if(t===1)i=_i(o);else{if(o.length!==s.lengths.secretKey)throw new Error("Invalid SLH key length");if(i=s.keygen(o.subarray(0,s.lengths.seed)),!pn(i.secretKey,o))throw i.secretKey.fill(0),new Error("Inconsistent SLH key")}let{publicKey:c,secretKey:a}=i;return{suite:t,publicKey:c,sign(f){let h=s.sign(f,a);if(!s.verify(h,f,c))throw new Error("Signature verification failed");return h},lock(){a.fill(0)}}}async function ki(e,t,r){if(!(e instanceof Uint8Array)||e.length>12*1024||!(t instanceof Uint8Array)||t.length!==32||typeof r!="string"||!/^0x[0-9a-f]{128}$/.test(r))throw Error("Choose the original key.pk8, 32-byte nonce and full receive commitment.");let n;for(let i of[1,2])try{n=Hr(e,i);break}catch{}if(!n)throw Error("This file is not a supported Testnet 1 spending key.");let o=crypto.getRandomValues(new Uint8Array(32)),s;try{let{commitment:i,suite:c}=ft(n,t);if(i!==r)throw Error("These files do not open that receive commitment.");let a=crypto.randomUUID();return s=new TextEncoder().encode(JSON.stringify({version:1,chainId:lt,genesis:Vt,walletId:a,revision:1,receives:[{suite:c,commitment:i,key:Le.encode(e),nonce:Le.encode(t)}]})),{archive:await new Nt(s).setProtectedHeader(nn).encrypt(o),code:"P2W1-"+Le.encode(o),filename:"p2party-testnet1-"+a+"-r1.jwe"}}finally{n.lock(),o.fill(0),s?.fill(0)}}function Vo(){let e=f=>document.getElementById(f),t=e("legacy-form"),r=e("legacy-result"),n=e("legacy-status"),o,s,i=0,c=()=>{i++,o=null,r.hidden=!0,e("legacy-code").textContent="",e("legacy-download").removeAttribute("href"),s&&URL.revokeObjectURL(s),s=null,n.textContent="",t.reset()},a=e("legacy-panel");a.addEventListener("toggle",()=>{a.open||c()}),window.addEventListener("pagehide",c),e("restore-form").addEventListener("submit",()=>{c(),a.open=!1}),t.addEventListener("input",()=>{i++,o=null,r.hidden=!0,e("legacy-code").textContent="",s&&(URL.revokeObjectURL(s),s=null),e("legacy-download").removeAttribute("href"),n.textContent=""}),t.addEventListener("submit",async f=>{f.preventDefault();let h=++i,d,m;e("legacy-convert").disabled=!0;try{let E=e("legacy-key").files[0],v=e("legacy-nonce").files[0],O=e("legacy-commitment").value.trim();if(!E||!v||!E.size||E.size>12*1024||v.size!==32)throw Error("Choose the original key.pk8 and 32-byte nonce files.");d=new Uint8Array(await E.arrayBuffer()),m=new Uint8Array(await v.arrayBuffer());let R=await ki(d,m,O);if(h!==i)return;s&&URL.revokeObjectURL(s),t.reset(),o=R,e("legacy-code").textContent="",s=URL.createObjectURL(new Blob([R.archive],{type:"application/octet-stream"})),e("legacy-download").href=s,e("legacy-download").download=R.filename,r.hidden=!1,n.textContent="Commitment verified. Download the encrypted file and keep its new recovery code separately."}catch(E){h===i&&(n.textContent=E.message)}finally{d?.fill(0),m?.fill(0),e("legacy-convert").disabled=!1}}),e("legacy-show-code").addEventListener("click",()=>{o&&(e("legacy-code").textContent=o.code)})}function Xo(e){for(let{signer:t,nonce:r}of e.values())t.lock(),r.fill(0);e.clear()}async function Yo(e,t,r){let{key:n,data:o}=await ko(e,t);n.fill(0);let s=new Map;try{for(let i of o.receives){await new Promise(h=>setTimeout(h,0));let c=Ot(i.key,32,12*1024),a,f;try{a=Ot(i.nonce,32,32),f=Hr(c,i.suite);let h=ft(f,a);if(h.commitment!==i.commitment)throw new Error;s.set(h.commitment,{signer:f,nonce:a,descriptor:Object.freeze({...h,readHandle:zt(h)})})}catch(h){throw a?.fill(0),f?.lock(),h}finally{c.fill(0),i.key="",i.nonce=""}r?.(s.size,o.revision)}}catch{throw Xo(s),new $e("Could not verify the keys and receive requests in this backup.")}return Oi(s,o.walletId,o.revision)}function Oi(e,t,r){let n=Object.freeze([...e.values()].map(({descriptor:c})=>c));function o(c){let a=e.get(c);if(!a)throw new $e("Open the wallet and choose one of its receive requests.");return a}async function s(c,a,f,h){let{signer:d,nonce:m,descriptor:E}=o(a.commitment),v=await rn({chainId:c,input:a,recipient:f,expiryHeight:h},d,m),{id:O,inputId:R,outputId:F}=Or(v,c);return{...E,wire:v,moveId:O,inputId:R,outputId:F,chainId:c,recipient:f}}function i(c){if(e.size===0)throw new $e("Open your wallet to review a transfer.");return Oo(c,n)}return Object.freeze({accounts:n,revision:r,walletId:t,reviewTransfer:i,async prove(c){let{signer:a,descriptor:{suite:f}}=o(c),h=ft(a,crypto.getRandomValues(new Uint8Array(32))),d="0x"+je(crypto.getRandomValues(new Uint8Array(64)));return s(So,{id:d,suite:f,commitment:c,weight:"0x1",createdHeight:"0x0",spentHeight:null},h,1n)},async signPayment(c){return i(c),s(lt,c.input,c.recipient,BigInt(c.expiryHeight))},lock(){Xo(e)}})}if(window.top!==window.self){let e=document.createElement("p");e.textContent="Open the wallet tool directly in its own tab.",document.body.replaceChildren(e)}else Ii();function Ii(){Vo();let e=u=>document.getElementById(u),t=(u,l)=>{e(u).hidden=!l},r=u=>{e("status").textContent=u},n=u=>({1:"ML-DSA-65",2:"SLH-DSA-SHA2-192s"})[u],o="p2party.testnet1.encrypted-wallet.v1",s=2*1024*1024,i,c,a,f,h=!1,d=0,m=new Set;function E(u){if(typeof u!="string"||!u.length||u.length>s)throw Error("Choose an encrypted backup up to 2 MiB.");let l=u.trim();if(l.startsWith("{")||l.startsWith('"'))try{let A=JSON.parse(l);l=typeof A=="string"?A:A?.archive}catch{throw Error("The pasted JSON does not contain an encrypted backup.")}if(typeof l!="string"||!/^[A-Za-z0-9_-]+\.\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(l))throw Error("Choose the backup file itself or paste its encrypted contents. A filename alone cannot open a wallet.");return l}function v(){try{return localStorage.getItem(o)}catch{return null}}function O(){let u=!!v();t("saved-area",u),t("use-saved",u&&!i&&c?.kind!=="saved")}function R(u){c=u,e("chosen").textContent=u?.kind==="file"?"Selected file · "+u.file.name:u?.kind==="text"?"Encrypted contents selected.":u?.kind==="saved"?"The saved backup is selected. Enter its recovery code.":"",O()}function F(u){if(!u||u.size===0||u.size>s)throw R(null),Error("Choose one encrypted backup file up to 2 MiB.");e("archive-text").value="",R({kind:"file",file:u})}function z(u){let l=E(u);e("archive").value="",e("archive-text").value="",R({kind:"text",archive:l})}function g(){a=f=null,e("review-details").replaceChildren(),t("review-panel",!1),t("signed-panel",!1)}function S(u,l){d++,h=!1,i?.lock(),i=null;for(let A of m)URL.revokeObjectURL(A);m.clear(),g(),e("accounts").replaceChildren(),e("accounts-count").textContent="",e("restore-form").reset(),e("review-form").reset(),e("paste-panel").open=!1,e("payment-panel").open=!1,e("remember").checked=!1,e("code").type="password",e("show-code").textContent="Show code",e("show-code").setAttribute("aria-pressed","false"),e("title").textContent="Restore your wallet",e("intro").textContent="Bring your encrypted backup and the recovery code you saved separately. This browser opens them offline.",t("overview",!1),t("payment",!1),t("restore",!0),R(v()?{kind:"saved"}:null),r(u),l&&e("title").focus()}function _(u){return async l=>{if(l.preventDefault(),h)return;h=!0;let A=d,I=l.submitter??l.currentTarget;I instanceof HTMLButtonElement&&(I.disabled=!0);try{await u(A)}catch(K){d===A&&r(K instanceof Error?K.message:"The wallet could not complete this action.")}finally{d===A&&(h=!1),I instanceof HTMLButtonElement&&(I.disabled=!1)}}}function N(u,l,A){let I=document.createElement("dt"),K=document.createElement("dd");I.textContent=l,K.textContent=A,u.append(I,K)}function U(){t("restore",!1),t("overview",!0),t("payment",!0),e("title").textContent="Your wallet",e("intro").textContent="Inspect your restored receive requests or sign a Testnet 1 payment offline.",e("accounts-count").textContent=i.accounts.length+" restored receive "+(i.accounts.length===1?"request":"requests")+" · Backup revision "+i.revision;let u=e("accounts");u.replaceChildren();for(let l of i.accounts){let A=document.createElement("details"),I=document.createElement("summary"),K=document.createElement("dl"),J=document.createElement("button");I.textContent=n(l.suite)+" · "+l.readHandle.slice(0,8)+"…"+l.readHandle.slice(-6),N(K,"Full receive commitment",l.commitment),N(K,"Public balance handle",l.readHandle),J.type="button",J.className="secondary",J.textContent="Verify spending access",J.addEventListener("click",_(async q=>{r("Checking this account’s signing key offline…"),await i.prove(l.commitment),q===d&&r("Spending access verified for "+I.textContent+".")})),A.append(I,K,J),u.append(A)}O(),e("title").focus()}e("archive").addEventListener("change",()=>{try{F(e("archive").files[0]),r("")}catch(u){r(u.message)}}),e("archive-text").addEventListener("input",()=>{e("archive").value="",R(e("archive-text").value?{kind:"entry"}:null)}),document.addEventListener("dragover",u=>{i||(u.preventDefault(),e("drop").classList.add("is-over"))}),document.addEventListener("dragleave",()=>e("drop").classList.remove("is-over")),document.addEventListener("drop",u=>{if(u.preventDefault(),e("drop").classList.remove("is-over"),!(i||h))try{if(u.dataTransfer.files.length>1)throw Error("Choose one encrypted wallet file.");u.dataTransfer.files.length?F(u.dataTransfer.files[0]):z(u.dataTransfer.getData("text/plain")),r(""),e("code").focus()}catch(l){R(null),r(l.message)}}),document.addEventListener("paste",u=>{if(i||h||u.target===e("code"))return;let l=u.clipboardData;if(l){u.preventDefault();try{let A=l.files;if(A.length>1)throw Error("Paste one encrypted wallet file.");A.length?F(A[0]):z(l.getData("text/plain")),r(""),e("code").focus()}catch(A){R(null),e("archive-text").value="",e("archive").value="",r(A.message)}}}),e("show-code").addEventListener("click",()=>{let u=e("code").type==="password";e("code").type=u?"text":"password",e("show-code").textContent=u?"Hide code":"Show code",e("show-code").setAttribute("aria-pressed",String(u))}),e("use-saved").addEventListener("click",()=>{e("archive").value="",e("archive-text").value="",R({kind:"saved"}),e("code").focus()}),e("forget").addEventListener("click",()=>{try{localStorage.removeItem(o)}catch{r("This browser could not remove the saved backup. You can clear this site’s browser data.");return}c?.kind==="saved"?R(null):O(),r("The saved encrypted backup was removed from this browser.")}),e("restore-form").addEventListener("submit",_(async u=>{let l=c,A=e("remember").checked,I=e("code").value.trim();if(e("code").value="",e("code").type="password",e("show-code").textContent="Show code",e("show-code").setAttribute("aria-pressed","false"),!l)throw Error("Select your encrypted backup first.");let K=l.kind==="file"?await l.file.text():l.kind==="saved"?v():l.kind==="text"?l.archive:e("archive-text").value,J=E(K);if(u!==d)return;r("Opening the encrypted backup…");let q=await Yo(J,I,(Se,qe)=>{u===d&&r("Checking receive requests · "+Se+" of "+qe)});if(u!==d){q.lock();return}let se="Wallet restored on this browser.";if(A)try{localStorage.setItem(o,J),se="Wallet restored. Its encrypted backup is saved on this device."}catch{se="Wallet restored for this session. This browser could not save the encrypted backup."}i=q,c=null,e("restore-form").reset(),e("remember").checked=!1,e("chosen").textContent="",U(),r(se)})),e("lock").addEventListener("click",()=>S("Wallet locked.",!0)),e("request").addEventListener("change",()=>{g(),r("")}),e("review-form").addEventListener("submit",_(async u=>{g();let l=e("request").files[0];if(!l||l.size===0||l.size>8192)throw Error("Choose an unsigned payment request up to 8 KiB.");let A;try{A=JSON.parse(await l.text())}catch{throw Error("Choose a valid JSON payment request.")}if(u!==d||e("request").files[0]!==l)return;let I=i.reviewTransfer(A);a=A;let K=e("review-details");for(let[J,q]of[["Amount",I.weight+" P2PARTY"],["Recipient commitment",I.recipient.commitment],["Recipient suite",n(I.recipient.suite)],["Recipient read handle",I.readHandle],["Source commitment",I.source],["Source suite",n(I.sourceSuite)],["Input unit",I.inputId],["Inclusive expiry height",I.expiry],["Chain ID",I.chainId],["Genesis fingerprint",I.genesis]])N(K,J,q);t("review-panel",!0),e("review-heading").focus(),r("")})),e("cancel").addEventListener("click",()=>{e("review-form").reset(),g(),e("request").focus(),r("Payment review cancelled.")}),e("sign").addEventListener("click",_(async u=>{let l=a;if(!l)return;r("Signing the reviewed payment offline…");let A=await i.signPayment(l);if(u!==d||a!==l)return;let{chainId:I,inputId:K,moveId:J,outputId:q,recipient:se,wire:Se}=A;f={chainId:I,inputId:K,moveId:J,outputId:q,recipient:se,wire:Se},a=null,t("review-panel",!1),t("signed-panel",!0),e("signed-heading").focus(),r("")})),e("download").addEventListener("click",()=>{if(!f)return;let u=URL.createObjectURL(new Blob([JSON.stringify(f)+`
+`],{type:"application/json"}));m.add(u);let l=document.createElement("a");l.href=u,l.download="signed-"+f.inputId.slice(2)+".json",document.body.append(l),l.click(),l.remove(),setTimeout(()=>{URL.revokeObjectURL(u),m.delete(u)},1e4),r("Signed payment download started.")}),window.addEventListener("pagehide",()=>S("",!1)),window.addEventListener("pageshow",u=>{u.persisted&&S("Wallet locked.",!1)}),t("save-tool",location.protocol==="https:"||location.protocol==="http:"),S("",!1)}})();
+;
+    </script>
+  </body>
+</html>
+
+<!-- Bundled dependency licenses
+@p2party/ledger-client
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+
+@noble/post-quantum
+The MIT License (MIT)
+
+Copyright (c) 2024 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+@noble/hashes
+The MIT License (MIT)
+
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+@noble/curves
+The MIT License (MIT)
+
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+jose
+The MIT License (MIT)
+
+Copyright (c) 2018 Filip Skokan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-->

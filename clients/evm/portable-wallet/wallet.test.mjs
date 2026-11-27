@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { assertVerified, verifyNative } from "./native-test-helpers.mjs";
 import {
   mkdtemp,
   mkdir,
@@ -59,40 +59,6 @@ async function changeArchive(archive, code, change) {
   return new CompactEncrypt(Buffer.from(JSON.stringify(data)))
     .setProtectedHeader(protectedHeader)
     .encrypt(key);
-}
-function verifyNative(payment, owner, chainId) {
-  const prefix = Buffer.alloc(183);
-  prefix.write("DLV1");
-  Buffer.from(chainId.slice(2), "hex").copy(prefix, 4);
-  prefix[36] = prefix[37] = 3;
-  prefix.writeBigUInt64BE(1n, 38);
-  Buffer.from(payment.inputId.slice(2), "hex").copy(prefix, 46);
-  prefix.writeBigUInt64BE(1n, 110);
-  prefix[118] = owner.suite;
-  Buffer.from(owner.commitment.slice(2), "hex").copy(prefix, 119);
-  return spawnSync(process.env.P2PARTY_WALLET_VERIFIER, [], {
-    input: Buffer.concat([prefix, Buffer.from(payment.wire.slice(2), "hex")]),
-    env: {},
-    timeout: 12000,
-  });
-}
-function assertVerified(payment, owner) {
-  const result = verifyNative(payment, owner, payment.chainId);
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout.length, 193);
-  assert.equal(
-    "0x" + result.stdout.subarray(0, 64).toString("hex"),
-    payment.moveId,
-  );
-  assert.equal(
-    "0x" + result.stdout.subarray(64, 128).toString("hex"),
-    payment.outputId,
-  );
-  assert.equal(result.stdout[128], payment.recipient.suite);
-  assert.equal(
-    "0x" + result.stdout.subarray(129).toString("hex"),
-    payment.recipient.commitment,
-  );
 }
 
 test("current downloaded archive required before new receives become shareable", async () => {
