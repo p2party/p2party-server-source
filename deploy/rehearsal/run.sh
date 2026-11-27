@@ -293,8 +293,8 @@ if [ "$mode" != vm-check ] && [ -n "$TOOLS" ]; then
   [ "$(ls "$TOOLS/collections/ansible_collections" 2>/dev/null)" = community ] &&
     [ "$(ls "$TOOLS/collections/ansible_collections/community" 2>/dev/null)" = postgresql ] ||
     refuse "$TOOLS/collections must hold community.postgresql and nothing else"
-  grep -q '"version": "5.1.1"' "$TOOLS/collections/ansible_collections/community/postgresql/MANIFEST.json" ||
-    refuse "$TOOLS/collections has no community.postgresql 5.1.1"
+  grep -q '"version": "5.1.3"' "$TOOLS/collections/ansible_collections/community/postgresql/MANIFEST.json" ||
+    refuse "$TOOLS/collections has no community.postgresql 5.1.3"
 fi
 
 # The SSH guard, as ssh, scp and sftp.

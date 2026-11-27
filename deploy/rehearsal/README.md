@@ -151,7 +151,7 @@ The commit under test is then deployed from a `git archive` of it, as
 ## Tools
 
 `REHEARSAL_TOOLS` names a directory laid out as below. `run.sh` checks the
-four binaries and the Linux arm64 release archive against [`tools.sha256`](tools.sha256) before every run.
+four binaries, the Linux arm64 release archive and the PostgreSQL collection archive against [`tools.sha256`](tools.sha256) before every run.
 
 | Path                                                   | What and from where                                                                                                                                                                                                          |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -161,7 +161,8 @@ four binaries and the Linux arm64 release archive against [`tools.sha256`](tools
 | `bun-linux-aarch64-1.3.14/bun`                         | Likewise `@oven/bun-linux-aarch64@1.3.14` (`sha512-X5SsPZHs…`): release 0.1.4's Bun, for the baseline's host                                                                                                                 |
 | `bun-linux-aarch64-1.4.5/bun-linux-aarch64.zip`        | Official Linux arm64 release archive. The guest-local mirror serves these bytes to the production installer. Its SHA-256 is the signed upstream release hash pinned in the playbook.                                         |
 | `venv/`                                                | A Python virtual environment with `ansible-core==2.22.0` from PyPI                                                                                                                                                           |
-| `collections/ansible_collections/community/postgresql` | `community.postgresql` 5.1.1, extracted from PyPI's `ansible-15.0.0-py3-none-any.whl` (which requires ansible-core 2.22)                                                                                                     |
+| `community-postgresql-5.1.3.tar.gz`                    | Download the 5.1.3 archive from [Ansible Galaxy](https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/artifacts/community-postgresql-5.1.3.tar.gz). Its SHA-256 is pinned in `tools.sha256`.       |
+| `collections/ansible_collections/community/postgresql` | Extract the verified collection tarball here. Its manifest must identify `community.postgresql` 5.1.3.                                                                                                                       |
 
 `lima.yaml` pins the Ubuntu 24.04 image by its dated release URL and the
 SHA-256 from that release's `SHA256SUMS`; Lima checks it on download.
