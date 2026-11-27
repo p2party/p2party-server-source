@@ -67,7 +67,7 @@ export function operatorId(key) {
   );
 }
 
-function readOperator(pem) {
+export function readOperator(pem) {
   if (typeof pem !== "string" || pem.length > 4096)
     throw new Error("Expected a PEM-encoded operator public key");
   // OpenSSL's general-purpose reader also accepts a private key, leading text

@@ -18,9 +18,15 @@ export function localCommittee({ chainId, genesisHash, epoch = 0 }) {
       p.publicKey.export({ type: "spki", format: "pem" }),
     ),
   });
-  const keys = initial
-    .map((p) => p.privateKey)
-    .sort((a, b) => memberIndex(committee, a) - memberIndex(committee, b));
+  return localValidators(
+    committee,
+    initial.map((p) => p.privateKey),
+  );
+}
+export function localValidators(committee, privateKeys) {
+  const keys = [...privateKeys].sort(
+    (a, b) => memberIndex(committee, a) - memberIndex(committee, b),
+  );
   const dir = mkdtempSync(join(tmpdir(), "p2party-dag-"));
   const paths = keys.map((_, i) => join(dir, i + ".sqlite"));
   const validators = keys.map(

@@ -8,6 +8,8 @@ import {
   fields,
   fixed,
   hex,
+  hasQuorum,
+  hasAnchorSupport,
   memberIndex,
   signSubject,
   u32,
@@ -58,12 +60,15 @@ export function vertexId(committee, header) {
     header.parents.length > committee.operators.length ||
     (header.round === 1
       ? header.parents.length !== 0
-      : header.parents.length < committee.quorum)
+      : header.parents.length < (committee.quorum ?? 1))
   )
     throw Error("Wrong parent count");
   if (
     !Array.isArray(header.moves) ||
     header.moves.length > 16 ||
+    (committee.activeThroughRound !== undefined &&
+      header.round > committee.activeThroughRound &&
+      header.moves.length !== 0) ||
     new Set(header.moves).size !== header.moves.length
   )
     throw Error("Invalid batch");
@@ -127,7 +132,25 @@ export function certifyVertex(committee, proposal, acks) {
 export function anchorAuthor(committee, roundNumber) {
   if (!Number.isInteger(roundNumber) || roundNumber < 2 || roundNumber % 2)
     throw Error("Expected even anchor round");
-  return (roundNumber / 2 - 1) % committee.operators.length;
+  const position = roundNumber / 2 - 1;
+  if (!committee.weights) return position % committee.operators.length;
+  // Interleaved weighted round robin. In each pass every operator with
+  // remaining tickets gets one turn. Skip entire groups of identical passes.
+  let ticket = BigInt(position) % committee.totalWeight,
+    previous = 0n;
+  const levels = [...new Set(committee.weights)].sort((a, b) =>
+    a < b ? -1 : 1,
+  );
+  for (const level of levels) {
+    const active = committee.weights
+      .map((weight, index) => (weight >= level ? index : -1))
+      .filter((index) => index >= 0);
+    const slots = (level - previous) * BigInt(active.length);
+    if (ticket < slots) return active[Number(ticket % BigInt(active.length))];
+    previous = level;
+    ticket -= slots;
+  }
+  throw Error("Invalid stake schedule");
 }
 const slot = (round, author) => round + "/" + author;
 export class CertifiedDag {
@@ -148,6 +171,20 @@ export class CertifiedDag {
   get anchorIds() {
     return [...this.#ends.keys()];
   }
+  isClosingAnchor(id) {
+    if (
+      !this.committee.weights ||
+      this.#blocks.get(id)?.round < this.committee.terminalRound
+    )
+      return false;
+    for (const committed of this.#ends.keys()) {
+      if (this.#blocks.get(committed).round < this.committee.terminalRound)
+        continue;
+      if (committed === id) return true;
+      throw Error("Execution is beyond the first committed closing anchor");
+    }
+    throw Error("Uncommitted stake closure");
+  }
   // Materialize exactly the prefix associated with the locally ordered anchor.
   orderedWires(anchorId) {
     const end = this.#ends.get(anchorId);
@@ -163,6 +200,8 @@ export class CertifiedDag {
         throw Error("Parents must have distinct authors in preceding round");
       authors.add(parent.author);
     }
+    if (header.round > 1 && !hasQuorum(this.committee, authors))
+      throw Error("Insufficient parent voting power");
   }
   admit(cert, persist) {
     fields(cert, ["proposal", "votes"]);
@@ -209,10 +248,13 @@ export class CertifiedDag {
     );
     if (
       !leader ||
-      vertex.parents.filter((id) =>
-        this.#blocks.get(id).parents.includes(leader),
-      ).length <
-        committee.f + 1
+      !hasAnchorSupport(
+        committee,
+        vertex.parents
+          .map((id) => this.#blocks.get(id))
+          .filter((parent) => parent.parents.includes(leader))
+          .map((parent) => parent.author),
+      )
     )
       return;
     // Bullshark PS, Algorithm 2: walk backwards from the *last linked* anchor.
@@ -335,6 +377,13 @@ export class Validator {
         throw Error("Refusing conflicting vote in " + key);
       let signature = prior?.signature;
       if (!prior) {
+        if (
+          this.committee.weights &&
+          this.#db
+            .prepare("SELECT 1 FROM decisions WHERE slot='stake-close'")
+            .get()
+        )
+          throw Error("Validator has closed this stake epoch");
         signature = signSubject(
           this.committee,
           domain,
@@ -396,6 +445,9 @@ export class Validator {
   }
   async attestExecution(anchorId, replay) {
     const ordered = this.#dag.orderedWires(anchorId);
+    if (this.committee.weights && replay !== this.committee.replay)
+      throw Error("Expected the verified stake epoch replay");
+    const closing = this.#dag.isClosingAnchor(anchorId);
     const state = await replay(ordered);
     fields(state, ["height", "logRoot", "stateRoot"]);
     const committee = this.committee;
@@ -409,7 +461,7 @@ export class Validator {
     const subject = executionSubject(committee, checkpoint);
     const signature = this.#record(
       "execution",
-      "execution/" + anchorId,
+      closing ? "stake-close" : "execution/" + anchorId,
       subject,
       checkpoint,
     );

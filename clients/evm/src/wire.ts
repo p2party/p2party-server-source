@@ -72,15 +72,23 @@ export function receiveOwner(
   signer: Pick<LocalSigner, "suite" | "publicKey">,
   nonce: Uint8Array,
 ): Owner {
-  const { suite, publicKey } = signer;
-  if (nonce.length !== 32 || publicKey.length !== lengths(suite).key)
+  if (nonce.length !== 32)
+    throw new Error("Invalid receive nonce or public key length");
+  return receiveOwnerFromNonceHash(signer, sha512(nonce));
+}
+/** Reconstruct a revealed owner commitment without disclosing the receive nonce. */
+export function receiveOwnerFromNonceHash(
+  { suite, publicKey }: Pick<LocalSigner, "suite" | "publicKey">,
+  nonceHash: Uint8Array,
+): Owner {
+  if (nonceHash.length !== 64 || publicKey.length !== lengths(suite).key)
     throw new Error("Invalid receive nonce or public key length");
   return {
     suite,
     commitment: hex(
       tagged(
         "unit/owner",
-        concatBytes(Uint8Array.of(suite), sha512(nonce), sha512(publicKey)),
+        concatBytes(Uint8Array.of(suite), nonceHash, sha512(publicKey)),
       ),
     ),
   };

@@ -17,6 +17,8 @@ Release 0.2.1 introduced the live validator in the signaling process. Release 0.
 
 A local second node can replay both signing suites into its own database, serve read-only receipts and compare history at a chosen height. Local operators can now sign the verified receipt-log root, and an offline client can verify inclusion or growth from pinned roots. [Local replay instructions](src/ledger/README.md#replay-a-local-peer-into-a-second-database)
 
+A local proof-of-stake experiment now uses signed whole-unit bonds to weight data availability, DAG ordering and finality votes. A closing certificate lets a successor verify an owner’s delayed reclaim. [Stake accounting and reproducible tests](tools/ordering/stake-epoch.md)
+
 For the trust assumptions, deployment evidence and work needed for independent validators, see the [roadmap](ROADMAP.md). The validator uses the [libdemos transfer codec](https://github.com/p2party/libdemos/tree/243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0/ledger).
 
 ## Requirements

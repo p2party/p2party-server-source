@@ -140,7 +140,14 @@ type ExpectedUnit = {
  * Proof data may originate from an untrusted peer. */
 export function verifyWalletUnit(
   config: LedgerConfig,
-  committee: ReturnType<typeof makeCommittee>,
+  committee: Pick<
+    ReturnType<typeof makeCommittee>,
+    "committeeId" | "chainId" | "genesisHash" | "operators"
+  > & {
+    bondedOutputs?: readonly string[];
+    registryId?: string;
+    terminalRound?: number;
+  },
   expected: Checkpoint,
   certificate: unknown,
   requested: ExpectedUnit,
@@ -211,5 +218,21 @@ export function verifyWalletUnit(
     throw new Error("Proof differs from requested unit, weight or full owner");
   verifyClaim(cp.stateRoot, "owner", commitment, true, proof.owner);
   verifyClaim(cp.stateRoot, "spent", id, false, proof.spent);
-  return { id, suite, commitment, weight, createdHeight, spentHeight: null };
+  const unit = {
+    id,
+    suite,
+    commitment,
+    weight,
+    createdHeight,
+    spentHeight: null,
+  };
+  if (committee.bondedOutputs?.includes(id))
+    return {
+      ...unit,
+      stakeLock: {
+        registryId: committee.registryId,
+        terminalRound: committee.terminalRound,
+      },
+    };
+  return unit;
 }

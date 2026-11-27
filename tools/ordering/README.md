@@ -2,6 +2,8 @@
 
 This local experiment lets a fixed committee agree on the order in which to execute signed native transfers. Each validator stores complete batches and signs its own votes with a post-quantum key. The signaling server's public Testnet 1 RPC still uses its existing PostgreSQL sequencer. [Public validator](../../src/ledger/README.md)
 
+A fixed stake-backed epoch can also derive voting power from native signed bonds, close after a round-based delay and verify an owner withdrawal. [Stake-backed epoch and reproduction](stake-epoch.md)
+
 ## Run the experiment
 
 From the server repository with Node 26.13.1, run the following command. The fixtures create four separate ML-DSA-65 keys and temporary SQLite journals on one machine.
@@ -25,7 +27,7 @@ The signatures for authorship, storage and execution use separate versioned SHA-
 
 ## Remaining work
 
-The harness supplies the round scheduler and message delivery. Missing certified parents cause admission to stop until the caller obtains them and retries. The next network milestone requires authenticated peer delivery, fetching missing data from signers, bounded buffering, round advancement and timeouts, storage retention, independently operated validators, and fault measurements across machines. The current implementation retains every certified vertex and replays the journal on startup. The full Bullshark paper also describes an asynchronous protocol with a shared coin (Spiegelman et al., 2022a, §§3–5). Async fallback, stake weighting, committee changes and public RPC cutover remain future work.
+The harness supplies the round scheduler and message delivery. Missing certified parents cause admission to stop until the caller obtains them and retries. The next network milestone requires authenticated peer delivery, fetching missing data from signers, bounded buffering, round advancement and timeouts, storage retention, independently operated validators, and fault measurements across machines. The current implementation retains every certified vertex and replays the journal on startup. The full Bullshark paper also describes an asynchronous protocol with a shared coin (Spiegelman et al., 2022a, §§3–5). Async fallback, certified changes between stake committees and public RPC cutover remain future work.
 
 Predictable rotation removes a permanent lowest-index tie break. The schedule and the order inside an author's batch remain observable and selectable. Fairness and censorship resistance need separate evaluation, including competing payments for the same input. Mysticeti-C uses an uncertified DAG (Babel et al., 2025, §III). In a 13-validator evaluation of Mysticeti, Mirzaei and Amiri (2026, §§3, 5–6) found that a fixed index favored lower-index validators when ordering same-round transactions. Their preprint proposes an unpredictable per-commit tie break, which would require an agreed randomness source.
 

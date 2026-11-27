@@ -43,7 +43,7 @@ export function attestExecution(validator, anchorId, replay) {
 export function collectExecution(committee, attestations) {
   if (
     !Array.isArray(attestations) ||
-    attestations.length < committee.quorum ||
+    attestations.length === 0 ||
     attestations.length > committee.operators.length
   )
     throw Error("Invalid execution quorum");

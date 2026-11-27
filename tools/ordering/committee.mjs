@@ -68,6 +68,36 @@ export function makeCommittee(input) {
     quorum: n - f,
   });
 }
+// Registry-backed committees derive these weights from native whole-unit bonds.
+// Fixed committees retain one vote per member and the original wire identifier.
+function votingPower(committee, indices) {
+  const seen = new Set();
+  let total = 0n;
+  for (const index of indices) {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= committee.operators.length ||
+      seen.has(index)
+    )
+      throw Error("Voters must be distinct known members");
+    seen.add(index);
+    total += committee.weights ? committee.weights[index] : 1n;
+  }
+  return total;
+}
+export function hasQuorum(committee, indices) {
+  const power = votingPower(committee, indices);
+  return committee.weights
+    ? 3n * power > 2n * committee.totalWeight
+    : power >= BigInt(committee.quorum);
+}
+export function hasAnchorSupport(committee, indices) {
+  const power = votingPower(committee, indices);
+  return committee.weights
+    ? 3n * power > committee.totalWeight
+    : power > BigInt(committee.f);
+}
 function signatureMessage(committee, domain, subject, index) {
   if (!Number.isInteger(index) || !Object.hasOwn(committee.operators, index))
     throw Error("Unknown voter");
@@ -101,8 +131,15 @@ export function checkSignature(committee, domain, subject, index, signature) {
 export function checkVotes(committee, domain, subject, votes) {
   if (
     !Array.isArray(votes) ||
-    votes.length < committee.quorum ||
+    votes.length === 0 ||
     votes.length > committee.operators.length
+  )
+    throw Error("Invalid certificate quorum");
+  if (
+    !hasQuorum(
+      committee,
+      votes.map((item) => item.voter),
+    )
   )
     throw Error("Invalid certificate quorum");
   let last = -1;
