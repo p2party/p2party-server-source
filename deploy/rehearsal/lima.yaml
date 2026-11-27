@@ -14,7 +14,10 @@
 #     on the host's loopback (networkOpts.hostLoopback: false);
 #   * the image is pinned by URL and SHA-256 digest.
 # ============================================================================
-minimumLimaVersion: 2.0.0
+# The forwarding rules below were verified on Lima 2.3.0, whose matching
+# differs from its own template's description in one case (portForwards);
+# run.sh refuses any Lima outside the 2.3 line.
+minimumLimaVersion: 2.3.0
 
 vmType: vz
 # The machine's native architecture (Apple Silicon). The production host is
