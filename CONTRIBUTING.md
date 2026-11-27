@@ -8,9 +8,7 @@ Follow the fresh-clone instructions in [README.md](README.md). Use only a local,
 disposable PostgreSQL database. Never point tests, Prisma migrations, or development
 commands at production data or a shared database service.
 
-`master` carries the public history. Publish from this repository root with
-`git push`; a separate export checkout is not needed. Start public changes
-from `master`, and keep any older private history out of public merges.
+The signaling server and website repositories are private. Maintainers start server changes from `master` and open pull requests in this repository. Testnet participants can read the public SDK guide, download the client and genesis, and request a unit through the SDK issue tracker. [Testnet guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) · [Request a test unit](https://github.com/p2party/p2party-js/issues/new)
 
 Before opening a pull request, run:
 

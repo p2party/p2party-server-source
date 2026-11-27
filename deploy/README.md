@@ -71,7 +71,7 @@ in the login signature.
 
 ## Public testnet release
 
-Ledger validation is optional in 0.2.1. To enable P2Party Testnet 1, add these variables under `signaling_production.vars` in the private operational inventory used by both setup and release. Replace the two controller source paths with absolute paths to the reviewed files. Keep the same configuration for subsequent releases. [Public genesis and grants](testnet/README.md) · [Native Linux build](https://github.com/ondemos/libdemos/actions/runs/45985760486)
+Ledger validation is optional in 0.2.1. To enable P2Party Testnet 1, add these variables under `signaling_production.vars` in the private operational inventory used by both setup and release. Replace the two controller source paths with absolute paths to the reviewed files. Keep the same configuration for subsequent releases. [Public genesis](https://p2party.com/downloads/testnet-1/genesis.json) · [Grant procedure for operators](testnet/README.md) · [Native Linux build](https://github.com/ondemos/libdemos/actions/runs/45985760486)
 
 ```yaml
 ledger_enabled: true

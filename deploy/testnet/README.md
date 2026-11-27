@@ -11,7 +11,9 @@ This is a public development network for experimenting with native post-quantum 
 | Genesis SHA-256          | `38d42d50a5a6d5ceb43fd6f63235e542716b1df5ccff59161c5fd7810aed17c6`   |
 | Signing suites           | 1 = ML-DSA-65, 2 = SLH-DSA-SHA2-192s                                 |
 
-Every receive commitment is single-use. Generate a fresh wallet key and nonce locally. To request one test unit, open a public issue titled **Testnet unit request** on this repository with the suite number and full 64-byte receive commitment. Keep the private key and nonce in your wallet. An operator can grant one of the remaining unspent genesis units and return its output ID. Use that ID to verify the result and spend it. [Client examples](../../clients/evm/README.md) · [Request a test unit](https://github.com/p2party/p2party-server/issues/new) · [Public genesis](genesis.json)
+Every receive commitment is single-use. Generate a fresh wallet key and nonce locally. To request one test unit, open a public issue titled **Testnet unit request** on the public p2party-js issue tracker with the suite number and full 64-byte receive commitment. Keep the private key and nonce in your wallet. An operator can grant one of the remaining unspent genesis units and return its output ID. Use that ID to verify the result and spend it. [Public testnet guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) · [Request a test unit](https://github.com/p2party/p2party-js/issues/new) · [Public genesis](https://p2party.com/downloads/testnet-1/genesis.json) · [Genesis checksum](https://p2party.com/downloads/testnet-1/genesis.json.sha256)
+
+Download the npm package or its source archive from the P2Party website. Each file has a companion SHA-256 checksum. [Wallet package](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) · [Package checksum](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz.sha256) · [Client source](https://p2party.com/downloads/testnet-1/ledger-client-source.tar.gz) · [Source checksum](https://p2party.com/downloads/testnet-1/ledger-client-source.tar.gz.sha256)
 
 ## Operator grants
 

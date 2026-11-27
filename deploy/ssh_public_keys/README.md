@@ -5,9 +5,8 @@ registers them as `hcloud_ssh_key` resources, which cloud-init then installs on
 every server. Terraform's `file()` fails at validate time if a referenced file
 is absent, so these must exist before `terraform plan`.
 
-The `.pub` files themselves are gitignored. They are not secrets, but they name
-the individuals who hold root on the production hosts, and that list should not
-be part of a public repository.
+The `.pub` files identify individuals with administrative access to the
+production hosts. Operators supply them locally, and Git ignores the files.
 
 To deploy, place your own public keys here and make sure the filenames match
 the ones referenced in `terraform/p2party_ssh_keys.tf`:

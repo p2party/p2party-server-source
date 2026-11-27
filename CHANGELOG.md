@@ -11,8 +11,8 @@ speak signaling protocol 5.
 
 ## [0.2.1]
 
-- Add P2Party Testnet 1, an opt-in validating node for 128 valueless genesis units. The native verifier checks ML-DSA-65 and SLH-DSA-SHA2-192s transfers. PostgreSQL commits each spend and receipt together. A sender who loses the response can resubmit exactly the same signed bytes and recover the receipt. [Testnet and grants](deploy/testnet/README.md) · [Native RPC](src/ledger/README.md)
-- Expose chain ID, ledger height and indexed balances to ethers and viem HTTP providers. Native transfers require the full owner commitment and a post-quantum signature. [Client examples](clients/evm/README.md)
+- Add P2Party Testnet 1, an opt-in validating node for 128 valueless genesis units. The native verifier checks ML-DSA-65 and SLH-DSA-SHA2-192s transfers. PostgreSQL commits each spend and receipt together. A sender who loses the response can resubmit exactly the same signed bytes and recover the receipt. [Public testnet and grants guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) · [Native RPC](src/ledger/README.md)
+- Expose chain ID, ledger height and indexed balances to ethers and viem HTTP providers. Native transfers require the full owner commitment and a post-quantum signature. [Public wallet package](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) · [Client source archive](https://p2party.com/downloads/testnet-1/ledger-client-source.tar.gz)
 - Stage the checksum-pinned native helper and public genesis, run both signature suites under the worker identity, then verify database permissions or existing genesis before cutover. When explicitly enabled, `/rpc/health` identifies the chain and stored height. Operators choose allowed browser origins. [Release procedure](deploy/README.md#public-testnet-release) · [Roadmap](ROADMAP.md)
 
 ## [0.2.0]
