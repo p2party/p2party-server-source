@@ -1636,12 +1636,14 @@ describe("toolchain pins", () => {
     );
     expect(playbooks.sort()).toEqual([
       "playbooks/deploy.yml",
+      "playbooks/fleet-apt-maintenance.yml",
       "playbooks/initial-setup.yml",
       "playbooks/install-postgres.yml",
       "playbooks/postgres-tls.yml",
       "playbooks/setup-coturn.yml",
       "playbooks/setup-wireguard.yml",
       "playbooks/site.yml",
+      "playbooks/upgrade-coturn.yml",
       "playbooks/upgrade-postgres.yml",
     ]);
     for (const file of playbooks) {

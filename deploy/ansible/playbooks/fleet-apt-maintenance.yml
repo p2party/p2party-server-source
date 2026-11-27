@@ -1,0 +1,175 @@
+---
+- name: Check the pinned deployment controller
+  import_playbook: local-preflight.yml
+
+- name: Maintain supported APT packages on one fleet host
+  hosts: production
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  become: true
+  vars_files:
+    - ../group_vars/all/vars.yml
+  vars:
+    apt_mode: "{{ fleet_apt_action | default('plan') }}"
+    apt_receipt_root: /var/backups/p2party-apt
+  tasks:
+    - name: Require an explicit single-host target for changes
+      ansible.builtin.assert:
+        that:
+          - apt_mode in ['plan', 'apply']
+          - apt_mode == 'plan' or ansible_play_hosts_all | length == 1
+          - apt_mode == 'plan' or fleet_apt_plan_sha256 | default('') is match('^[0-9a-f]{64}$')
+          - apt_mode == 'plan' or fleet_apt_recovery | default('') | length > 0
+        fail_msg: Plan first. Apply one host with its plan digest and recovery reference.
+    - name: Confirm the local package database is consistent
+      ansible.builtin.command: dpkg --audit
+      changed_when: false
+      register: dpkg_audit
+      failed_when: dpkg_audit.rc != 0 or dpkg_audit.stdout | trim | length > 0
+    - name: Inspect the transaction without package changes
+      ansible.builtin.command: apt-get --simulate --no-remove dist-upgrade
+      environment: { LC_ALL: C }
+      changed_when: false
+      register: apt_preview
+    - name: Read this host's identity for binding the plan
+      ansible.builtin.command: cat /etc/machine-id
+      changed_when: false
+      register: fleet_machine
+      no_log: true
+    - name: Calculate the reviewed package transaction
+      ansible.builtin.set_fact:
+        package_steps: "{{ apt_preview.stdout_lines | select('match', '^(Inst|Remv) ') | sort | list }}"
+    - name: Require an in-release transaction without a PostgreSQL major introduction
+      ansible.builtin.assert:
+        that:
+          - package_steps | select('match', '^Remv ') | list | length == 0
+          - package_steps | select('match', '^Inst postgresql(?:-client)?-[0-9]+(?::[a-z0-9-]+)? [(]') | list | length == 0
+    - name: Bind the package manifest to the host
+      ansible.builtin.set_fact:
+        apt_plan_digest: "{{ (fleet_machine.stdout ~ '\n' ~ (package_steps | join('\n'))) | hash('sha256') }}"
+    - name: Report the transaction and its digest
+      ansible.builtin.debug:
+        msg:
+          plan_sha256: "{{ apt_plan_digest }}"
+          packages: "{{ package_steps }}"
+    - name: Apply the reviewed transaction
+      when: apt_mode == 'apply'
+      block:
+        - name: Compare current package candidates against the operator's plan
+          ansible.builtin.assert:
+            that: apt_plan_digest == fleet_apt_plan_sha256
+            fail_msg: The host or APT candidates changed. Review the fresh plan before applying it.
+        - name: Capture a host-local recovery copy and the active service inventory
+          ansible.builtin.shell: |
+            set -euo pipefail
+            umask 077
+            mkdir -p -m 0700 {{ apt_receipt_root }}
+            receipt=$(mktemp -d {{ apt_receipt_root }}/{{ apt_plan_digest }}.XXXXXXXX)
+            printf '%s\n' "$RECOVERY" > "$receipt/recovery-reference"
+            printf '%s\n' "$MANIFEST" > "$receipt/packages.plan"
+            dpkg-query -W -f='${binary:Package}\t${Version}\n' > "$receipt/packages.before"
+            apt-mark showhold > "$receipt/holds.before"
+            cat /proc/sys/kernel/random/boot_id > "$receipt/boot.before"
+            uname -r > "$receipt/kernel.before"
+            systemctl list-units --plain --no-legend --state=active --type=service 'ssh.service' 'caddy.service' 'p2party-signaling*.service' 'postgresql@*.service' 'coturn.service' 'wg-quick@*.service' | awk '{print $1}' | sort > "$receipt/units.before"
+            grep -qx ssh.service "$receipt/units.before"
+            paths=(etc/apt etc/ssh etc/systemd/system)
+            for dir in etc/netplan etc/caddy etc/wireguard etc/postgresql; do
+              if test -d "/$dir"; then paths+=("$dir"); fi
+            done
+            if test -f /etc/turnserver.conf; then paths+=(etc/turnserver.conf); fi
+            tar -C / -czf "$receipt/configuration.tgz" "${paths[@]}"
+            tar -tzf "$receipt/configuration.tgz" >/dev/null
+            if systemctl is-active --quiet caddy; then
+              caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1
+              cp --preserve=mode,timestamps /proc/"$(systemctl show --property=MainPID --value caddy)"/exe "$receipt/caddy.before"
+              # Preserve the standalone workers even if their executable has since been replaced on disk.
+              while read -r unit; do
+                case "$unit" in p2party-signaling*.service) cp --preserve=mode,timestamps /proc/"$(systemctl show --property=MainPID --value "$unit")"/exe "$receipt/$unit.before";; esac
+              done < "$receipt/units.before"
+            fi
+            printf '%s\n' "$receipt"
+          args: { executable: /bin/bash }
+          environment:
+            RECOVERY: "{{ fleet_apt_recovery }}"
+            MANIFEST: "{{ package_steps | join('\n') }}"
+          register: apt_receipt
+          no_log: true
+        - name: Install the verified project Bun independently of the running standalone workers
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/install-pinned-bun.yml"
+          when: "'signaling_production' in group_names"
+        - name: Reject unreviewed package archives before dpkg can install them
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../files/verify-apt-debs.py"
+            dest: "{{ apt_receipt.stdout | trim }}/verify-apt-debs"
+            owner: root
+            group: root
+            mode: '0700'
+        - name: Install supported package updates with the existing configuration
+          ansible.builtin.command:
+            argv:
+              - apt-get
+              - --yes
+              - --no-remove
+              - -o
+              - Dpkg::Options::=--force-confold
+              - -o
+              - DPkg::Lock::Timeout=90
+              - -o
+              - "DPkg::Pre-Install-Pkgs::={{ apt_receipt.stdout | trim }}/verify-apt-debs"
+              - dist-upgrade
+          environment: { DEBIAN_FRONTEND: noninteractive, NEEDRESTART_MODE: l, LC_ALL: C }
+          register: upgrade_result
+          changed_when: package_steps | length > 0
+        - name: Verify configured packages before considering a reboot
+          ansible.builtin.command: dpkg --audit
+          register: post_audit
+          changed_when: false
+          failed_when: post_audit.rc != 0 or post_audit.stdout | trim | length > 0
+        - name: Check whether Ubuntu requires a reboot
+          ansible.builtin.stat: { path: /run/reboot-required }
+          register: apt_reboot
+        - name: Reboot only the selected host in its authorized window
+          ansible.builtin.reboot:
+            reboot_timeout: 300
+            connect_timeout: 8
+            test_command: systemctl is-active ssh.service
+          when: apt_reboot.stat.exists and fleet_apt_reboot | default(false) | bool
+        - name: Re-establish SSH through the selected management route
+          ansible.builtin.meta: reset_connection
+        - name: Wait for a fresh management connection
+          ansible.builtin.wait_for_connection: { timeout: 120, connect_timeout: 8 }
+        - name: Verify the original services, package versions and running kernel
+          ansible.builtin.shell: |
+            set -euo pipefail
+            cd "$RECEIPT"
+            while read -r unit; do systemctl is-active --quiet "$unit"; done < units.before
+            python3 - <<'PY'
+            import pathlib, re, subprocess
+            for row in pathlib.Path('packages.plan').read_text().splitlines():
+                match = re.match(r'^Inst (\S+)(?: \[[^]]*\])? \((\S+)', row)
+                if not match: raise SystemExit('Unexpected APT plan entry')
+                package, expected = match.groups()
+                actual = subprocess.check_output(['dpkg-query', '-W', '-f=${Version}', package], text=True)
+                if actual != expected: raise SystemExit(f'Unexpected installed version for {package}')
+            PY
+            if test "$REBOOTED" = 1; then
+              test "$(cat /proc/sys/kernel/random/boot_id)" != "$(cat boot.before)"
+              test ! -e /run/reboot-required
+              if test -e /boot/vmlinuz; then test "vmlinuz-$(uname -r)" = "$(basename "$(readlink -f /boot/vmlinuz)")"; fi
+            fi
+            dpkg-query -W -f='${binary:Package}\t${Version}\n' > packages.after
+            uname -r
+          args: { executable: /bin/bash }
+          environment:
+            RECEIPT: "{{ apt_receipt.stdout | trim }}"
+            REBOOTED: "{{ '1' if apt_reboot.stat.exists and fleet_apt_reboot | default(false) | bool else '0' }}"
+          changed_when: false
+          register: fleet_validated
+          retries: 12
+          delay: 5
+          until: fleet_validated.rc == 0
+        - name: Report the host-local recovery record
+          ansible.builtin.debug:
+            msg: "Verified kernel {{ fleet_validated.stdout | trim }}. Recovery record {{ apt_receipt.stdout | trim }}."
