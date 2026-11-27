@@ -64,6 +64,30 @@ export const MAX_SHARE_PERCENT_PER_IPV6_48 = 10;
  * limit is not announced; members then learn of it only from their own edge.
  */
 export const MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE = 6;
+/** The most frames one offline announcement can send: every room, full. */
+export const MAX_FRAMES_PER_OFFLINE_ANNOUNCEMENT =
+  admissionLimits.roomsPerIdentity * (admissionLimits.peersPerRoom - 1);
+/**
+ * Departure frames (`peerLeft`, "left" and "offline" alike) one source key —
+ * the IPv4 address or IPv6 /64 the connection limits use — may cause per
+ * minute, per process: what one identity may cause with its offline
+ * announcements (6 * 8,128 = 48,768 with the defaults). Identities persist
+ * and one source may create 6 a minute, so without it the frames one address
+ * causes would grow with the identities it holds, up to the 60 connection
+ * attempts a minute it may make (60 * 8,128 = 487,680). An announcement the
+ * budget cannot hold whole is skipped whole.
+ */
+export const MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE =
+  MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE *
+  MAX_FRAMES_PER_OFFLINE_ANNOUNCEMENT;
+/**
+ * The same budget for a whole IPv6 /48, whose 65,536 /64s each have their own:
+ * twice a source key's, the ratio of the creation shares
+ * (MAX_SHARE_PERCENT_PER_IPV6_48 to MAX_CREATION_SHARE_PERCENT_PER_SOURCE).
+ */
+export const MAX_DEPARTURE_FRAMES_PER_IPV6_48_PER_MINUTE =
+  (MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE * MAX_SHARE_PERCENT_PER_IPV6_48) /
+  MAX_CREATION_SHARE_PERCENT_PER_SOURCE;
 
 /** At least one unit, so a small configured budget stays usable. */
 const share = (budget: number, percent: number): number =>
@@ -127,6 +151,8 @@ interface Bucket {
   rooms: number;
   /** Offline announcements of this identity in the window. */
   offline: number;
+  /** Departure frames this source key or /48 caused in the window. */
+  departures: number;
 }
 
 /**
@@ -167,6 +193,7 @@ class BucketTable {
         messages: 0,
         rooms: 0,
         offline: 0,
+        departures: 0,
       };
       this.buckets.set(key, bucket);
     } else if (now - bucket.start >= 60000) {
@@ -175,6 +202,7 @@ class BucketTable {
       bucket.messages = 0;
       bucket.rooms = 0;
       bucket.offline = 0;
+      bucket.departures = 0;
     }
     if (bucket.active === 0) {
       // Re-inserting moves the key to the most recently used end.
@@ -215,6 +243,14 @@ export interface AdmissionLease {
    * identity to charge and is refused.
    */
   offlineAnnouncement(): boolean;
+  /**
+   * Charge `frames` departure frames to this socket's source key and /48, all
+   * or nothing: false, with nothing charged, when either budget
+   * (MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE,
+   * MAX_DEPARTURE_FRAMES_PER_IPV6_48_PER_MINUTE) cannot hold them. Valid after
+   * release(), like offlineAnnouncement().
+   */
+  departureFrames(frames: number): boolean;
   /** Charge one new durable identity to this socket's source key and /48, then the process. */
   newIdentity(): boolean;
   /**
@@ -308,6 +344,27 @@ export class AdmissionController {
         !!key &&
         ++this.identities.use(identity, this.now()).offline <=
           MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE,
+      departureFrames: (frames) => {
+        const now = this.now();
+        // Looked up again rather than captured: a bucket evicted while idle
+        // is replaced by a new one under the same key.
+        const source = this.ips.use(sources.key, now);
+        const prefix =
+          sources.block === undefined
+            ? undefined
+            : this.blocks.use(sources.block, now);
+        if (
+          source.departures + frames >
+            MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE ||
+          (prefix &&
+            prefix.departures + frames >
+              MAX_DEPARTURE_FRAMES_PER_IPV6_48_PER_MINUTE)
+        )
+          return false;
+        source.departures += frames;
+        if (prefix) prefix.departures += frames;
+        return true;
+      },
       // Creation needs a proved socket; unproved ones only read.
       newIdentity: () => {
         if (released || !key) return false;

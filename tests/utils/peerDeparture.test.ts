@@ -495,6 +495,203 @@ describe("departure signalling: cost", () => {
     lease.release();
     expect(lease.offlineAnnouncement()).toBe(false);
   });
+
+  test("departure announcements from one source are bounded across identities", async () => {
+    let now = 100_000;
+    const admission = new limits.AdmissionController(
+      { ...limits.admissionLimits, attemptsPerIpPerMinute: 10_000 },
+      () => now,
+    );
+    // Every room the identity may be in, each with every other seat taken by
+    // an online member on another worker: one offline announcement is as
+    // large as it can be.
+    const member = (n: number) =>
+      `00000000-0000-4000-8000-${(0x100000 + n).toString(16).padStart(12, "0")}`;
+    const rooms = Array.from(
+      { length: limits.admissionLimits.roomsPerIdentity },
+      (_, room) => ({
+        id: member(room),
+        peers: Array.from(
+          { length: limits.admissionLimits.peersPerRoom - 1 },
+          (_, seat) => ({
+            id: member(1_000 + room * 1_000 + seat),
+            serverId: OTHER_SERVER,
+          }),
+        ),
+      }),
+    );
+    let routed = 0;
+    let skipped = 0;
+    let identities = 0;
+    /** A new identity's last socket, from `address`, closing once. */
+    const close = async (address: string) => {
+      const lease = admission.reserve(address, `identity-${++identities}`)!;
+      expect(lease.authenticate()).toBe(true);
+      const leaver = socket(LEAVER, LEAVER_GENERATION);
+      leaver.data.admission = lease;
+      const clients = new Map<string, P2PartyWSClient>([[LEAVER, leaver]]);
+      lease.release();
+      return peers.createRetireClosedSocket({
+        clients,
+        release: claimOf(LEAVER_GENERATION).release,
+        announceOffline: peers.createAnnounceOffline(
+          {
+            peer: { findUnique: async () => ({ serverId: null, rooms }) },
+          } as never,
+          {
+            clients,
+            sendToPeerOnServer: async () => {
+              routed++;
+              return true;
+            },
+            reportSkipped: () => {
+              skipped++;
+            },
+          },
+        ),
+      })(leaver);
+    };
+    const full = limits.MAX_FRAMES_PER_OFFLINE_ANNOUNCEMENT;
+    const perSource = limits.MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE / full;
+    const perBlock = limits.MAX_DEPARTURE_FRAMES_PER_IPV6_48_PER_MINUTE / full;
+    expect([full, perSource, perBlock]).toEqual([64 * 127, 6, 12]);
+
+    // One IPv4 address, a new identity each time.
+    const fromOneAddress = [];
+    for (let i = 0; i <= perSource; i++)
+      fromOneAddress.push(await close("198.51.100.7"));
+    expect(fromOneAddress).toEqual([...Array(perSource).fill(full), 0]);
+    expect(await close("198.51.100.8")).toBe(full);
+
+    // One IPv6 /48, a new /64 each time: each /64 has a budget of its own,
+    // the /48 one for all of them.
+    const fromOneBlock = [];
+    for (let i = 0; i <= perBlock; i++)
+      fromOneBlock.push(await close(`2001:db8:1:${i.toString(16)}::1`));
+    expect(fromOneBlock).toEqual([...Array(perBlock).fill(full), 0]);
+    expect(await close("2001:db8:2::1")).toBe(full);
+
+    expect(routed).toBe((perSource + 1 + perBlock + 1) * full);
+    expect(skipped).toBe(2);
+
+    // The next window admits the address again.
+    now += 60_000;
+    expect(await close("198.51.100.7")).toBe(full);
+  });
+
+  test("a skipped announcement changes nothing else", async () => {
+    const admission = new limits.AdmissionController(limits.admissionLimits);
+    // The address has one frame of its budget left.
+    const earlier = admission.reserve("198.51.100.9", "earlier")!;
+    expect(earlier.authenticate()).toBe(true);
+    expect(
+      earlier.departureFrames(
+        limits.MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE - 1,
+      ),
+    ).toBe(true);
+    earlier.release();
+
+    const leaver = socket(LEAVER, LEAVER_GENERATION);
+    const lease = admission.reserve("198.51.100.9", "leaver")!;
+    expect(lease.authenticate()).toBe(true);
+    leaver.data.admission = lease;
+    const local = socket(LOCAL, "55555555-5555-4555-8555-555555555555");
+    const clients = new Map<string, P2PartyWSClient>([
+      [LEAVER, leaver],
+      [LOCAL, local],
+    ]);
+    const claim = claimOf(LEAVER_GENERATION);
+    let unlinked = 0;
+    const remote = routed();
+    const skips: number[] = [];
+    const dependencies = {
+      clients,
+      sendToPeerOnServer: remote.send,
+      reportSkipped: (frames: number) => {
+        skips.push(frames);
+      },
+    };
+    const prisma = {
+      peer: {
+        findUnique: async (args: { select: Record<string, unknown> }) =>
+          "rooms" in args.select && "serverId" in args.select
+            ? {
+                serverId: null,
+                rooms: [{ id: ROOM_ID, peers: [MEMBERS[0], MEMBERS[1]] }],
+              }
+            : { publicKey: leaver.data.publicKey, rooms: [{ id: ROOM_ID }] },
+        update: async () => {
+          unlinked++;
+          return {};
+        },
+      },
+      room: {
+        findUnique: async () => ({ peers: [MEMBERS[0], MEMBERS[1]] }),
+      },
+    };
+
+    // A leave whose two frames do not fit: acknowledged and done as before.
+    await createHandleLeaveRoom(
+      prisma as never,
+      clients,
+      peers.createAnnounceRoomLeave(prisma as never, dependencies),
+    )(LEAVER, leaver, ROOM_TOKEN, ROOM_LEAVE_ID);
+    expect(unlinked).toBe(1);
+    expect(frames(leaver).map((frame) => frame.type)).toEqual(["roomLeft"]);
+    expect(leaver.closes).toBe(0);
+
+    // The last socket closing: retired and released as before.
+    expect(
+      await peers.createRetireClosedSocket({
+        clients,
+        release: claim.release,
+        announceOffline: peers.createAnnounceOffline(
+          prisma as never,
+          dependencies,
+        ),
+      })(leaver),
+    ).toBe(0);
+    expect(clients.has(LEAVER)).toBe(false);
+    expect(await claim.release(LEAVER, LEAVER_GENERATION)).toBe(false);
+
+    // Nothing reached a member, both skips were counted, and the budget was
+    // not charged for them: an announcement of one frame still fits.
+    expect(local.sent).toEqual([]);
+    expect(remote.calls).toEqual([]);
+    expect(skips).toEqual([2, 2]);
+    expect(lease.departureFrames(1)).toBe(true);
+    expect(lease.departureFrames(1)).toBe(false);
+  });
+
+  test("skipped announcements are reported once a minute, as counts", () => {
+    let now = 0;
+    const report = peers.createSkippedDepartureReport(() => now);
+    const warned: unknown[][] = [];
+    const consoleWarn = spyOn(console, "warn").mockImplementation(
+      (...args: unknown[]) => {
+        warned.push(args);
+      },
+    );
+    try {
+      report(127);
+      now += 1_000;
+      report(8_128);
+      now += 1_000;
+      report(1);
+      now += 60_000;
+      report(2);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+    expect(warned).toEqual([
+      [
+        "p2party: skipped 1 departure announcement(s) of 127 frame(s) over the per-source departure budget",
+      ],
+      [
+        "p2party: skipped 3 departure announcement(s) of 8131 frame(s) over the per-source departure budget",
+      ],
+    ]);
+  });
 });
 
 describe("departure signalling: ordering", () => {

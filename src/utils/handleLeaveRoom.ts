@@ -5,7 +5,8 @@ import { deriveRoomIdentifier } from "./roomIdentifier";
 import { isCurrentVerifiedSocket } from "./socketAuth";
 import { runPeerRoomMutation } from "./peerRoomMutationQueue";
 import { describeError } from "./logError";
-import { createAnnounceRoomLeave } from "./handlePeers";
+import { createAnnounceRoomLeave, departureBudgetOf } from "./handlePeers";
+import type { DepartureBudget } from "./handlePeers";
 
 import type { ProcessPrismaClient } from "../prismaClient";
 import type { P2PartyWSClient } from "../wsServer";
@@ -18,6 +19,7 @@ type AnnounceRoomLeave = (
   roomId: string,
   peerId: string,
   socketGeneration: string,
+  budget: DepartureBudget,
 ) => Promise<number>;
 
 const isConcurrentAlreadyAbsent = (error: unknown): boolean => {
@@ -112,7 +114,12 @@ const handleLeaveRoomWithClient = async (
       // the leaver its socket.
       if (leftRoomId)
         try {
-          await announce(leftRoomId, fromPeerId, ws.data.socketGeneration);
+          await announce(
+            leftRoomId,
+            fromPeerId,
+            ws.data.socketGeneration,
+            departureBudgetOf(ws),
+          );
         } catch (error) {
           console.error(
             "p2party: room leave announcement failed",

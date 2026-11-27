@@ -96,58 +96,122 @@ interface PendingSignalFrame {
   payload: string;
 }
 
+/**
+ * Deliver queued rows to this process's sockets, in the order given; returns
+ * the ids that are done with (delivered, or undeliverable here for good).
+ *
+ * Frames for one recipient keep their queue order: once one of its rows is
+ * kept for a later pass (its socket is activating, not current, or did not
+ * take the frame), its later rows in this pass are kept too, so none of them
+ * overtakes it.
+ */
 export const deliverPendingSignalsLocally = (
   signals: readonly PendingSignalFrame[],
   clients: Map<string, P2PartyWSClient> = wsClients,
 ): string[] => {
   const settled: string[] = [];
+  /** Recipients with a row kept in this pass. */
+  const waiting = new Set<string>();
   for (const signal of signals) {
-    if (signal.kind === "evict") {
-      // A newer session of this identity committed on another instance. The
-      // payload names the replaced socket's generation, so a socket of the
-      // same identity that is newer still is left alone. Done either way.
-      evictSocket(clients, signal.targetPeerId, signal.payload);
-      settled.push(signal.id);
-      continue;
-    }
-    const target = clients.get(signal.targetPeerId);
-    if (!target) {
-      // A proved socket is registered only once its routing claim commits.
-      // Retain the row while one is activating rather than delete the only
-      // queued copy.
-      if (hasPendingActivation(clients, signal.targetPeerId)) continue;
-      // This process no longer has the addressed socket; the row cannot become
-      // deliverable here and must not replay forever.
-      settled.push(signal.id);
-      continue;
-    }
-    // A registered socket that is not current (one closing, or one replaced)
-    // keeps the row rather than disclose SDP/ICE to it.
-    if (!isCurrentVerifiedSocket(clients, target)) continue;
-    if (target.send(signal.payload) !== 0) settled.push(signal.id);
+    if (signal.kind !== "evict" && waiting.has(signal.targetPeerId)) continue;
+    const delivered = deliverPendingSignal(signal, clients);
+    if (delivered) settled.push(signal.id);
+    else waiting.add(signal.targetPeerId);
   }
   return settled;
 };
 
-/** Deliver active targets, discard stale targets, retain claim-pending rows. */
-const drainPendingSignals = async (): Promise<void> => {
-  try {
-    const signals = await prisma.pendingSignal.findMany({
-      where: { targetServerId: SERVER_ID },
+/** One row: whether it is done with (see deliverPendingSignalsLocally). */
+const deliverPendingSignal = (
+  signal: PendingSignalFrame,
+  clients: Map<string, P2PartyWSClient>,
+): boolean => {
+  if (signal.kind === "evict") {
+    // A newer session of this identity committed on another instance. The
+    // payload names the replaced socket's generation, so a socket of the
+    // same identity that is newer still is left alone. Done either way.
+    evictSocket(clients, signal.targetPeerId, signal.payload);
+    return true;
+  }
+  const target = clients.get(signal.targetPeerId);
+  if (!target) {
+    // A proved socket is registered only once its routing claim commits.
+    // Retain the row while one is activating rather than delete the only
+    // queued copy.
+    if (hasPendingActivation(clients, signal.targetPeerId)) return false;
+    // This process no longer has the addressed socket; the row cannot become
+    // deliverable here and must not replay forever.
+    return true;
+  }
+  // A registered socket that is not current (one closing, or one replaced)
+  // keeps the row rather than disclose SDP/ICE to it.
+  if (!isCurrentVerifiedSocket(clients, target)) return false;
+  return target.send(signal.payload) !== 0;
+};
+
+/**
+ * This process's drain of its PendingSignal queue, one pass at a time.
+ *
+ * Every NOTIFY on this process's channel and every safety poll wakes it.
+ * Passes that overlapped would each read the same rows and deliver them
+ * twice, and the slower pass's copy could land after frames queued later. So
+ * a wake-up during a pass only asks for one more pass after it, however many
+ * arrive. A pass delivers in queue order (deliverPendingSignalsLocally), then
+ * deletes what it delivered. When that delete fails, the delivered ids are
+ * remembered here and not delivered again, and the next pass retries their
+ * delete; an id the queue no longer holds is forgotten. A pass that fails to
+ * read loses nothing: the rows stay for the next wake-up.
+ */
+export const createPendingSignalDrain = (
+  store: Pick<RoutingStore, "pendingSignal">,
+  clients: Map<string, P2PartyWSClient>,
+  self: string,
+): (() => Promise<void>) => {
+  let running: Promise<void> | undefined;
+  let again = false;
+  /** Delivered rows whose delete has not succeeded yet. */
+  const undeleted = new Set<string>();
+
+  const pass = async (): Promise<void> => {
+    const signals = await store.pendingSignal.findMany({
+      where: { targetServerId: self },
       orderBy: { createdAt: "asc" },
     });
-    if (signals.length === 0) return;
+    const queued = new Set(signals.map(({ id }) => id));
+    for (const id of undeleted) if (!queued.has(id)) undeleted.delete(id);
+    const fresh = signals.filter(({ id }) => !undeleted.has(id));
+    for (const id of deliverPendingSignalsLocally(fresh, clients))
+      undeleted.add(id);
+    if (undeleted.size === 0) return;
+    const done = [...undeleted];
+    await store.pendingSignal.deleteMany({ where: { id: { in: done } } });
+    for (const id of done) undeleted.delete(id);
+  };
 
-    const delivered = deliverPendingSignalsLocally(signals);
-    await prisma.pendingSignal.deleteMany({
-      where: { id: { in: delivered } },
-    });
-  } catch (error) {
-    console.error(
-      "p2party: failed to drain pending signals",
-      describeError(error),
-    );
-  }
+  return () => {
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      try {
+        do {
+          again = false;
+          try {
+            await pass();
+          } catch (error) {
+            console.error(
+              "p2party: failed to drain pending signals",
+              describeError(error),
+            );
+          }
+        } while (again);
+      } finally {
+        running = undefined;
+      }
+    })();
+    return running;
+  };
 };
 
 /** Delete every queued signal older than PENDING_SIGNAL_MAX_AGE_MS. */
@@ -340,8 +404,11 @@ export const initPubSub = async (): Promise<void> => {
     );
   }
 
+  // Built here, not at module load: this module and wsServer.ts import each
+  // other, so wsClients does not exist yet while this module is evaluated.
+  const drain = createPendingSignalDrain(prisma, wsClients, SERVER_ID);
   listenClient.on("notification", (message) => {
-    if (message.channel === CHANNEL) void drainPendingSignals();
+    if (message.channel === CHANNEL) void drain();
   });
 
   // A dropped LISTEN connection would otherwise strand every later signal.
@@ -352,7 +419,7 @@ export const initPubSub = async (): Promise<void> => {
     );
   });
 
-  safetyPoll = setInterval(() => void drainPendingSignals(), SAFETY_POLL_MS);
+  safetyPoll = setInterval(() => void drain(), SAFETY_POLL_MS);
 
   // Delete everything past the age limit first, so the liveness check below
   // only groups recent rows, then clear the claims and rows of processes that

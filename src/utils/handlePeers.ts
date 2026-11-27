@@ -280,9 +280,52 @@ type SendToPeerOnServer = (
   payload: string,
 ) => Promise<boolean>;
 
+/**
+ * Charges an announcement's frame count to the departing socket's source
+ * before anything is sent (AdmissionLease.departureFrames); false skips it.
+ */
+export type DepartureBudget = (frames: number) => boolean;
+
+const unlimited: DepartureBudget = () => true;
+
+/** The departing socket's budget; a socket without a lease has none. */
+export const departureBudgetOf =
+  (ws: P2PartyWSClient): DepartureBudget =>
+  (frames) =>
+    ws.data.admission ? ws.data.admission.departureFrames(frames) : true;
+
+/**
+ * Counts announcements the departure budgets skipped and reports them at warn
+ * level at most once a minute, as counts with no identifiers: a flood of
+ * closes from one source makes one journal line a minute, not one per close.
+ * The first skip after a quiet minute is reported at once, with the skips
+ * counted since the previous report.
+ */
+export const createSkippedDepartureReport = (now: () => number = Date.now) => {
+  let reportedAt: number | undefined;
+  let announcements = 0;
+  let frames = 0;
+  return (skippedFrames: number): void => {
+    announcements++;
+    frames += skippedFrames;
+    const at = now();
+    if (reportedAt !== undefined && at - reportedAt < 60_000) return;
+    console.warn(
+      `p2party: skipped ${String(announcements)} departure announcement(s) of ${String(frames)} frame(s) over the per-source departure budget`,
+    );
+    reportedAt = at;
+    announcements = 0;
+    frames = 0;
+  };
+};
+
+const reportSkippedDeparture = createSkippedDepartureReport();
+
 interface DepartureDependencies {
   clients?: Map<string, P2PartyWSClient>;
   sendToPeerOnServer?: SendToPeerOnServer;
+  /** Where a skipped announcement is counted; the process's report by default. */
+  reportSkipped?: (frames: number) => void;
 }
 
 /** A member a departure is announced to, with its routing claim. */
@@ -299,20 +342,24 @@ export interface PeerDeparture {
   reason: PeerDepartureReason;
 }
 
+/** One frame to hand on: to a current socket here, or to its owner's queue. */
+type DepartureDelivery =
+  | { payload: string; local: P2PartyWSClient }
+  | { payload: string; toPeerId: string; serverId: string };
+
 /**
- * Send one `peerLeft` frame to each online member of one room, the way relayed
+ * The `peerLeft` frames for one room's online members, routed the way relayed
  * frames travel: straight to a current socket here, through the owning
  * instance's queue for a socket held elsewhere (the claim was read with the
  * membership, so no second lookup). A member with neither is offline and gets
- * nothing. Returns how many frames were handed on.
+ * nothing.
  */
-const deliverPeerLeft = async (
+const peerLeftDeliveries = (
   clients: Map<string, P2PartyWSClient>,
-  send: SendToPeerOnServer,
   roomId: string,
   departure: PeerDeparture,
   recipients: readonly DepartureRecipient[],
-): Promise<number> => {
+): DepartureDelivery[] => {
   const payload = JSON.stringify({
     type: "peerLeft",
     roomId,
@@ -321,18 +368,58 @@ const deliverPeerLeft = async (
     socketGeneration: departure.socketGeneration,
     protocolVersion: PROTOCOL_VERSION,
   } satisfies WebSocketMessagePeerLeft);
-  let delivered = 0;
+  const deliveries: DepartureDelivery[] = [];
   for (const member of recipients) {
     if (member.id === departure.peerId) continue;
     const local = clients.get(member.id);
     if (local) {
-      if (isCurrentVerifiedSocket(clients, local)) {
-        local.send(payload);
-        delivered++;
-      }
+      if (isCurrentVerifiedSocket(clients, local))
+        deliveries.push({ payload, local });
       continue;
     }
-    if (member.serverId && (await send(member.id, member.serverId, payload)))
+    if (member.serverId)
+      deliveries.push({
+        payload,
+        toPeerId: member.id,
+        serverId: member.serverId,
+      });
+  }
+  return deliveries;
+};
+
+/**
+ * Charge a whole announcement to the departing socket's source, then hand it
+ * on. One the budget cannot hold is skipped whole and counted: members then
+ * learn of the departure only from their own edges, as before this frame
+ * existed, and nothing else changes. Returns how many frames were handed on.
+ */
+const announce = async (
+  deliveries: readonly DepartureDelivery[],
+  budget: DepartureBudget,
+  dependencies: DepartureDependencies,
+): Promise<number> => {
+  if (deliveries.length === 0) return 0;
+  if (!budget(deliveries.length)) {
+    (dependencies.reportSkipped ?? reportSkippedDeparture)(deliveries.length);
+    return 0;
+  }
+  const send = dependencies.sendToPeerOnServer ?? sendToPeerOnServer;
+  let delivered = 0;
+  for (const delivery of deliveries) {
+    if ("local" in delivery) {
+      // Checked again: an earlier delivery's await may have outlived it.
+      if (
+        isCurrentVerifiedSocket(
+          dependencies.clients ?? wsClients,
+          delivery.local,
+        )
+      ) {
+        delivery.local.send(delivery.payload);
+        delivered++;
+      }
+    } else if (
+      await send(delivery.toPeerId, delivery.serverId, delivery.payload)
+    )
       delivered++;
   }
   return delivered;
@@ -342,7 +429,7 @@ const deliverPeerLeft = async (
  * Tell the other online members of `roomId` that `peerId` left it. Called by
  * the leave handler after the membership row is gone, inside that peer's
  * membership lock, so a rejoin on the same process is announced after it.
- * At most MAX_PEERS_PER_ROOM - 1 frames per leave.
+ * At most MAX_PEERS_PER_ROOM - 1 frames per leave, charged to `budget`.
  */
 export const createAnnounceRoomLeave =
   (
@@ -353,6 +440,7 @@ export const createAnnounceRoomLeave =
     roomId: string,
     peerId: string,
     socketGeneration: string,
+    budget: DepartureBudget = unlimited,
   ): Promise<number> => {
     if (socketGeneration.length === 0) return 0;
     // Online members only (a row with a routing claim), never the leaver.
@@ -366,29 +454,37 @@ export const createAnnounceRoomLeave =
       },
     });
     if (!room) return 0;
-    return deliverPeerLeft(
-      dependencies.clients ?? wsClients,
-      dependencies.sendToPeerOnServer ?? sendToPeerOnServer,
-      roomId,
-      { peerId, socketGeneration, reason: "left" },
-      room.peers,
+    return announce(
+      peerLeftDeliveries(
+        dependencies.clients ?? wsClients,
+        roomId,
+        { peerId, socketGeneration, reason: "left" },
+        room.peers,
+      ),
+      budget,
+      dependencies,
     );
   };
 
 /**
  * Tell the online members of every room `peerId` belongs to that it went
  * offline: one frame per member per room, at most
- * MAX_ROOMS_PER_IDENTITY * (MAX_PEERS_PER_ROOM - 1). The membership is read
- * with the identity's routing claim, after the closing socket released it:
- * a claim found here belongs to a successor socket that has already
- * committed, on this instance or another, and nothing is announced.
+ * MAX_FRAMES_PER_OFFLINE_ANNOUNCEMENT, charged to `budget` as one
+ * announcement. The membership is read with the identity's routing claim,
+ * after the closing socket released it: a claim found here belongs to a
+ * successor socket that has already committed, on this instance or another,
+ * and nothing is announced.
  */
 export const createAnnounceOffline =
   (
     prisma: Pick<ProcessPrismaClient, "peer">,
     dependencies: DepartureDependencies = {},
   ) =>
-  async (peerId: string, socketGeneration: string): Promise<number> => {
+  async (
+    peerId: string,
+    socketGeneration: string,
+    budget: DepartureBudget = unlimited,
+  ): Promise<number> => {
     if (socketGeneration.length === 0) return 0;
     const peer = await prisma.peer.findUnique({
       where: { id: peerId },
@@ -407,17 +503,18 @@ export const createAnnounceOffline =
     });
     if (!peer || peer.serverId !== null) return 0;
     const clients = dependencies.clients ?? wsClients;
-    const send = dependencies.sendToPeerOnServer ?? sendToPeerOnServer;
-    let delivered = 0;
-    for (const room of peer.rooms)
-      delivered += await deliverPeerLeft(
-        clients,
-        send,
-        room.id,
-        { peerId, socketGeneration, reason: "offline" },
-        room.peers,
-      );
-    return delivered;
+    return announce(
+      peer.rooms.flatMap((room) =>
+        peerLeftDeliveries(
+          clients,
+          room.id,
+          { peerId, socketGeneration, reason: "offline" },
+          room.peers,
+        ),
+      ),
+      budget,
+      dependencies,
+    );
   };
 
 interface SocketCloseDependencies {
@@ -427,6 +524,7 @@ interface SocketCloseDependencies {
   announceOffline?: (
     peerId: string,
     socketGeneration: string,
+    budget: DepartureBudget,
   ) => Promise<number>;
 }
 
@@ -434,7 +532,8 @@ interface SocketCloseDependencies {
  * The close handler's departure step. Retire the closed socket, and when it
  * was its identity's last socket (it was current here and its release
  * cleared the claim), announce the identity offline to its rooms, within
- * the identity's MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE.
+ * the identity's MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE and its
+ * source's departure budget.
  *
  * A socket that never authenticated, never became current, or was replaced
  * by a newer session (here or on another instance) releases nothing and
@@ -462,7 +561,7 @@ export const createRetireClosedSocket =
       return await (
         dependencies.announceOffline ??
         createAnnounceOffline(sharedPrisma, { clients })
-      )(ws.data.peerId, socketGeneration);
+      )(ws.data.peerId, socketGeneration, departureBudgetOf(ws));
     } catch (error) {
       console.error(
         "p2party: offline announcement failed",

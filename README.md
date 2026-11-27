@@ -439,18 +439,46 @@ process gets it through that process's `PendingSignal` queue, the path relayed
 or later.
 
 Cost: a leave sends at most `MAX_PEERS_PER_ROOM` - 1 frames (127 at the
-default) and counts against `ROOM_MUTATIONS_PER_IDENTITY_PER_MINUTE`, so one
-identity causes at most 60 announced leaves, 7,620 frames, a minute per
-process at the defaults; a leave announces only a membership it removed, so
-after the first minute each one also costs a join. An offline announcement
-sends at most `MAX_ROOMS_PER_IDENTITY` × (`MAX_PEERS_PER_ROOM` - 1) frames
-(8,128 at the defaults). Connection
-attempts are limited per address, not per identity, so a member opening and
-closing sockets from many addresses could otherwise repeat that without bound;
-each process therefore announces at most
-`MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE` (6, in
-[`src/utils/admission.ts`](src/utils/admission.ts)) closes per identity per
-minute, and does not announce the rest.
+default) and counts against `ROOM_MUTATIONS_PER_IDENTITY_PER_MINUTE`; a leave
+announces only a membership it removed, so after the first minute each one
+also costs a join. An offline announcement sends at most
+`MAX_FRAMES_PER_OFFLINE_ANNOUNCEMENT` = `MAX_ROOMS_PER_IDENTITY` ×
+(`MAX_PEERS_PER_ROOM` - 1) frames (8,128 at the defaults). Three bounds, in
+[`src/utils/admission.ts`](src/utils/admission.ts), each per process:
+
+- `MAX_OFFLINE_ANNOUNCEMENTS_PER_IDENTITY_PER_MINUTE` (6): closes of one
+  identity announced per minute, checked before the membership read.
+- `MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE` (6 × 8,128 = 48,768): the
+  departure frames, `left` and `offline` together, that all identities of one
+  source key may cause per minute. The source key is the one the connection
+  limits use: an IPv4 address (an IPv4-mapped IPv6 address counts as its IPv4
+  address) or an IPv6 /64. It is what one identity may cause with its offline
+  announcements; without it, an address would cause more the more identities
+  it holds (6 new ones a minute, kept), up to its 60 connection attempts a
+  minute: 60 × 8,128 = 487,680 frames.
+- `MAX_DEPARTURE_FRAMES_PER_IPV6_48_PER_MINUTE` (97,536): the same for all
+  65,536 /64s of an IPv6 /48 together, twice a source key's, the ratio of the
+  /48 and per-source creation shares.
+
+An announcement is charged whole, after the membership read and before any
+frame is handed on. One a budget cannot hold is skipped whole and nothing else
+changes: the leave is still acknowledged, the socket is still retired and its
+claim released, and members learn of the departure only from their own edges,
+as before this frame existed. Skips are counted and reported at warn level at
+most once a minute (`p2party: skipped N departure announcement(s) of M
+frame(s) over the per-source departure budget`), with no identifiers.
+
+Worst sustained departure frames per minute per process, at the defaults:
+
+| Sender           | Frames per minute | Bound                                                                                                                                                                           |
+| ---------------- | ----------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One identity     |            52,578 | 6 offline × 8,128 = 48,768, plus 30 leave-and-rejoin cycles × 127 = 3,810, from a second source (from one source both fit in its 48,768); 60 leaves, 7,620, in the first minute |
+| One IPv4 address |            48,768 | Its source budget, however many identities and sockets it uses                                                                                                                  |
+| One IPv6 /64     |            48,768 | Its source budget                                                                                                                                                               |
+| One IPv6 /48     |            97,536 | Its /48 budget, across all of its /64s; each /64 at most 48,768                                                                                                                 |
+
+Each worker process keeps its own counts, so with several workers these
+multiply by their number.
 
 A `peerLeft` frame is a report from the signaling server, which clients cannot
 verify. The reference client never closes a connected WebRTC edge because of
@@ -468,7 +496,18 @@ generation (`peerConnection` introductions, acceptance deltas, `connection`),
 so a departure that names an older generation is recognised as stale. A leave
 and a rejoin on the same socket carry the same generation; they are ordered
 because the leave's frames are handed on inside that socket's message queue,
-before the rejoin is processed.
+before the rejoin is processed, and because each process delivers its queue
+in order and once: `createPendingSignalDrain` (`src/pubsub.ts`) runs one pass
+at a time (a NOTIFY or safety poll during a pass asks for exactly one more),
+keeps a recipient's later rows behind one of its rows that could not be
+delivered yet, and does not deliver again a row whose delete failed. Frames
+queued by different processes are delivered in `createdAt` order, a
+millisecond timestamp taken at insert; rows of the same millisecond have no
+defined order, and a row whose insert commits after a pass has read the queue
+reaches the next pass even if its timestamp is earlier. Those reorderings,
+and a frame sent straight to a socket on its own process overtaking queued
+ones, remain: `socketGeneration` makes one harmless when the two frames name
+different sockets, not when they name the same one.
 
 The membership row survives a disconnect — only an explicit `leaveRoom`
 removes one — so an offline member remains listed in snapshots.
@@ -931,16 +970,23 @@ client joins with, which peer ids share a room, the WebRTC descriptions and ICE
 candidates it relays — which carry IP addresses — and the timing of all of it.
 
 What room members learn from each other through the server: the membership
-(snapshots, which list offline members and give no online state), when a
-member asks for peers or accepts or dials (introductions, deltas,
-`connection`), and, through `peerLeft`, when a member leaves a room and when
-its last signaling socket closes. The last one is new in this release: every
-online member of every room an identity is in is told, within the server's
-delivery time, each time that identity goes offline (up to six times a minute
-per process; more frequent closes are not announced), whether or not it holds
-an edge to that identity and whether or not it would accept one. Together with
-the introductions a returning member sends, that gives room-mates the start
-and end of each of a member's signaling sessions. When the server notices a
+and some online state from snapshots, which any member can request at any
+time (a snapshot lists offline members too, and names a member's
+`socketGeneration` exactly when this process holds that member's current
+socket, so on a one-process deployment a missing generation means offline and
+a missing member means it left); when a member asks for peers or accepts or
+dials (introductions, deltas, `connection`); and, through `peerLeft`, when a
+member leaves a room and when its last signaling socket closes. What
+`peerLeft` adds is a real-time push, unrequested, to every online member of
+every room an identity is in, of the transitions a snapshot already showed on
+request: a member that polled snapshots could find them out at the polling
+interval, and now every member is told within the server's delivery time,
+whether or not it holds an edge to that identity and whether or not it would
+accept one. On several processes it also tells members what a snapshot could
+not: the offline transition of a member whose socket is on another process.
+Departures over the bounds in "Departures" are not announced. Together with
+the introductions a returning member sends, the pushes give room-mates the
+start and end of each of a member's signaling sessions. When the server notices a
 close depends on how the socket ended: a clean close at once, a lost
 connection when the heartbeat goes unanswered (within about 15 seconds) or at
 the 60-second idle timeout. The frame carries nothing a room-mate was not already shown: the room
