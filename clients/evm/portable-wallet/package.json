@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node serve.mjs",
-    "test": "node --test wallet.test.mjs browser/core.test.mjs browser/legacy-browser.test.mjs",
+    "test": "node --test wallet.test.mjs browser/core.test.mjs browser/legacy-browser.test.mjs browser/balance.test.mjs",
     "build:browser": "node browser/build.mjs"
   },
   "dependencies": {

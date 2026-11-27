@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Show the restored browser wallet’s unspent total and observation height in its navigation. Live refresh validates a whole public snapshot and each later native signature from a pinned height without querying any individual address. Sharing a total with the public site requires separate consent. [Balance privacy and verification](clients/evm/portable-wallet/browser/README.md#balance-in-the-wallet-and-site-navigation)
+
 - Add a self-contained browser restore tool for existing native Testnet 1 backups. It restores ML-DSA-65 and SLH-DSA-SHA2-192s from a file or paste, checks the original commitments and signs native payments offline. [Browser tool and build](clients/evm/portable-wallet/browser/README.md)
 
 - Add a local Testnet 1 wallet companion that carries native signing keys and receive nonces between desktop browsers. It checks the saved backup before revealing a new receive request, migrates original key folders and exports reviewed, offline-signed native payments. [Wallet guide](clients/evm/portable-wallet/README.md)

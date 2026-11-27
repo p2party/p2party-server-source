@@ -13,6 +13,7 @@ import {
   reviewPayment,
   WalletError,
 } from "../format.mjs";
+import { reportedBalance, snapshotFingerprint } from "../snapshot.mjs";
 import { importSigner } from "./keys.mjs";
 
 function release(records) {
@@ -106,6 +107,12 @@ function openedWallet(records, walletId, revision) {
     revision,
     walletId,
     reviewTransfer,
+    balance(snapshot) {
+      if (records.size === 0)
+        throw new WalletError("Open your wallet to check its balance.");
+      const report = reportedBalance(snapshot, accounts);
+      return { ...report, fingerprint: snapshotFingerprint(snapshot) };
+    },
     async prove(commitment) {
       const {
         signer,

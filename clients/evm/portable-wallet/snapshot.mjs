@@ -1,4 +1,6 @@
-import { CHAIN, WalletError, exactFields } from "./wallet.mjs";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { CHAIN, WalletError, exactFields } from "./format.mjs";
 
 // The server's canonical decoded-genesis fingerprint differs from the downloadable file's byte checksum.
 export const CANONICAL_GENESIS =
@@ -61,4 +63,29 @@ export function reportedBalance(snapshot, accounts) {
     amount: String(matched),
     height: BigInt(snapshot.height).toString(),
   };
+}
+
+// Hash canonical rows independent of SQL/JSON ordering. This is a comparison fingerprint,
+// not a signed checkpoint or a proof that the operator published its newest state.
+export function snapshotFingerprint(snapshot) {
+  const rows = snapshot.units.map(({ id, suite, commitment, weight }) => [
+    id,
+    suite,
+    commitment,
+    weight,
+  ]);
+  rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return bytesToHex(
+    sha256(
+      utf8ToBytes(
+        JSON.stringify([
+          snapshot.version,
+          snapshot.chainId,
+          snapshot.genesisHash,
+          snapshot.height,
+          rows,
+        ]),
+      ),
+    ),
+  );
 }

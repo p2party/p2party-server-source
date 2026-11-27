@@ -6,6 +6,8 @@ Bring **your latest encrypted wallet file and its separate recovery code**. Toge
 
 Open the standalone restore tool in its own tab. **Choose the encrypted wallet file or paste its contents, then enter your separate recovery code.** The tool opens the existing wallet inside this browser. It displays the saved receive commitments and can verify spending access or sign a native Testnet 1 payment for export. The user needs a browser with Web Crypto. No installation, server or account is required. The downloadable HTML file contains the complete app and can be used on a disconnected computer. [Standalone restore tool and checksum](browser/README.md)
 
+The restored wallet immediately shows the total reported at its included checkpoint. Its balance menu can refresh against the public validator, import a replica snapshot, or share just the amount and height with the site navbar after an explicit choice. [Balance verification and privacy](browser/README.md#balance-in-the-wallet-and-site-navigation)
+
 The optional **Remember encrypted backup** setting saves the verified ciphertext in this browser. On the next visit, enter just the recovery code. Use **Forget** to remove the saved file. By default, reselect the file each time. The code, opened signing keys, nonces and signed transfers stay out of persistent browser storage. Locking the wallet, leaving the page or reloading clears the active signer.
 
 The local companion below can also create wallets, add receive requests, check a trusted replica’s balance snapshot and migrate original receive folders.
@@ -47,7 +49,7 @@ A replica operator can produce the generic public JSON file using a read-only da
 psql -XAt -v ON_ERROR_STOP=1 -d verified_replica -f export-snapshot.sql > testnet1-snapshot.json
 ```
 
-A disposable PostgreSQL 18 database using the server schema reproduced all 128 published genesis units, their canonical fingerprint and height zero with this query. The checker pins the server’s canonical decoded-genesis fingerprint, verifies the 128 distinct, weight-one units required by Testnet 1, validates suite IDs, and rejects duplicate IDs or commitments. A wallet-side structural check cannot authenticate membership, freshness or the claimed head. Obtain the file directly from a trusted verified replay. There is no public snapshot feed. [Replica replay instructions](../../../src/ledger/README.md#replay-a-local-peer-into-a-second-database) · [Consistent snapshot query](export-snapshot.sql)
+A disposable PostgreSQL 18 database using the server schema reproduced all 128 published genesis units, their canonical fingerprint and height zero with this query. The checker pins the server’s canonical decoded-genesis fingerprint, verifies the 128 distinct, weight-one units required by Testnet 1, validates suite IDs, and rejects duplicate IDs or commitments. A wallet-side structural check cannot authenticate membership, freshness or the claimed head. Obtain the file directly from a trusted verified replay. The standalone browser wallet can also refresh the complete public dataset through the website's snapshot page. [Replica replay instructions](../../../src/ledger/README.md#replay-a-local-peer-into-a-second-database) · [Consistent snapshot query](export-snapshot.sql)
 
 ## Bring an existing key and receive nonce
 

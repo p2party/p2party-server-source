@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="__WALLET_CSP__" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="light dark" />
     <title>Restore wallet · p2party</title>
     <link
@@ -25,9 +26,94 @@
             height="32"
             src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACYAAAA2CAMAAACcNRsHAAAAV1BMVEUAAAAZFxVtbm6lc0zu0aOhUwz7kAQlGhLYYRJSUVHm29OTk5L6+vqrn5c3NTWvsLDQ0NDrjyrdspt/gIBfWldbLg3yplSONx1kSyTsYyjUWSXnXiiwm2ydB12jAAAAAXRSTlMAQObYZgAAArZJREFUSMedlYtyozAMRYswCNn4AYkhhv3/79xrO7Rs00yZVSchMqdXspDFx8d/WkPUXMBapdoLYl3fdxfkuBv4SnIiV3JrtL6CmXE0F8RG2O/J2YzZ3yg3FnNXxH6Ve4r9JucPzF4S+0GOhV/ETnJcH0rTqmD4ENPf5Nho1WauGfpJzaXHyGo1W48/sv6W75FWUz/ke9zDJmVdczfkZ0uGyBorwX04DwiWY8W+i0PfL8p5H0btjcc1BD9apxb0Xuz6CGztIwyRRQdD4rKJE4R1Qz/EyLFggDt4XWTci9Hax8POj3gjYSzGYUW4AxtWZvJqWdcpres2reuitHEchzOWuihBLdMAZHt+0qQ0QeGEdXxTS0r7dsb2tKgbd19Y5D/LlPY97U8E1x3/laal5Rj7tRaE2wVr+7ZntCpVNyVwtSDY7wMBtxVlAVCxL3d51IJg15mK4oOXCKFtO7tpiuXcNrGdUoqkg7XYWg6X9kg4X3AfwB6xtAiD2lww2jMFl/Pa4dqR+JbdNNX26ZBphyeNsrOW7O0reHLssrtPsfTbgCiraMec19tZqbklzdXtkERXYuZCbk4brNvgSl8GOdwNWO23Up47jWghLbfaukToqIDLkitZ+g3UPGopFRA9ot384WK/4A5szgJGRDBmyLnIuRzoOZPX8YAyhoeLhg3HWXEtNirHuUEX39a1YEIEIfRkKKKMfikjwudlwd1ynJqqg2dQMHBcguUt1ZVQMJ/PCdSAl+OcEy8/NQlltE5Fl3P3IO0oOZrkzLxgE1gt+dT5aKFjUQF8Ox+wVQre2YzmtdE+R7EBRHV8IDhahZzUOQcx+zmJ+bnJnyycxr8b35v+mmANvcfoNOLec/++Dd9xZ61i4l+hIK9zt/m+3fDm9dvc7Sep/f39C65p3J2MobtrrrwFX+wvupBDYurfpacAAAAASUVORK5CYII="
           />p2party</span
-        ><span class="network">Testnet 1</span>
+        >
+        <nav class="wallet-nav" aria-label="Wallet">
+          <span class="network">Testnet 1</span
+          ><button
+            id="balance-button"
+            type="button"
+            class="secondary"
+            aria-haspopup="dialog"
+            aria-controls="balance-dialog"
+          >
+            Balance
+          </button>
+        </nav>
       </div>
     </header>
+    <dialog id="balance-dialog" aria-labelledby="balance-heading">
+      <div class="card-head">
+        <h2 id="balance-heading">Wallet balance</h2>
+        <button id="balance-close" type="button" class="secondary" autofocus>
+          Close
+        </button>
+      </div>
+      <p class="hint">P2Party Testnet 1 · Valueless test units</p>
+      <div class="balance-amount">
+        <span>Reported available</span
+        ><strong id="balance-amount">Locked</strong>
+      </div>
+      <p id="balance-explanation">
+        Unlock your wallet to check its receive requests.
+      </p>
+      <p class="hint" id="balance-scope" hidden>
+        This total counts unspent units at this height for receive requests in
+        the open backup. Other backups can hold additional units. A signed
+        payment awaiting submission can spend a unit still counted here.
+      </p>
+      <dl id="balance-meta" hidden>
+        <dt>Snapshot height</dt>
+        <dd id="balance-height"></dd>
+        <dt>Source</dt>
+        <dd id="balance-source"></dd>
+        <dt id="balance-observed-label" hidden>Publisher observation</dt>
+        <dd id="balance-observed" hidden></dd>
+        <dt>Last checked on this device</dt>
+        <dd><time id="balance-time"></time></dd>
+      </dl>
+      <div id="balance-tools" hidden>
+        <div class="actions">
+          <button type="button" id="balance-refresh">Refresh balance</button>
+        </div>
+        <p class="hint" id="balance-refresh-help">
+          Opens p2party.com for the same public snapshot everyone receives.
+        </p>
+        <details id="balance-offline">
+          <summary>Import a snapshot offline</summary>
+          <form id="balance-form" autocomplete="off">
+            <label for="balance-file">Testnet 1 snapshot (.json)</label>
+            <input
+              id="balance-file"
+              type="file"
+              accept=".json,application/json"
+              required
+            />
+            <button id="balance-import" type="submit">Check snapshot</button>
+            <p class="hint">
+              Use a complete snapshot from a replica you trust. This device
+              matches its units to your receive requests.
+            </p>
+          </form>
+        </details>
+        <details id="balance-website">
+          <summary>Show the total on the website</summary>
+          <p id="balance-share-help">
+            Share only your displayed amount and snapshot height with
+            p2party.com. You can confirm or decline in the website tab.
+          </p>
+          <button type="button" id="balance-present" class="secondary">
+            Show total on p2party.com
+          </button>
+        </details>
+      </div>
+      <p
+        class="balance-status"
+        id="balance-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      ></p>
+    </dialog>
     <main id="main">
       <div class="intro">
         <h1 id="title" tabindex="-1">Restore your wallet</h1>

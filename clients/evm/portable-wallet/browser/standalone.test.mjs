@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { CHAIN, GENESIS } from "../format.mjs";
+import { CANONICAL_GENESIS } from "../snapshot.mjs";
 import { assertVerified } from "../native-test-helpers.mjs";
 
 const { chromium, firefox } = createRequire(import.meta.url)(
@@ -67,6 +68,239 @@ async function signIn(page, code) {
   await page
     .getByRole("heading", { name: "Your wallet", exact: true })
     .waitFor({ timeout: 120000 });
+}
+async function lockedBalance(page) {
+  const trigger = page.getByRole("button", {
+    name: "Wallet balance",
+    exact: true,
+  });
+  assert.equal(await trigger.textContent(), "Balance");
+  await trigger.click();
+  await page.getByRole("dialog", { name: "Wallet balance" }).waitFor();
+  assert.equal(await page.locator("#balance-amount").textContent(), "Locked");
+  assert.equal(await page.locator("#balance-meta").isVisible(), false);
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await trigger.evaluate((node) => node === document.activeElement),
+    true,
+  );
+}
+async function importSnapshot(page, snapshot, expected) {
+  await page.locator("#balance-file").setInputFiles({
+    name: "snapshot.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(snapshot)),
+  });
+  await button(page, "Check snapshot").click();
+  await page.waitForFunction(
+    (text) =>
+      document.getElementById("balance-status").textContent.includes(text),
+    expected,
+  );
+}
+async function checkWalletBalance(page, accounts) {
+  const trigger = page.locator("#balance-button");
+  assert.equal(await trigger.textContent(), "0 P2PARTY");
+  await trigger.click();
+  assert.equal(await page.locator("#balance-height").textContent(), "3");
+  assert.equal(
+    await page.locator("#balance-source").textContent(),
+    "Snapshot bundled with this release",
+  );
+  assert.equal(
+    await page.locator("#balance-amount").textContent(),
+    "0 P2PARTY",
+  );
+  const units = Array.from({ length: 128 }, () => ({
+    id: freshId(),
+    suite: 1,
+    commitment: freshId(),
+    weight: "0x1",
+  }));
+  for (const [i, account] of accounts.entries())
+    Object.assign(units[i], {
+      commitment: account.commitment,
+      suite: account.suite,
+    });
+  const snapshot = {
+    version: 1,
+    chainId: CHAIN,
+    genesisHash: CANONICAL_GENESIS,
+    height: "0x4",
+    units,
+  };
+  await page.locator("#balance-offline summary").click();
+  await importSnapshot(page, snapshot, "Balance checked");
+  assert.equal(await trigger.textContent(), "2 P2PARTY");
+  assert.match(
+    await trigger.getAttribute("aria-label"),
+    /reported at height 4/,
+  );
+  assert.equal(
+    await page.locator("#balance-source").textContent(),
+    "Imported replica file",
+  );
+  assert.equal(await page.locator("#balance-height").textContent(), "4");
+  assert.ok(await page.locator("#balance-time").getAttribute("datetime"));
+  // Even a same-height substitution affecting only someone else's unit is a
+  // conflicting snapshot; retaining the old observation avoids treating it as a refresh.
+  const other = structuredClone(snapshot);
+  other.units[127].id = freshId();
+  await page.locator("#balance-file").setInputFiles({
+    name: "conflict.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(other)),
+  });
+  await button(page, "Check snapshot").click();
+  await page.waitForFunction(() =>
+    document
+      .getElementById("balance-explanation")
+      .textContent.includes("last known"),
+  );
+  assert.equal(await trigger.textContent(), "2 P2PARTY");
+  assert.equal(await page.locator("#balance-height").textContent(), "4");
+  snapshot.height = "0x5";
+  for (let i = 0; i < accounts.length; i++)
+    snapshot.units[i].commitment = freshId();
+  await importSnapshot(page, snapshot, "Balance checked");
+  assert.equal(await trigger.textContent(), "0 P2PARTY");
+  assert.equal(await page.locator("#balance-height").textContent(), "5");
+  await importSnapshot(page, { ...snapshot, height: "0x4" }, "older");
+  assert.equal(await page.locator("#balance-height").textContent(), "5");
+  assert.equal(await trigger.textContent(), "0 P2PARTY");
+  await button(page, "Close").click();
+}
+// Route the real origin names to test fixtures locally. The signer runs the
+// release bytes without contacting either public site or generating a transfer.
+async function hostedBalance(context, html, filename, archive, code, accounts) {
+  const signerOrigin = "https://p2party.github.io";
+  const signer = signerOrigin + "/p2party-server/restore/";
+  const site = "https://p2party.com";
+  const checkpoint = JSON.parse(
+    await readFile(
+      new URL("./balance-checkpoint.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const payload = {
+    type: "p2party.wallet.snapshot.v1",
+    chainId: CHAIN,
+    genesisHash: CANONICAL_GENESIS,
+    fromHeight: checkpoint.snapshot.height,
+    headHeight: checkpoint.snapshot.height,
+    receipts: [],
+    snapshot: checkpoint.snapshot,
+  };
+  const requests = [];
+  let failRefresh = false;
+  const nonce = randomBytes(32).toString("hex");
+  await context.setOffline(false);
+  await context.route(signer, (route) =>
+    route.fulfill({ contentType: "text/html", body: html }),
+  );
+  await context.route(site + "/**", async (route) => {
+    const req = route.request();
+    requests.push({
+      url: req.url(),
+      method: req.method(),
+      referer: req.headers()["referer"],
+    });
+    const path = new URL(req.url()).pathname;
+    let body;
+    if (path === "/wallet/snapshot/") {
+      const reply = failRefresh
+        ? { type: "p2party.wallet.snapshot.error.v1" }
+        : payload;
+      body =
+        "<script>opener.postMessage(" +
+        JSON.stringify(reply) +
+        "," +
+        JSON.stringify(signerOrigin) +
+        ");<\/script>";
+    } else if (path === "/wallet/") {
+      body =
+        '<pre id="offer"></pre><button id="accept">Confirm display</button><script>' +
+        "const target=" +
+        JSON.stringify(signerOrigin) +
+        ",nonce=" +
+        JSON.stringify(nonce) +
+        ";" +
+        'window.addEventListener("message",e=>{if(e.origin===target && e.source===opener){document.getElementById("offer").textContent=JSON.stringify(e.data);}});' +
+        'opener.postMessage({type:"p2party.balance.request.v1",nonce},target);' +
+        'document.getElementById("accept").onclick=()=>opener.postMessage({type:"p2party.balance.accepted.v1",nonce},target);<\/script>';
+    } else {
+      await route.abort();
+      return;
+    }
+    await route.fulfill({ contentType: "text/html", body });
+  });
+  const page = await context.newPage();
+  await page.goto(signer);
+  await page.locator("#archive").setInputFiles({
+    name: filename,
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from(archive),
+  });
+  await signIn(page, code);
+  const trigger = page.locator("#balance-button");
+  assert.equal(await trigger.textContent(), "0 P2PARTY");
+  assert.deepEqual(requests, []);
+  await trigger.click();
+  await button(page, "Refresh balance").click();
+  await page.waitForFunction(
+    () =>
+      document.getElementById("balance-source").textContent ===
+      "Public snapshot from p2party.com",
+  );
+  assert.equal(await page.locator("#balance-height").textContent(), "3");
+  await page.locator("#balance-website summary").click();
+  assert.equal(requests.length, 1);
+  const pending = page.waitForEvent("popup");
+  await button(page, "Show total on p2party.com").click();
+  const display = await pending;
+  await display.waitForFunction(
+    () => document.getElementById("offer")?.textContent,
+  );
+  assert.deepEqual(JSON.parse(await display.locator("#offer").textContent()), {
+    type: "p2party.balance.offer.v1",
+    nonce,
+    amount: "0",
+    height: "3",
+  });
+  await button(display, "Confirm display").click();
+  await page.waitForFunction(() =>
+    document.getElementById("balance-status").textContent.includes("accepted"),
+  );
+  failRefresh = true;
+  await button(page, "Refresh balance").click();
+  await page.waitForFunction(() =>
+    document
+      .getElementById("balance-explanation")
+      .textContent.includes("last known"),
+  );
+  assert.equal(await trigger.textContent(), "0 P2PARTY");
+  assert.ok(await button(page, "Show total on p2party.com").isDisabled());
+  const manual = structuredClone(checkpoint.snapshot);
+  manual.height = "0x4";
+  Object.assign(manual.units[0], {
+    suite: accounts[0].suite,
+    commitment: accounts[0].commitment,
+  });
+  await page.locator("#balance-offline summary").click();
+  await importSnapshot(page, manual, "Balance checked");
+  assert.equal(await trigger.textContent(), "1 P2PARTY");
+  assert.ok(await button(page, "Show total on p2party.com").isDisabled());
+  assert.deepEqual(
+    requests.map((r) => [new URL(r.url).pathname, r.method]),
+    [
+      ["/wallet/snapshot/", "GET"],
+      ["/wallet/", "GET"],
+      ["/wallet/snapshot/", "GET"],
+    ],
+  );
+  assert.ok(requests.every((r) => !r.referer && !new URL(r.url).search));
+  await display.close();
+  await page.close();
 }
 async function eachSuite(page, accounts) {
   for (const [i, account] of accounts.entries()) {
@@ -204,6 +438,7 @@ test(
         const page = context.pages()[0];
         page.on("pageerror", (err) => errors.push(err.message));
         await page.goto(hosted);
+        await lockedBalance(page);
         await pasteOrDrop(page, "paste", filename, false);
         await message(page, "filename alone");
         await page.locator("#archive").setInputFiles({
@@ -237,6 +472,7 @@ test(
           html,
         );
         await context.setOffline(true);
+        await checkWalletBalance(page, accounts);
         await eachSuite(page, accounts);
         await context.setOffline(false);
         assert.ok(
@@ -245,6 +481,7 @@ test(
           ),
         );
         await button(page, "Lock wallet").click();
+        await lockedBalance(page);
         if (engine === "chromium") {
           await pasteOrDrop(page, "drop", archive, true);
         } else {
@@ -309,6 +546,7 @@ test(
         await entry.locator("summary").click();
         await button(entry, "Verify spending access").click();
         await message(local, "Spending access verified");
+        await hostedBalance(context, html, filename, archive, code, accounts);
         assert.deepEqual(attempted, []);
         assert.deepEqual(errors, []);
       });

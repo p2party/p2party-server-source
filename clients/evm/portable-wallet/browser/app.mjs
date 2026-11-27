@@ -1,3 +1,4 @@
+import { installWalletBalance } from "./balance-navbar.mjs";
 import { installLegacyImport } from "./legacy-browser.mjs";
 import { restoreWallet } from "./core.mjs";
 
@@ -10,6 +11,7 @@ if (window.top !== window.self) {
 }
 function startWalletPage() {
   installLegacyImport();
+  const balance = installWalletBalance();
   const el = (id) => document.getElementById(id);
   const show = (id, yes) => {
     el(id).hidden = !yes;
@@ -100,6 +102,7 @@ function startWalletPage() {
     busy = false;
     wallet?.lock();
     wallet = null;
+    balance.lock();
     for (const url of downloads) URL.revokeObjectURL(url);
     downloads.clear();
     resetPayment();
@@ -154,6 +157,7 @@ function startWalletPage() {
     list.append(dt, dd);
   }
   function displayWallet() {
+    balance.unlock(wallet);
     show("restore", false);
     show("overview", true);
     show("payment", true);
