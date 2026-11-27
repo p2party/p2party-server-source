@@ -25,15 +25,27 @@ const genesis = JSON.parse(
 const entry = genesis.units.find((u) => u.id === inputId);
 if (!entry)
   throw new Error("Selected input is outside the published testnet genesis");
-function readGrantKey() {
-  const custody = JSON.parse(readFileSync(0, "utf8"));
+async function readGrantKey() {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > 4 * 1024 * 1024) throw new Error("Unexpected custody file size");
+    chunks.push(chunk);
+  }
+  let custody;
+  try {
+    custody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new Error("Invalid custody JSON");
+  }
   if (custody.chainId !== genesis.chainId)
     throw new Error("Wrong operator vault");
   const selected = custody.keys.find((k) => k.id === inputId);
   if (!selected) throw new Error("Missing key for the selected input");
   return selected;
 }
-const selected = readGrantKey();
+const selected = await readGrantKey();
 const transport = await createLedgerTransport({
   url: "https://signaling.p2party.com/rpc",
   chainId: genesis.chainId,
