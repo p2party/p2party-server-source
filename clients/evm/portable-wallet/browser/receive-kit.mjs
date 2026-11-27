@@ -74,7 +74,7 @@ export async function prepareKit(suite, base, restore, onClose) {
       get archive() {
         return live ? archive : null;
       },
-      filename: "p2party-testnet1-" + walletId + "-r" + revision + ".jwe",
+      filename: archiveFilename(walletId, revision),
       getRecoveryCode() {
         if (!live || base)
           throw new WalletError(
@@ -119,4 +119,8 @@ export async function prepareKit(suite, base, restore, onClose) {
         rec.key = "";
       }
   }
+}
+
+export function archiveFilename(walletId, revision) {
+  return "p2party-testnet1-" + walletId + "-r" + revision + ".jwe";
 }

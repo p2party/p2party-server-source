@@ -37,6 +37,8 @@ async function saveKit(page) {
   return { filename: file.suggestedFilename(), archive: await contents(file) };
 }
 async function openFromFile(page, kit, code, stage = false) {
+  if (!stage && !(await page.locator("#restore").isVisible()))
+    await page.locator("#receive-restore").click();
   await page.locator(stage ? "#kit-file" : "#archive").setInputFiles({
     name: kit.filename,
     mimeType: "application/octet-stream",
@@ -141,6 +143,7 @@ test(
       process.env.P2PARTY_WALLET_HTML ||
         join(root, "browser/restore-wallet.html"),
     );
+    let otherBrowserKit;
     for (const [engine, browserType] of [
       ["chromium", chromium],
       ["firefox", firefox],
@@ -161,7 +164,7 @@ test(
           unavailable = false;
         const reads = [],
           unexpected = [];
-        async function profile(html) {
+        async function profile(html, intent = "#receive") {
           const context = await browser.newContext({
             acceptDownloads: true,
             viewport: { width: 360, height: 805 },
@@ -192,10 +195,34 @@ test(
             return route.abort();
           });
           const page = await context.newPage();
-          await page.goto(host + "#receive");
+          await page.goto(host + intent);
           return { context, page };
         }
-        const receiver = await profile(official);
+        if (otherBrowserKit) {
+          // Restore the *download* made in Chromium by pasting it in Firefox.
+          const other = await profile(official, "#balance");
+          await other.page.locator("#paste-panel summary").click();
+          await other.page
+            .locator("#archive-text")
+            .fill(otherBrowserKit.archive);
+          await other.page.locator("#code").fill(otherBrowserKit.code);
+          await button(other.page, "Restore wallet").click();
+          await other.page.locator("#dashboard:visible").waitFor();
+          assert.equal(
+            await other.page.locator("#receive-text").inputValue(),
+            otherBrowserKit.request,
+          );
+          assert.match(
+            await other.page.locator("#summary-source").textContent(),
+            /Block 3/,
+          );
+          assert.equal(
+            await other.page.locator("#summary-amount").textContent(),
+            "0 P2PARTY",
+          );
+          await other.context.close();
+        }
+        const receiver = await profile(official, "#create");
         await button(receiver.page, "Create a wallet").click();
         await receiver.page.locator("#receive-kit:visible").waitFor();
         assert.equal(
@@ -221,6 +248,7 @@ test(
           .locator("#receive-text")
           .inputValue();
 
+        await receiver.page.locator("#suite-options summary").click();
         await receiver.page.locator("#receive-suite").selectOption("2");
         await button(receiver.page, "Create a receive request").click();
         await receiver.page.locator("#receive-kit:visible").waitFor();
@@ -278,12 +306,24 @@ test(
           await receiver.page.evaluate(() => localStorage.length),
           0,
         );
+        await receiver.page.locator("#move-wallet summary").click();
+        const transferDownload = receiver.page.waitForEvent("download");
+        await receiver.page.locator("#move-download").click();
+        const transferFile = await transferDownload;
+        assert.equal(transferFile.suggestedFilename(), finalKit.filename);
+        assert.equal(await contents(transferFile), finalKit.archive);
+        otherBrowserKit = {
+          archive: await contents(transferFile),
+          code: recovery,
+          request,
+        };
         await receiver.context.close();
 
         // The receiver has no open context when the payer signs and the fixture accepts it.
         const payer = await profile(fixture.html);
         await openFromFile(payer.page, fixture.paymentKit, fixture.code);
         await payer.page.locator("#overview:visible").waitFor();
+        assert.ok(payer.page.url().endsWith("#receive"));
         assert.equal(
           await payer.page.locator("#balance-button").textContent(),
           "1 P2PARTY",
@@ -316,14 +356,14 @@ test(
           "0 P2PARTY",
         );
         unavailable = true;
-        await button(recovered.page, "Sync with validator").click();
+        await button(recovered.page, "Check this request").click();
         await waitContains(
           recovered.page,
           "receive-observation",
           "latest check failed",
         );
         unavailable = false;
-        await button(recovered.page, "Sync with validator").click();
+        await button(recovered.page, "Check this request").click();
         await waitContains(
           recovered.page,
           "receive-observation",
@@ -370,7 +410,7 @@ test(
         const again = await profile(fixture.html);
         await openFromFile(again.page, finalKit, recovery);
         await again.page.locator("#receive-public:visible").waitFor();
-        await button(again.page, "Sync with validator").click();
+        await button(again.page, "Check this request").click();
         await waitContains(
           again.page,
           "receive-observation",

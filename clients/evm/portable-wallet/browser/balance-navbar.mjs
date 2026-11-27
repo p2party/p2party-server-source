@@ -17,6 +17,7 @@ export function installWalletBalance(onChange = () => {}) {
     stale = false;
   const status = (s) => {
     el("balance-status").textContent = s;
+    el("summary-status").textContent = s;
   };
   function render() {
     const amount = observation && observation.amount + " P2PARTY";
@@ -41,6 +42,16 @@ export function installWalletBalance(onChange = () => {}) {
       description =
         "Showing the last known report. A newer balance could not be established.";
     el("balance-explanation").textContent = description;
+    el("summary-amount").textContent = amount || "Unavailable";
+    el("summary-source").textContent = observation
+      ? (stale ? "Last known amount. " : "") +
+        observation.source +
+        " · Block " +
+        observation.height +
+        ". " +
+        description
+      : description;
+    el("balance-unlock").hidden = Boolean(wallet);
     el("balance-meta").hidden = !observation;
     el("balance-scope").hidden = !observation;
     el("balance-tools").hidden = !wallet;
@@ -57,6 +68,10 @@ export function installWalletBalance(onChange = () => {}) {
     if (observation) when.dateTime = observation.checked.toISOString();
     else when.removeAttribute("datetime");
     const hosted = publicBridgeAvailable();
+    el("summary-check").textContent = hosted
+      ? "Check for payments"
+      : "Import a balance snapshot";
+    el("summary-check").disabled = Boolean(operation);
     el("balance-refresh").disabled = !hosted || Boolean(operation);
     el("balance-present").disabled =
       !hosted || Boolean(operation) || stale || !observation?.verifiedReport;
@@ -130,7 +145,22 @@ export function installWalletBalance(onChange = () => {}) {
       }
     }
   }
-  el("balance-button").addEventListener("click", () => dialog.showModal());
+  const open = () => dialog.showModal();
+  el("balance-button").addEventListener("click", () => {
+    el("account-menu").open = false;
+    el("account-toggle").focus();
+    open();
+  });
+  el("summary-details").addEventListener("click", open);
+  el("balance-unlock").addEventListener("click", () => dialog.close());
+  el("summary-check").addEventListener("click", () => {
+    if (publicBridgeAvailable()) refresh();
+    else {
+      open();
+      el("balance-offline").open = true;
+      el("balance-file").focus();
+    }
+  });
   el("balance-close").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
     if (operation) {

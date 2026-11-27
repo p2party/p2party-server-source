@@ -2,6 +2,7 @@ import { installReceiveUI } from "./receive-ui.mjs";
 import { installWalletBalance } from "./balance-navbar.mjs";
 import { installLegacyImport } from "./legacy-browser.mjs";
 import { restoreWallet } from "./core.mjs";
+import { archiveFilename } from "./receive-kit.mjs";
 
 if (window.top !== window.self) {
   const notice = document.createElement("p");
@@ -12,7 +13,10 @@ if (window.top !== window.self) {
 }
 function startWalletPage() {
   installLegacyImport();
-  let receive, currentArchive;
+  let receive,
+    currentArchive,
+    moveUrl,
+    restoreForReceive = false;
   const balance = installWalletBalance(() => receive?.observe());
   const el = (id) => document.getElementById(id);
   const show = (id, yes) => {
@@ -32,6 +36,69 @@ function startWalletPage() {
     generation = 0;
   const downloads = new Set();
 
+  // A fragment carries only a public task name. Wallet material stays in this tab.
+  function route(focus = false) {
+    el("account-menu").open = false;
+    const intent = location.hash.slice(1);
+    const restore = !wallet && (intent === "restore" || intent === "balance");
+    const receiveTask = intent === "create" || intent === "receive";
+    const welcome = !wallet && !restore && !receiveTask;
+    if (!wallet && !receiveTask) receive?.reset();
+    if (!restore) {
+      restoreForReceive = false;
+      el("code").value = "";
+      el("code").type = "password";
+      el("show-code").textContent = "Show code";
+      el("show-code").setAttribute("aria-pressed", "false");
+    }
+    show("welcome", welcome);
+    show("restore", restore);
+    show("receive", Boolean(wallet) || receiveTask);
+    show("back-home", !wallet && !welcome);
+    show("dashboard", Boolean(wallet));
+    show("overview", Boolean(wallet));
+    show("payment", Boolean(wallet));
+    if (restore) el("restore-form").after(el("status"));
+    else el("save-tool").before(el("status"));
+    savedControls();
+    const [title, intro] = wallet
+      ? [
+          "Your wallet",
+          "Check payments, share a receive request, or move your backup to another browser.",
+        ]
+      : restore
+        ? [
+            intent === "balance" ? "Check your balance" : "Restore your wallet",
+            "Open your latest encrypted .jwe file and enter its separate recovery code. You can also paste the file’s contents.",
+          ]
+        : receiveTask
+          ? [
+              intent === "create" ? "Create a wallet" : "Receive a payment",
+              "Start with a new wallet or open an existing one. Your private keys stay in this browser while you use them.",
+            ]
+          : [
+              "P2PARTY wallet",
+              "Create a wallet to receive your first test payment, or open one you already have.",
+            ];
+    el("title").textContent = title;
+    el("intro").textContent = intro;
+    el("receive-heading").textContent = wallet
+      ? "Receive P2PARTY"
+      : intent === "create"
+        ? "Your first payment request"
+        : "Get a receive request";
+    if (focus && intent !== "main") {
+      const target =
+        wallet && intent === "receive"
+          ? "receive-heading"
+          : wallet && intent === "balance"
+            ? "summary-heading"
+            : "title";
+      el(target).focus({ preventScroll: true });
+      if (target === "title") window.scrollTo(0, 0);
+      else el(target).scrollIntoView();
+    }
+  }
   function normalizedArchive(text) {
     if (typeof text !== "string" || !text.length || text.length > maxArchive)
       throw Error("Choose an encrypted backup up to 2 MiB.");
@@ -39,8 +106,13 @@ function startWalletPage() {
     if (value.startsWith("{") || value.startsWith('"')) {
       try {
         const parsed = JSON.parse(value);
+        if (parsed?.type === "p2party.payment-request")
+          throw Error(
+            "This is a public payment request. Open your private .jwe wallet backup to restore.",
+          );
         value = typeof parsed === "string" ? parsed : parsed?.archive;
-      } catch {
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
         throw Error("The pasted JSON does not contain an encrypted backup.");
       }
     }
@@ -64,7 +136,7 @@ function startWalletPage() {
   }
   function savedControls() {
     const saved = Boolean(loadSaved());
-    show("saved-area", saved);
+    show("saved-area", saved && !el("restore").hidden);
     show("use-saved", saved && !wallet && selection?.kind !== "saved");
   }
   function choose(source) {
@@ -105,6 +177,11 @@ function startWalletPage() {
     wallet?.lock();
     wallet = null;
     currentArchive = null;
+    if (moveUrl) URL.revokeObjectURL(moveUrl);
+    moveUrl = null;
+    el("move-download").removeAttribute("href");
+    el("move-download").removeAttribute("download");
+    el("move-wallet").open = false;
     receive?.reset();
     balance.lock();
     for (const url of downloads) URL.revokeObjectURL(url);
@@ -120,15 +197,9 @@ function startWalletPage() {
     el("code").type = "password";
     el("show-code").textContent = "Show code";
     el("show-code").setAttribute("aria-pressed", "false");
-    el("title").textContent = "Restore your wallet";
-    el("intro").textContent =
-      "Bring your encrypted backup and the recovery code you saved separately. This browser opens them offline.";
-    show("overview", false);
-    show("payment", false);
-    show("restore", true);
     choose(loadSaved() ? { kind: "saved" } : null);
     status(message);
-    if (focus) el("title").focus();
+    route(focus);
   }
   function run(action) {
     return async (event) => {
@@ -163,12 +234,15 @@ function startWalletPage() {
   function displayWallet() {
     receive?.setWallet(wallet);
     balance.unlock(wallet);
-    show("restore", false);
-    show("overview", true);
-    show("payment", true);
-    el("title").textContent = "Your wallet";
-    el("intro").textContent =
-      "Inspect your restored receive requests or sign a Testnet 1 payment offline.";
+    if (moveUrl) URL.revokeObjectURL(moveUrl);
+    moveUrl = URL.createObjectURL(
+      new Blob([currentArchive], { type: "application/octet-stream" }),
+    );
+    el("move-download").href = moveUrl;
+    el("move-download").download = archiveFilename(
+      wallet.walletId,
+      wallet.revision,
+    );
     el("accounts-count").textContent =
       wallet.accounts.length +
       " restored receive " +
@@ -205,8 +279,7 @@ function startWalletPage() {
       item.append(summary, list, button);
       accounts.append(item);
     }
-    savedControls();
-    el(location.hash === "#receive" ? "receive-heading" : "title").focus();
+    route(true);
   }
   el("archive").addEventListener("change", () => {
     try {
@@ -221,7 +294,7 @@ function startWalletPage() {
     choose(el("archive-text").value ? { kind: "entry" } : null);
   });
   document.addEventListener("dragover", (event) => {
-    if (!wallet) {
+    if (!el("restore").hidden) {
       event.preventDefault();
       el("drop").classList.add("is-over");
     }
@@ -230,7 +303,7 @@ function startWalletPage() {
     el("drop").classList.remove("is-over"),
   );
   document.addEventListener("drop", (event) => {
-    if (event.target.closest?.("#receive, #legacy-panel")) return;
+    if (el("restore").hidden || event.target.closest?.("#legacy-panel")) return;
     event.preventDefault();
     el("drop").classList.remove("is-over");
     if (wallet || busy) return;
@@ -251,6 +324,7 @@ function startWalletPage() {
     if (
       wallet ||
       busy ||
+      el("restore").hidden ||
       event.target === el("code") ||
       event.target.closest?.("#receive, #legacy-panel")
     )
@@ -345,11 +419,36 @@ function startWalletPage() {
       el("restore-form").reset();
       el("remember").checked = false;
       el("chosen").textContent = "";
+      if (restoreForReceive) history.replaceState(null, "", "#receive");
       displayWallet();
       status(message);
     }),
   );
-  el("lock").addEventListener("click", () => lock("Wallet locked.", true));
+  el("lock").addEventListener("click", () => {
+    history.replaceState(null, "", "#restore");
+    lock("Wallet locked.", true);
+  });
+  el("receive-restore").addEventListener("click", () => {
+    restoreForReceive = true;
+  });
+  const accountMenu = el("account-menu");
+  document.addEventListener("click", (event) => {
+    if (
+      !accountMenu.contains(event.target) ||
+      event.target.closest(".account-actions a")
+    )
+      accountMenu.open = false;
+  });
+  accountMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && accountMenu.open) {
+      event.preventDefault();
+      accountMenu.open = false;
+      el("account-toggle").focus();
+    }
+  });
+  window.addEventListener("hashchange", () => route(true));
+  if (location.hash)
+    window.addEventListener("load", () => route(true), { once: true });
   el("request").addEventListener("change", () => {
     resetPayment();
     status("");
@@ -454,6 +553,7 @@ function startWalletPage() {
       } catch {
         message += " This browser could not update its saved encrypted backup.";
       }
+      history.replaceState(null, "", "#receive");
       wallet = next;
       currentArchive = archive;
       selection = null;

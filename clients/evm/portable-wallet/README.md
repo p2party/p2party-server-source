@@ -1,5 +1,8 @@
 # Take a P2Party spending wallet to another browser
 
+Open the [Testnet 1 wallet](https://p2party.github.io/p2party-server/restore/) to create a wallet or restore one from your latest encrypted **.jwe** backup and separate **P2W1-** code. The wallet shows its balance and block height after restore. To change browsers, download the file under **Move this wallet to another browser**. The public request is the item to share with a payer. [Browser wallet and recovery guide](browser/README.md)
+
+
 Bring **your latest encrypted wallet file and its separate recovery code**. Together they open the signing keys and the original nonce for every receive request in the file. Anyone with both can spend those units. A public balance handle is enough to look up a balance. A sender needs the suite and full receive commitment.
 
 ## Open the wallet in a browser

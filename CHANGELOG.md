@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Give the portable wallet direct create, restore, receive and balance links. Its Account menu and dashboard show what a backup can spend at a stated block. The browser handoff downloads that backup revision and explains how to reopen it on another device with the separate code. [Wallet guide](clients/evm/portable-wallet/browser/README.md)
+
 - Create fresh browser wallets and one-use Testnet 1 payment requests with checked encrypted backups, public QR codes and verified native input selection. Reconnecting wallets scan paginated public receipts and distinguish live, spent and unseen requests at a specific height. [Receiving and offline catch-up](clients/evm/portable-wallet/browser/README.md#receive-a-payment-including-while-offline)
 
 - Show the restored browser wallet’s unspent total and observation height in its navigation. Live refresh validates a whole public snapshot and each later native signature from a pinned height without querying any individual address. Sharing a total with the public site requires separate consent. [Balance privacy and verification](clients/evm/portable-wallet/browser/README.md#balance-in-the-wallet-and-site-navigation)

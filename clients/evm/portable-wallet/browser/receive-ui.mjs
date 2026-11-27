@@ -213,8 +213,10 @@ export function installReceiveUI({
       el("kit-download").download = pending.filename;
       el("kit-remember").checked = Boolean(wallet && isRemembered());
       el("kit-help").textContent = wallet
-        ? "Download the updated encrypted backup. Keep your original recovery code. Reopen this file below to reveal the new request."
-        : "Download the encrypted backup. Save the recovery code separately, then reopen the downloaded file below.";
+        ? "This file includes your new request and the keys from the backup you opened. Take this updated file to your other browser and use your original recovery code."
+        : "These two items let you open this wallet on another browser. Save both before sharing a payment request.";
+      el("kit-check-step").textContent =
+        (wallet ? "2" : "3") + ". Check that you can reopen the file";
       show("new-code-area", !wallet);
       show("receive-public", false);
       show("receive-start", false);
@@ -235,11 +237,6 @@ export function installReceiveUI({
     show("receive-public", Boolean(wallet));
     tell("Backup preparation cancelled.");
     el("create-receive").focus();
-  });
-  el("receive-restore").addEventListener("click", (event) => {
-    event.preventDefault();
-    el("archive").focus();
-    el("restore").scrollIntoView();
   });
   el("show-new-code").addEventListener("click", () => {
     if (!stage || wallet) return;
@@ -348,15 +345,6 @@ export function installReceiveUI({
       el("status").textContent = error.message;
     }
   });
-  function focusReceive() {
-    if (location.hash === "#receive") {
-      el("receive-heading").focus({ preventScroll: true });
-      el("receive").scrollIntoView();
-    }
-  }
-  window.addEventListener("hashchange", focusReceive);
-  if (location.hash === "#receive")
-    window.addEventListener("load", focusReceive, { once: true });
   return {
     reset,
     setWallet: display,

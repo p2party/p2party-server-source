@@ -312,17 +312,56 @@ dd {
   text-underline-offset: 0.2em;
 }
 
-.wallet-nav {
+#account-menu {
+  position: relative;
+}
+#account-toggle {
   display: flex;
   align-items: center;
-  gap: clamp(0.5rem, 2vw, 1.4rem);
+  gap: 0.65rem;
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+  background: var(--paper);
+  padding: 0.45rem 0.85rem;
 }
-.wallet-nav button {
-  font-weight: 750;
-  box-shadow: 4px 4px 0 var(--orange);
-  font-size: 0.92rem;
-  line-height: 1.4;
-  white-space: nowrap;
+#account-toggle::after {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-0.12rem) rotate(45deg);
+}
+#account-toggle::-webkit-details-marker {
+  display: none;
+}
+#account-menu[open] #account-toggle::after {
+  transform: translateY(0.12rem) rotate(225deg);
+}
+.account-actions {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 2;
+  display: grid;
+  min-width: 13rem;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.account-actions a,
+.account-actions button {
+  padding: 0.65rem 0.9rem;
+  border: 0;
+  text-align: left;
+  text-decoration: none;
+  font: inherit;
+  font-weight: 700;
+}
+.account-actions :is(a, button):hover {
+  background: var(--ground);
+  text-decoration: underline;
+  box-shadow: none;
 }
 #balance-dialog {
   width: min(34rem, calc(100% - 2.25rem));
@@ -370,21 +409,6 @@ dd {
 }
 .balance-status:empty {
   display: none;
-}
-@media (max-width: 27rem) {
-  .wallet-nav .network {
-    position: absolute;
-    clip-path: inset(50%);
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-  }
-  .bar {
-    gap: 0.5rem;
-  }
-  .wallet-nav button {
-    padding: 0.38rem 0.6rem;
-  }
 }
 #balance-tools details {
   margin-top: 1rem;
@@ -470,13 +494,109 @@ dd {
   .bar {
     padding-inline: 0.75rem;
   }
-  .wallet-nav {
-    gap: 0.45rem;
-  }
   .brand {
     font-size: 1.3rem;
   }
   .brand img {
     width: 1.5rem;
+  }
+}
+.intro .chain-label {
+  color: var(--muted);
+  font:
+    700 0.78rem/1.35 ui-monospace,
+    monospace;
+  letter-spacing: 0.045em;
+  margin: 0 0 0.7rem;
+  text-transform: uppercase;
+}
+.brand {
+  color: inherit;
+  text-decoration: none;
+}
+a,
+#back-home {
+  color: inherit;
+  font-weight: 700;
+  text-underline-offset: 0.22em;
+  text-decoration-color: var(--orange);
+}
+.task-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.2rem;
+  max-width: 46rem;
+  margin-bottom: 2rem;
+}
+.task {
+  color: var(--ink);
+  text-decoration: none;
+  padding: clamp(1.2rem, 3vw, 1.65rem);
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+.task:first-child {
+  box-shadow: 5px 5px 0 var(--orange);
+}
+.task strong,
+.task span {
+  display: block;
+}
+.task strong {
+  font-size: 1.35rem;
+  letter-spacing: -0.035em;
+}
+.task strong::after {
+  content: " →";
+}
+.task span {
+  color: var(--muted);
+  font-weight: 450;
+  margin-top: 0.3rem;
+}
+.task:hover strong {
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+#back-home {
+  display: inline-block;
+  margin: 0 0 1rem;
+}
+#back-home::before {
+  content: "← ";
+}
+.summary-amount {
+  font-size: clamp(2.2rem, 6vw, 3.4rem);
+  letter-spacing: -0.06em;
+  font-weight: 850;
+  line-height: 1.08;
+  margin: 1rem 0 0.35rem;
+}
+#summary-source {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+#move-wallet,
+#legacy-panel,
+#receive-public + #receive-start {
+  border-top: 1px solid var(--line);
+  margin-top: 1.1rem;
+  padding-top: 0.85rem;
+}
+.step-label {
+  font-weight: 750;
+  margin: 0.75rem 0 0.3rem;
+}
+#suite-options {
+  margin-block: 0.7rem;
+}
+#suite-options label {
+  display: block;
+  margin-top: 0.7rem;
+}
+@media (max-width: 36rem) {
+  .task-list {
+    grid-template-columns: 1fr;
   }
 }

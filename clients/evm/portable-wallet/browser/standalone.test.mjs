@@ -71,6 +71,14 @@ async function signIn(page, code) {
     .waitFor({ timeout: 120000 });
 }
 async function lockedBalance(page) {
+  const account = page.locator("#account-toggle");
+  await account.focus();
+  await account.press("Enter");
+  await account.press("Escape");
+  assert.ok(
+    !(await page.locator("#account-menu").evaluate((menu) => menu.open)),
+  );
+  await account.press("Enter");
   const trigger = page.getByRole("button", {
     name: "Wallet balance",
     exact: true,
@@ -82,7 +90,7 @@ async function lockedBalance(page) {
   assert.equal(await page.locator("#balance-meta").isVisible(), false);
   await page.keyboard.press("Escape");
   assert.equal(
-    await trigger.evaluate((node) => node === document.activeElement),
+    await account.evaluate((node) => node === document.activeElement),
     true,
   );
 }
@@ -102,6 +110,7 @@ async function importSnapshot(page, snapshot, expected) {
 async function checkWalletBalance(page, accounts) {
   const trigger = page.locator("#balance-button");
   assert.equal(await trigger.textContent(), "0 P2PARTY");
+  await page.locator("#account-toggle").click();
   await trigger.click();
   assert.equal(await page.locator("#balance-height").textContent(), "3");
   assert.equal(
@@ -229,7 +238,9 @@ async function hostedBalance(context, html, filename, archive, code, accounts) {
     await route.fulfill({ contentType: "text/html", body });
   });
   const page = await context.newPage();
-  await page.goto(signer);
+  await page.goto(signer + "#balance");
+  await page.getByRole("heading", { name: "Check your balance" }).waitFor();
+  assert.equal(await page.locator("#dashboard").isVisible(), false);
   await page.locator("#archive").setInputFiles({
     name: filename,
     mimeType: "application/octet-stream",
@@ -239,6 +250,7 @@ async function hostedBalance(context, html, filename, archive, code, accounts) {
   const trigger = page.locator("#balance-button");
   assert.equal(await trigger.textContent(), "0 P2PARTY");
   assert.deepEqual(requests, []);
+  await page.locator("#account-toggle").click();
   await trigger.click();
   await button(page, "Refresh balance").click();
   await page.waitForFunction(
@@ -432,7 +444,16 @@ test(
         const page = context.pages()[0];
         page.on("pageerror", (err) => errors.push(err.message));
         await page.goto(hosted);
+        for (const name of ["Create a wallet", "Restore a wallet"]) {
+          const bounds = await page
+            .getByRole("link", { name: new RegExp("^" + name) })
+            .boundingBox();
+          assert.ok(bounds && bounds.y + bounds.height <= 760);
+        }
+        assert.ok(!(await page.locator("#restore").isVisible()));
         await lockedBalance(page);
+        await page.locator('#welcome a[href="#restore"]').click();
+        await page.locator("#restore:visible").waitFor();
         await pasteOrDrop(page, "paste", filename, false);
         await message(page, "filename alone");
         await page.locator("#archive").setInputFiles({
@@ -526,7 +547,7 @@ test(
             },
           }),
         );
-        await local.goto(pathToFileURL(artifact).href);
+        await local.goto(pathToFileURL(artifact).href + "#restore");
         await context.setOffline(true);
         await local.locator("#archive").setInputFiles({
           name: filename,
