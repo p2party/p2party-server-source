@@ -605,22 +605,21 @@ response already carries `Strict-Transport-Security`, so two values could be
 sent. As a result cdn sends no HSTS header of its own. Browsers that have
 visited the apex over HTTPS apply its `includeSubDomains` to cdn as well.
 
-**What this does not fix.** The four proxied hostnames are CNAMEs to S3 website
-endpoints, which serve HTTP only and do not listen on port 443. Cloudflare
-therefore fetches every page and script from S3 over unauthenticated HTTP across
-the internet. Anyone on that path can read or replace the app's JavaScript
-before Cloudflare serves it over HTTPS. These settings protect only the hop
-between the visitor and Cloudflare. Closing the other hop needs an origin that
-terminates TLS with a certificate Cloudflare verifies, and then the zone SSL
-mode set to Full (strict). One option is a TLS-terminating CDN in front of the
-bucket, for example CloudFront with origin access. That requires the S3 REST
-endpoint instead of the website endpoint, which loses the website endpoint's
-index documents and redirect rules, so `/r`, directory indexes and the www
-redirect must then be handled by CloudFront or Cloudflare rules. The other is
-serving the files from Cloudflare itself, for example Pages, so that no public
-origin hop remains. This Terraform does not manage the SSL mode. Do not switch
-it to Full or Full (strict) while the origin is an S3 website endpoint: with
-nothing on port 443, both modes fail.
+**The origin hop.** A read-only configuration check on November 27, 2026 found
+all four public frontend hosts proxied by Cloudflare with S3 website endpoint
+targets. The deployed bucket uses website index and error documents. S3 serves
+website endpoints over HTTP. The available Cloudflare access confirms the DNS
+configuration but does not expose origin overrides, Workers or the zone SSL
+mode. A visitor's HTTPS connection protects the browser-to-edge hop. Cached
+responses can be served at the edge, while a fetch through the configured
+website endpoint traverses an unauthenticated origin connection.
+
+The isolated HTTPS staging configuration pairs a new private S3 REST origin
+with a CloudFront distribution and a tested directory-index function. The
+frontend's Cloudflare origin rules, certificate coverage and each proxied
+hostname must be reviewed before any production migration. Enabling a strict
+origin TLS requirement while traffic still targets an HTTP-only website endpoint
+can interrupt service. [Staging configuration and local checks](https-origin-stage/README.md)
 
 Before enabling any of them:
 

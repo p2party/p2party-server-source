@@ -1,0 +1,11 @@
+// CloudFront viewer-request event. Query parameters stay in the browser URL.
+function handler(event) {
+  var request = event.request;
+  var routes = ${routes};
+  var uri = request.uri;
+  var key = uri.endsWith("/") ? uri.slice(0, -1) : uri;
+  if (Object.prototype.hasOwnProperty.call(routes, key)) {
+    request.uri = routes[key];
+  }
+  return request;
+}
