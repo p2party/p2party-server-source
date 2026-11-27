@@ -1,0 +1,39 @@
+{
+  "name": "@p2party/ledger-client",
+  "version": "0.1.0-testnet.0",
+  "private": true,
+  "description": "Native post-quantum ledger transport for ethers and viem",
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test tests/transport.test.mjs",
+    "test:validator": "npm run build && bun test ./tests/live.test.ts"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.11",
+    "ethers": "6.17.0",
+    "typescript": "7.0.2",
+    "viem": "2.58.8"
+  }
+}
