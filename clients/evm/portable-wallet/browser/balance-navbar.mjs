@@ -8,7 +8,7 @@ import {
 } from "./balance.mjs";
 
 // Amount, height and source live in this session only. Signing has no dependency on this component.
-export function installWalletBalance() {
+export function installWalletBalance(onChange = () => {}) {
   const el = (id) => document.getElementById(id);
   const dialog = el("balance-dialog");
   let wallet,
@@ -68,6 +68,7 @@ export function installWalletBalance() {
     el("balance-refresh-help").textContent = hosted
       ? "Opens p2party.com for the same public snapshot everyone receives."
       : "Open the hosted wallet for live refresh and website display, or import a snapshot below.";
+    onChange();
   }
   function cancel() {
     operation?.abort();
@@ -88,6 +89,7 @@ export function installWalletBalance() {
   function record(value, source, description) {
     observation = {
       ...value,
+      report: value,
       source,
       description,
       verifiedReport: isPublicBalance(value) ? value : null,
@@ -137,13 +139,15 @@ export function installWalletBalance() {
       render();
     }
   });
-  el("balance-refresh").addEventListener("click", () => {
-    run(
+  function refresh() {
+    if (!wallet || operation) return;
+    return run(
       (signal) => requestPublicSnapshot(wallet, observation, signal),
       "Public snapshot from p2party.com",
       "This browser matched your receive requests against the published snapshot. The network may have advanced.",
     );
-  });
+  }
+  el("balance-refresh").addEventListener("click", refresh);
   el("balance-present").addEventListener("click", () => {
     const report = observation?.verifiedReport;
     if (!report || stale || !publicBridgeAvailable()) return;
@@ -171,6 +175,13 @@ export function installWalletBalance() {
   });
   return {
     lock: clear,
+    refresh,
+    current: () => ({
+      report: observation?.report,
+      stale,
+      source: observation?.source,
+      busy: Boolean(operation),
+    }),
     unlock(session) {
       clear();
       wallet = session;

@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { CHAIN, GENESIS } from "../format.mjs";
+import { catchupPage } from "./test-catchup-page.mjs";
 import { CANONICAL_GENESIS } from "../snapshot.mjs";
 import { assertVerified } from "../native-test-helpers.mjs";
 
@@ -182,15 +183,12 @@ async function hostedBalance(context, html, filename, archive, code, accounts) {
       "utf8",
     ),
   );
-  const payload = {
-    type: "p2party.wallet.snapshot.v1",
-    chainId: CHAIN,
-    genesisHash: CANONICAL_GENESIS,
-    fromHeight: checkpoint.snapshot.height,
-    headHeight: checkpoint.snapshot.height,
-    receipts: [],
-    snapshot: checkpoint.snapshot,
-  };
+  const history = JSON.parse(
+    await readFile(
+      new URL("./checkpoint-history.json", import.meta.url),
+      "utf8",
+    ),
+  );
   const requests = [];
   let failRefresh = false;
   const nonce = randomBytes(32).toString("hex");
@@ -208,15 +206,11 @@ async function hostedBalance(context, html, filename, archive, code, accounts) {
     const path = new URL(req.url()).pathname;
     let body;
     if (path === "/wallet/snapshot/") {
-      const reply = failRefresh
-        ? { type: "p2party.wallet.snapshot.error.v1" }
-        : payload;
-      body =
-        "<script>opener.postMessage(" +
-        JSON.stringify(reply) +
-        "," +
-        JSON.stringify(signerOrigin) +
-        ");<\/script>";
+      body = catchupPage({
+        snapshot: checkpoint.snapshot,
+        headMoveId: history.at(-1).id,
+        fail: failRefresh,
+      });
     } else if (path === "/wallet/") {
       body =
         '<pre id="offer"></pre><button id="accept">Confirm display</button><script>' +

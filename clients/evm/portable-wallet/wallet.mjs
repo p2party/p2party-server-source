@@ -8,7 +8,7 @@ import {
   timingSafeEqual,
   verify,
 } from "node:crypto";
-import { base64url, CompactEncrypt } from "jose";
+import { base64url } from "jose";
 import {
   receiveOwner,
   readHandle,
@@ -21,7 +21,7 @@ import {
   CHAIN,
   GENESIS,
   PROOF_CHAIN,
-  HEADER,
+  packArchive,
   ALGORITHMS,
   MAX_RECORDS,
   WalletError,
@@ -188,27 +188,21 @@ export class Wallet {
   }
   async backup() {
     const revision = this.#entries.length;
-    const source = Buffer.from(
-      JSON.stringify({
+    const archive = await packArchive(
+      {
         version: 1,
         chainId: CHAIN,
         genesis: GENESIS,
         walletId: this.#id,
         revision,
         receives: this.#entries.map(serialized),
-      }),
+      },
+      this.#key,
     );
-    try {
-      const archive = await new CompactEncrypt(source)
-        .setProtectedHeader(HEADER)
-        .encrypt(this.#key);
-      return {
-        archive,
-        filename: "p2party-testnet1-" + this.#id + "-r" + revision + ".jwe",
-      };
-    } finally {
-      source.fill(0);
-    }
+    return {
+      archive,
+      filename: "p2party-testnet1-" + this.#id + "-r" + revision + ".jwe",
+    };
   }
   async confirm(archive, code) {
     const recovered = await Wallet.restore(archive, code);

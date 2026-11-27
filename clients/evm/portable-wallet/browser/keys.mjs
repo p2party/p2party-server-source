@@ -2,7 +2,7 @@
 // parameterless algorithm OIDs are fixed by RFC 9881 §5 (ML) and RFC 9909 §5 (SLH).
 import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
 import { slh_dsa_sha2_192s } from "@noble/post-quantum/slh-dsa.js";
-import { hexToBytes } from "@noble/hashes/utils.js";
+import { hexToBytes, concatBytes } from "@noble/hashes/utils.js";
 
 const ML_PREFIX = hexToBytes("020100300b0609608648016503040312");
 const SLH_PREFIX = hexToBytes("020100300b0609608648016503040316");
@@ -89,4 +89,34 @@ export function importSigner(der, suite) {
       secretKey.fill(0);
     },
   };
+}
+
+// RFC 9881 seed-only ML-DSA and RFC 9909 raw expanded SLH-DSA inside PKCS#8.
+// The outer DER lengths, version and OIDs are fixed for these two standard representations.
+export function generateNativeReceive(suite) {
+  if (suite !== 1 && suite !== 2) throw new Error("Unsupported signing suite.");
+  const algorithm = suite === 1 ? ml_dsa65 : slh_dsa_sha2_192s;
+  const seed = crypto.getRandomValues(new Uint8Array(algorithm.lengths.seed));
+  let keys;
+  try {
+    keys = algorithm.keygen(seed);
+    const der =
+      suite === 1
+        ? concatBytes(
+            hexToBytes("3034"),
+            ML_PREFIX,
+            hexToBytes("04228020"),
+            seed,
+          )
+        : concatBytes(
+            hexToBytes("3072"),
+            SLH_PREFIX,
+            hexToBytes("0460"),
+            keys.secretKey,
+          );
+    return { der, publicKey: keys.publicKey };
+  } finally {
+    seed.fill(0);
+    keys?.secretKey.fill(0);
+  }
 }

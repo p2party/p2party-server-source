@@ -14,6 +14,8 @@ import {
   WalletError,
 } from "../format.mjs";
 import { reportedBalance, snapshotFingerprint } from "../snapshot.mjs";
+import { prepareKit } from "./receive-kit.mjs";
+import { serializePaymentRequest } from "./receive.mjs";
 import { importSigner } from "./keys.mjs";
 
 function release(records) {
@@ -27,7 +29,6 @@ function release(records) {
 // Kept in one tab's JS memory only. Loading a replacement fails atomically at the caller.
 export async function restoreWallet(archive, code, progress) {
   const { key, data } = await unpackArchive(archive, code);
-  key.fill(0);
   const records = new Map();
   try {
     for (const item of data.receives) {
@@ -59,15 +60,56 @@ export async function restoreWallet(archive, code, progress) {
       progress?.(records.size, data.revision);
     }
   } catch {
+    key.fill(0);
     release(records);
     throw new WalletError(
       "Could not verify the keys and receive requests in this backup.",
     );
   }
-  return openedWallet(records, data.walletId, data.revision);
+  return openedWallet(records, data.walletId, data.revision, { key, archive });
 }
 
-function openedWallet(records, walletId, revision) {
+export function prepareNewWallet(suite) {
+  return prepareKit(suite, null, restoreWallet);
+}
+
+function openedWallet(records, walletId, revision, base) {
+  let pending = null,
+    preparing = false;
+  function lock() {
+    const stage = pending;
+    pending = null;
+    stage?.cancel();
+    base.key.fill(0);
+    base.archive = null;
+    release(records);
+  }
+  async function prepareReceive(suite) {
+    if (!records.size)
+      throw new WalletError("Open the wallet to create a receive request.");
+    if (pending || preparing)
+      throw new WalletError("Finish or cancel the current backup first.");
+    preparing = true;
+    try {
+      const stage = await prepareKit(
+        suite,
+        base,
+        restoreWallet,
+        (confirmed) => {
+          pending = null;
+          if (confirmed) lock();
+        },
+      );
+      if (!records.size) {
+        stage.cancel();
+        throw new WalletError("The wallet was closed.");
+      }
+      pending = stage;
+      return stage;
+    } finally {
+      preparing = false;
+    }
+  }
   const accounts = Object.freeze(
     [...records.values()].map(({ descriptor }) => descriptor),
   );
@@ -107,6 +149,11 @@ function openedWallet(records, walletId, revision) {
     revision,
     walletId,
     reviewTransfer,
+    prepareReceive,
+    paymentRequest(commitment) {
+      const { suite } = entry(commitment).descriptor;
+      return serializePaymentRequest({ suite, commitment });
+    },
     balance(snapshot) {
       if (records.size === 0)
         throw new WalletError("Open your wallet to check its balance.");
@@ -146,8 +193,6 @@ function openedWallet(records, walletId, revision) {
         BigInt(request.expiryHeight),
       );
     },
-    lock() {
-      release(records);
-    },
+    lock,
   });
 }

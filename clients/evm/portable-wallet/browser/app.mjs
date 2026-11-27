@@ -1,3 +1,4 @@
+import { installReceiveUI } from "./receive-ui.mjs";
 import { installWalletBalance } from "./balance-navbar.mjs";
 import { installLegacyImport } from "./legacy-browser.mjs";
 import { restoreWallet } from "./core.mjs";
@@ -11,7 +12,8 @@ if (window.top !== window.self) {
 }
 function startWalletPage() {
   installLegacyImport();
-  const balance = installWalletBalance();
+  let receive, currentArchive;
+  const balance = installWalletBalance(() => receive?.observe());
   const el = (id) => document.getElementById(id);
   const show = (id, yes) => {
     el(id).hidden = !yes;
@@ -102,6 +104,8 @@ function startWalletPage() {
     busy = false;
     wallet?.lock();
     wallet = null;
+    currentArchive = null;
+    receive?.reset();
     balance.lock();
     for (const url of downloads) URL.revokeObjectURL(url);
     downloads.clear();
@@ -157,6 +161,7 @@ function startWalletPage() {
     list.append(dt, dd);
   }
   function displayWallet() {
+    receive?.setWallet(wallet);
     balance.unlock(wallet);
     show("restore", false);
     show("overview", true);
@@ -201,7 +206,7 @@ function startWalletPage() {
       accounts.append(item);
     }
     savedControls();
-    el("title").focus();
+    el(location.hash === "#receive" ? "receive-heading" : "title").focus();
   }
   el("archive").addEventListener("change", () => {
     try {
@@ -225,6 +230,7 @@ function startWalletPage() {
     el("drop").classList.remove("is-over"),
   );
   document.addEventListener("drop", (event) => {
+    if (event.target.closest?.("#receive, #legacy-panel")) return;
     event.preventDefault();
     el("drop").classList.remove("is-over");
     if (wallet || busy) return;
@@ -242,7 +248,13 @@ function startWalletPage() {
     }
   });
   document.addEventListener("paste", (event) => {
-    if (wallet || busy || event.target === el("code")) return;
+    if (
+      wallet ||
+      busy ||
+      event.target === el("code") ||
+      event.target.closest?.("#receive, #legacy-panel")
+    )
+      return;
     const data = event.clipboardData;
     if (!data) return;
     event.preventDefault();
@@ -326,6 +338,8 @@ function startWalletPage() {
             "Wallet restored for this session. This browser could not save the encrypted backup.";
         }
       }
+      receive?.reset();
+      currentArchive = archive;
       wallet = restored;
       selection = null;
       el("restore-form").reset();
@@ -340,6 +354,29 @@ function startWalletPage() {
     resetPayment();
     status("");
   });
+  function showReview(request) {
+    resetPayment();
+    el("payment-panel").open = true;
+    const info = wallet.reviewTransfer(request);
+    reviewed = request;
+    const list = el("review-details");
+    for (const [label, value] of [
+      ["Amount", info.weight + " P2PARTY"],
+      ["Recipient commitment", info.recipient.commitment],
+      ["Recipient suite", suiteName(info.recipient.suite)],
+      ["Recipient read handle", info.readHandle],
+      ["Source commitment", info.source],
+      ["Source suite", suiteName(info.sourceSuite)],
+      ["Input unit", info.inputId],
+      ["Inclusive expiry height", info.expiry],
+      ["Chain ID", info.chainId],
+      ["Genesis fingerprint", info.genesis],
+    ])
+      detailsRow(list, label, value);
+    show("review-panel", true);
+    el("review-heading").focus();
+    status("");
+  }
   el("review-form").addEventListener(
     "submit",
     run(async (token) => {
@@ -354,25 +391,7 @@ function startWalletPage() {
         throw Error("Choose a valid JSON payment request.");
       }
       if (token !== generation || el("request").files[0] !== file) return;
-      const info = wallet.reviewTransfer(request);
-      reviewed = request;
-      const list = el("review-details");
-      for (const [label, value] of [
-        ["Amount", info.weight + " P2PARTY"],
-        ["Recipient commitment", info.recipient.commitment],
-        ["Recipient suite", suiteName(info.recipient.suite)],
-        ["Recipient read handle", info.readHandle],
-        ["Source commitment", info.source],
-        ["Source suite", suiteName(info.sourceSuite)],
-        ["Input unit", info.inputId],
-        ["Inclusive expiry height", info.expiry],
-        ["Chain ID", info.chainId],
-        ["Genesis fingerprint", info.genesis],
-      ])
-        detailsRow(list, label, value);
-      show("review-panel", true);
-      el("review-heading").focus();
-      status("");
+      showReview(request);
     }),
   );
   el("cancel").addEventListener("click", () => {
@@ -390,6 +409,7 @@ function startWalletPage() {
       const result = await wallet.signPayment(request);
       if (token !== generation || reviewed !== request) return;
       const { chainId, inputId, moveId, outputId, recipient, wire } = result;
+      receive?.markSigned(inputId);
       signed = { chainId, inputId, moveId, outputId, recipient, wire };
       reviewed = null;
       show("review-panel", false);
@@ -415,6 +435,35 @@ function startWalletPage() {
       downloads.delete(url);
     }, 10000);
     status("Signed payment download started.");
+  });
+  receive = installReceiveUI({
+    balance,
+    review: showReview,
+    resetPayment,
+    isRemembered: () =>
+      Boolean(currentArchive && currentArchive === loadSaved()),
+    adopt(next, archive, remember) {
+      generation++;
+      busy = false;
+      const previousRemembered =
+        currentArchive && currentArchive === loadSaved();
+      let message = "Backup verified. Your public request is ready.";
+      try {
+        if (remember) localStorage.setItem(storedKey, archive);
+        else if (previousRemembered) localStorage.removeItem(storedKey);
+      } catch {
+        message += " This browser could not update its saved encrypted backup.";
+      }
+      wallet = next;
+      currentArchive = archive;
+      selection = null;
+      el("restore-form").reset();
+      el("chosen").textContent = "";
+      el("review-form").reset();
+      resetPayment();
+      displayWallet();
+      status(message);
+    },
   });
   window.addEventListener("pagehide", () => lock("", false));
   window.addEventListener("pageshow", (event) => {

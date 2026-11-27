@@ -28,7 +28,7 @@
           />p2party</span
         >
         <nav class="wallet-nav" aria-label="Wallet">
-          <span class="network">Testnet 1</span
+          <a href="#receive">Receive</a> <span class="network">Testnet 1</span
           ><button
             id="balance-button"
             type="button"
@@ -233,6 +233,118 @@
           </div>
         </details>
       </section>
+      <section id="receive" class="card" aria-labelledby="receive-heading">
+        <h2 id="receive-heading" tabindex="-1">Receive P2PARTY</h2>
+        <p>
+          Give the payer a saved request for one Testnet 1 unit. They can pay
+          while your wallet is closed. Restore your latest backup and sync to
+          see what arrived.
+        </p>
+        <div id="receive-start">
+          <label for="receive-suite">Signing suite for the new request</label>
+          <select id="receive-suite">
+            <option value="1">ML-DSA-65</option>
+            <option value="2">SLH-DSA-SHA2-192s</option>
+          </select>
+          <div class="actions">
+            <button type="button" id="create-receive">Create a wallet</button
+            ><a href="#restore" id="receive-restore">Restore wallet</a>
+          </div>
+        </div>
+        <section id="receive-kit" hidden aria-labelledby="receive-kit-heading">
+          <h3 id="receive-kit-heading" tabindex="-1">
+            Save and check your backup
+          </h3>
+          <p id="kit-help"></p>
+          <a id="kit-download" class="download-link" download
+            >Download encrypted backup</a
+          >
+          <div id="new-code-area" hidden>
+            <button
+              type="button"
+              class="secondary"
+              id="show-new-code"
+              aria-expanded="false"
+            >
+              Show recovery code</button
+            ><code id="new-wallet-code" hidden></code>
+          </div>
+          <form id="check-kit" autocomplete="off">
+            <label for="kit-file">Choose the downloaded backup</label>
+            <input
+              id="kit-file"
+              type="file"
+              accept=".jwe,application/octet-stream"
+              required
+            />
+            <label for="kit-code">Saved recovery code</label
+            ><input
+              id="kit-code"
+              type="password"
+              required
+              autocomplete="off"
+              spellcheck="false"
+              autocapitalize="off"
+            />
+            <label class="check"
+              ><input id="kit-remember" type="checkbox" />Remember this
+              encrypted backup on this device</label
+            >
+            <div class="actions">
+              <button type="submit">Check backup and open request</button
+              ><button id="cancel-kit" type="button" class="secondary">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+        <div id="receive-public" hidden>
+          <label for="receive-account">Saved receive request</label
+          ><select id="receive-account"></select>
+          <p id="receive-observation" role="status"></p>
+          <button id="receive-sync" class="secondary" type="button">
+            Sync with validator
+          </button>
+          <p id="receive-offline-help" class="hint" hidden>
+            To check new receipts, open your backup in the
+            <a
+              href="https://p2party.github.io/p2party-server/restore/#receive"
+              target="_blank"
+              rel="noopener noreferrer"
+              >hosted wallet</a
+            >
+            and sync. In this offline copy, you can import a snapshot through
+            Balance to see the units it reports.
+          </p>
+          <div id="request-public-data">
+            <p>
+              Use this request for one payment of 1 P2PARTY. Share only the
+              public request with the payer.
+            </p>
+            <label for="receive-text">Public payment request</label
+            ><textarea
+              id="receive-text"
+              readonly
+              rows="3"
+              spellcheck="false"
+            ></textarea>
+            <div class="actions">
+              <button id="copy-receive" type="button">Copy request</button
+              ><a id="download-receive" download="p2party-payment-request.json"
+                >Download request</a
+              >
+            </div>
+            <details id="receive-qr">
+              <summary>Show payment QR</summary>
+              <img
+                id="request-qr"
+                alt="QR code for the public one-unit payment request"
+              />
+            </details>
+          </div>
+        </div>
+        <p id="receive-status" role="status" aria-live="polite"></p>
+      </section>
       <section
         id="overview"
         class="card"
@@ -258,18 +370,56 @@
             Choose an unsigned Testnet 1 request. You can review the recipient
             and whole-unit amount before signing.
           </p>
-          <form id="review-form" autocomplete="off">
-            <label for="request">Unsigned payment request (.json)</label
-            ><input
-              type="file"
-              id="request"
-              accept=".json,application/json"
+          <form id="compose-form" autocomplete="off">
+            <label for="payer-request"
+              >Public payment request from recipient</label
+            ><textarea
+              id="payer-request"
+              rows="3"
               required
+              autocomplete="off"
+              spellcheck="false"
+            ></textarea>
+            <label for="payer-source">Unit to spend</label
+            ><select id="payer-source">
+              <option value="">Enter unit details</option>
+            </select>
+            <div id="payer-manual">
+              <label for="payer-unit"
+                >Unspent unit JSON from demos_getUnit</label
+              ><textarea
+                id="payer-unit"
+                rows="3"
+                autocomplete="off"
+                spellcheck="false"
+              ></textarea>
+            </div>
+            <label for="payer-expiry">Last valid block height (inclusive)</label
+            ><input
+              id="payer-expiry"
+              type="text"
+              inputmode="numeric"
+              required
+              autocomplete="off"
+              pattern="[0-9]+"
             />
-            <button type="submit" class="secondary" id="review">
-              Review payment
-            </button>
+            <button type="submit" class="secondary">Review this request</button>
           </form>
+          <details id="advanced-payment" open>
+            <summary>Open a prepared transfer file</summary>
+            <form id="review-form" autocomplete="off">
+              <label for="request">Unsigned payment request (.json)</label
+              ><input
+                type="file"
+                id="request"
+                accept=".json,application/json"
+                required
+              />
+              <button type="submit" class="secondary" id="review">
+                Review payment
+              </button>
+            </form>
+          </details>
           <div id="review-panel" hidden>
             <h3 tabindex="-1" id="review-heading">Review this payment</h3>
             <dl id="review-details"></dl>
@@ -289,6 +439,16 @@
             <p>
               Save the signed file to submit it from a connected device. This
               wallet signs offline.
+            </p>
+            <p>
+              On a connected device, submit the file’s signed wire with ethers
+              or viem and check the returned receipt.
+              <a
+                href="https://github.com/p2party/p2party-server/blob/research/portable-spending-wallet/clients/evm/README.md#methods-and-receipts"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Submission and receipt methods</a
+              >
             </p>
             <button id="download" type="button">Download signed payment</button>
           </div>

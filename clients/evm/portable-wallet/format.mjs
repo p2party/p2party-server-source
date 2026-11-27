@@ -1,4 +1,4 @@
-import { base64url, compactDecrypt } from "jose";
+import { base64url, CompactEncrypt, compactDecrypt } from "jose";
 import { readHandle } from "@p2party/ledger-client";
 export const CHAIN =
   "0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73c760";
@@ -47,6 +47,17 @@ export function bytes(value, min, max) {
   if (out.length < min || out.length > max || base64url.encode(out) !== value)
     throw new Error("Invalid encoding");
   return out;
+}
+// Both native and browser writers use the same authenticated envelope and fresh JOSE IV.
+export async function packArchive(data, key) {
+  const plain = new TextEncoder().encode(JSON.stringify(data));
+  try {
+    return await new CompactEncrypt(plain)
+      .setProtectedHeader(HEADER)
+      .encrypt(key);
+  } finally {
+    plain.fill(0);
+  }
 }
 export async function unpackArchive(archive, code) {
   let key, plaintext;

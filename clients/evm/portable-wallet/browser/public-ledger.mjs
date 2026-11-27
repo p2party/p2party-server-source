@@ -1,3 +1,4 @@
+import prefix from "./checkpoint-history.json" with { type: "json" };
 import { transferIds } from "@p2party/ledger-client";
 import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
 import { slh_dsa_sha2_192s } from "@noble/post-quantum/slh-dsa.js";
@@ -67,7 +68,19 @@ function checkPointState(checkpoint) {
     ids.add(entry.id);
     commitments.add(entry.commitment);
   }
-  return { unspent, ids, commitments };
+  const created = new Map(prefix.map((item) => [item.outputId, item.height]));
+  const spentAt = new Map(prefix.map((item) => [item.inputId, item.height]));
+  const spent = new Map(
+    checkpoint.spent.map((item) => [
+      item.commitment,
+      {
+        ...item,
+        createdHeight: created.get(item.id) ?? "0x0",
+        spentHeight: spentAt.get(item.id),
+      },
+    ]),
+  );
+  return { unspent, ids, commitments, created, spent };
 }
 function applyWire(state, wire, height) {
   if (
@@ -77,7 +90,7 @@ function applyWire(state, wire, height) {
   )
     invalid();
   const raw = hexToBytes(wire.slice(2));
-  const { inputId, outputId } = transferIds(wire, CHAIN);
+  const { id: moveId, inputId, outputId } = transferIds(wire, CHAIN);
   const input = state.unspent.get(inputId);
   const suite = SUITES.get(raw[114]);
   if (!input || !suite || input.suite !== raw[114] || !SUITES.has(raw[115]))
@@ -109,6 +122,12 @@ function applyWire(state, wire, height) {
     )
   )
     invalid();
+  state.spent.set(input.commitment, {
+    ...input,
+    createdHeight: state.created.get(input.id) ?? "0x0",
+    spentHeight: hexHeight(height),
+  });
+  state.created.set(outputId, "0x" + height.toString(16));
   state.unspent.delete(inputId);
   state.unspent.set(outputId, {
     id: outputId,
@@ -118,10 +137,96 @@ function applyWire(state, wire, height) {
   });
   state.ids.add(outputId);
   state.commitments.add(destination);
+  return moveId;
 }
 
-// A valid extension authenticates transitions from the shipped checkpoint. Freshness and
-// the choice of single-sequencer history still depend on the reporting public validator.
+const hexHeight = (h) => "0x" + h.toString(16);
+function isHeight(h) {
+  return (
+    typeof h === "string" &&
+    h.length <= 18 &&
+    /^0x(?:0|[1-9a-f][0-9a-f]*)$/.test(h) &&
+    h === hexHeight(BigInt(h)) &&
+    BigInt(h) <= 0x7fff_ffff_ffff_ffffn
+  );
+}
+export function createReplay(checkpoint, headHeight, headMoveId) {
+  if (
+    !isHeight(headHeight) ||
+    BigInt(headHeight) < BigInt(checkpoint.snapshot.height) ||
+    (headMoveId !== null &&
+      (typeof headMoveId !== "string" ||
+        headMoveId.length !== 130 ||
+        !/^0x[0-9a-f]{128}$/.test(headMoveId)))
+  )
+    invalid();
+  let state = checkPointState(checkpoint),
+    height = BigInt(checkpoint.snapshot.height),
+    last = prefix.at(-1).id,
+    busy = false;
+  const target = BigInt(headHeight);
+  return {
+    get height() {
+      return hexHeight(height);
+    },
+    async append(after, wires, signal) {
+      if (
+        !state ||
+        busy ||
+        after !== hexHeight(height) ||
+        !Array.isArray(wires) ||
+        !wires.length ||
+        wires.length > 32 ||
+        height + BigInt(wires.length) > target
+      )
+        invalid();
+      busy = true;
+      try {
+        for (const wire of wires) {
+          signal?.throwIfAborted();
+          last = applyWire(state, wire, ++height);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        signal?.throwIfAborted();
+      } catch (error) {
+        state = null;
+        if (signal?.aborted || error instanceof WalletError) throw error;
+        invalid();
+      } finally {
+        busy = false;
+      }
+    },
+    finish(snapshot) {
+      if (
+        !state ||
+        busy ||
+        height !== target ||
+        snapshot?.height !== headHeight ||
+        (headMoveId !== null && last !== headMoveId)
+      )
+        invalid();
+      reportedBalance(snapshot, []);
+      const verified = {
+        ...checkpoint.snapshot,
+        height: headHeight,
+        units: [...state.unspent.values()],
+      };
+      if (snapshotFingerprint(verified) !== snapshotFingerprint(snapshot))
+        invalid();
+      const evidence = {
+        snapshot: verified,
+        created: state.created,
+        spent: state.spent,
+      };
+      state = null;
+      return evidence;
+    },
+    cancel() {
+      state = null;
+    },
+  };
+}
+// Retain the old single-response validator for version-one clients and regression vectors.
 export async function verifyPublicHistory(checkpoint, response, signal) {
   try {
     if (
@@ -141,37 +246,24 @@ export async function verifyPublicHistory(checkpoint, response, signal) {
       !Array.isArray(response.receipts)
     )
       invalid();
-    reportedBalance(response.snapshot, []);
-    if (response.headHeight !== response.snapshot.height) invalid();
-    const length = BigInt(response.headHeight) - BigInt(response.fromHeight);
-    if (length > BigInt(MAX_MOVES) || response.receipts.length > MAX_MOVES)
-      throw new WalletError(
-        "This history exceeds the wallet's refresh limit. Use a newer verified wallet release or import a trusted replica snapshot.",
-      );
-    if (length !== BigInt(response.receipts.length)) invalid();
-    const state = checkPointState(checkpoint);
-    let height = BigInt(response.fromHeight),
-      size = 0;
-    for (const wire of response.receipts) {
-      if (typeof wire !== "string") invalid();
-      size += wire.length;
-      if (size > LIMIT_BYTES)
-        throw new WalletError(
-          "This history exceeds the wallet's refresh limit. Use a newer verified wallet release or import a trusted replica snapshot.",
-        );
-      signal?.throwIfAborted();
-      applyWire(state, wire, ++height);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    if (response.receipts.length > MAX_MOVES)
+      throw new WalletError("This history exceeds the legacy refresh limit.");
+    const stream = createReplay(checkpoint, response.headHeight, null);
+    let size = 0;
+    for (let i = 0; i < response.receipts.length; i += 32) {
+      const wires = response.receipts.slice(i, i + 32);
+      for (const wire of wires) {
+        if (typeof wire !== "string") invalid();
+        size += wire.length;
+        if (size > LIMIT_BYTES)
+          throw new WalletError(
+            "This history exceeds the legacy refresh limit.",
+          );
+      }
+      await stream.append(stream.height, wires, signal);
     }
     signal?.throwIfAborted();
-    const derived = {
-      ...checkpoint.snapshot,
-      height: response.headHeight,
-      units: [...state.unspent.values()],
-    };
-    if (snapshotFingerprint(derived) !== snapshotFingerprint(response.snapshot))
-      invalid();
-    return derived;
+    return stream.finish(response.snapshot).snapshot;
   } catch (error) {
     if (error instanceof WalletError || signal?.aborted) throw error;
     invalid();

@@ -1,7 +1,25 @@
 import checkpoint from "./balance-checkpoint.json" with { type: "json" };
 import { WalletError, exactFields } from "../format.mjs";
 import { snapshotFingerprint } from "../snapshot.mjs";
-import { verifyPublicHistory } from "./public-ledger.mjs";
+import prefix from "./checkpoint-history.json" with { type: "json" };
+import { catchUpSession } from "./catch-up.mjs";
+import { reconcileReceives } from "./reconcile.mjs";
+const evidenceByReport = new WeakMap();
+export function receiveStatus(report, account) {
+  return (
+    evidenceByReport
+      .get(report)
+      ?.get(account.suite + ":" + account.commitment) ?? {
+      state: "unknown",
+      height: null,
+      verified: false,
+    }
+  );
+}
+function attach(report, wallet, evidence) {
+  evidenceByReport.set(report, reconcileReceives(wallet.accounts, evidence));
+  return report;
+}
 
 // Provenance is local object identity. Imported JSON cannot mark its amount as replay-verified.
 const publicReports = new WeakSet();
@@ -21,10 +39,28 @@ export function publicBridgeAvailable() {
   return globalThis.location?.origin === SIGNER && window.top === window.self;
 }
 export function initialBalance(wallet) {
-  return publicReport({
-    ...wallet.balance(checkpoint.snapshot),
-    observedAt: checkpoint.observedAt,
-  });
+  return attach(
+    publicReport({
+      ...wallet.balance(checkpoint.snapshot),
+      observedAt: checkpoint.observedAt,
+    }),
+    wallet,
+    {
+      snapshot: checkpoint.snapshot,
+      created: new Map(prefix.map((item) => [item.outputId, item.height])),
+      spent: new Map(
+        checkpoint.spent.map((unit) => [
+          unit.commitment,
+          {
+            ...unit,
+            createdHeight:
+              prefix.find((r) => r.outputId === unit.id)?.height ?? "0x0",
+            spentHeight: prefix.find((r) => r.inputId === unit.id)?.height,
+          },
+        ]),
+      ),
+    },
+  );
 }
 function compareHead(before, next) {
   if (!before) return;
@@ -41,7 +77,7 @@ export function readSnapshotFile(wallet, snapshot, previous) {
   const report = wallet.balance(snapshot);
   compareHead(floor, report);
   compareHead(previous, report);
-  return report;
+  return attach(report, wallet, { snapshot });
 }
 
 function openExchange(url, signal, timeout, closeWhenDone, onMessage) {
@@ -80,7 +116,14 @@ function openExchange(url, signal, timeout, closeWhenDone, onMessage) {
     function receive(event) {
       if (event.origin !== SITE || event.source !== popup || done) return;
       try {
-        onMessage(event.data, popup, finish);
+        const work = onMessage(event.data, popup, finish, renew);
+        work?.catch?.((err) =>
+          finish(
+            err instanceof WalletError
+              ? err
+              : new WalletError("The public validator check did not complete."),
+          ),
+        );
       } catch {
         finish(
           new WalletError(
@@ -92,15 +135,20 @@ function openExchange(url, signal, timeout, closeWhenDone, onMessage) {
     window.addEventListener("message", receive);
     signal?.addEventListener("abort", aborted, { once: true });
     if (signal?.aborted) return aborted();
-    timer = setTimeout(
-      () =>
-        finish(
-          new WalletError(
-            "The public balance window expired. Try again or import a snapshot.",
+    function renew() {
+      if (done) return;
+      clearTimeout(timer);
+      timer = setTimeout(
+        () =>
+          finish(
+            new WalletError(
+              "The public balance window expired. Try again or import a snapshot.",
+            ),
           ),
-        ),
-      timeout,
-    );
+        timeout,
+      );
+    }
+    renew();
     poll = setInterval(() => {
       try {
         if (popup.closed)
@@ -120,27 +168,37 @@ function openExchange(url, signal, timeout, closeWhenDone, onMessage) {
   });
 }
 export async function requestPublicSnapshot(wallet, previous, signal) {
-  const payload = await openExchange(
-    SITE + "/wallet/snapshot/",
-    signal,
-    45000,
-    true,
-    (data, popup, finish) => {
-      if (data?.type === "p2party.wallet.snapshot.v1") finish(null, data);
-      if (data?.type === "p2party.wallet.snapshot.error.v1")
-        finish(
-          new WalletError(
-            "The public validator could not supply a current snapshot. The previous balance was kept.",
-          ),
-        );
-    },
-  );
-  const snapshot = await verifyPublicHistory(checkpoint, payload, signal);
+  const session = catchUpSession(checkpoint);
+  let evidence;
+  try {
+    evidence = await openExchange(
+      SITE + "/wallet/snapshot/#catch-up",
+      signal,
+      45000,
+      true,
+      async (data, popup, finish, renew) => {
+        const result = await session.accept(data, signal);
+        if (result.evidence) {
+          finish(null, result.evidence);
+          return;
+        }
+        // Flow-control messages identify only the generic stream and public block height.
+        popup.postMessage(result.ack, SITE);
+        renew();
+      },
+    );
+  } finally {
+    session.cancel();
+  }
   signal?.throwIfAborted();
-  return publicReport({
-    ...readSnapshotFile(wallet, snapshot, previous),
-    observedAt: new Date().toISOString(),
-  });
+  const checked = wallet.balance(evidence.snapshot);
+  compareHead(floor, checked);
+  compareHead(previous, checked);
+  return attach(
+    publicReport({ ...checked, observedAt: new Date().toISOString() }),
+    wallet,
+    evidence,
+  );
 }
 export async function presentPublicBalance(report, signal) {
   if (!isPublicBalance(report))

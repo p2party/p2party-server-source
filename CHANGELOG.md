@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Create fresh browser wallets and one-use Testnet 1 payment requests with checked encrypted backups, public QR codes and verified native input selection. Reconnecting wallets scan paginated public receipts and distinguish live, spent and unseen requests at a specific height. [Receiving and offline catch-up](clients/evm/portable-wallet/browser/README.md#receive-a-payment-including-while-offline)
+
 - Show the restored browser wallet’s unspent total and observation height in its navigation. Live refresh validates a whole public snapshot and each later native signature from a pinned height without querying any individual address. Sharing a total with the public site requires separate consent. [Balance privacy and verification](clients/evm/portable-wallet/browser/README.md#balance-in-the-wallet-and-site-navigation)
 
 - Add a self-contained browser restore tool for existing native Testnet 1 backups. It restores ML-DSA-65 and SLH-DSA-SHA2-192s from a file or paste, checks the original commitments and signs native payments offline. [Browser tool and build](clients/evm/portable-wallet/browser/README.md)

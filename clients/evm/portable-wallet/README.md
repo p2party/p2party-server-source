@@ -10,7 +10,7 @@ The restored wallet immediately shows the total reported at its included checkpo
 
 The optional **Remember encrypted backup** setting saves the verified ciphertext in this browser. On the next visit, enter just the recovery code. Use **Forget** to remove the saved file. By default, reselect the file each time. The code, opened signing keys, nonces and signed transfers stay out of persistent browser storage. Locking the wallet, leaving the page or reloading clears the active signer.
 
-The local companion below can also create wallets, add receive requests, check a trusted replica’s balance snapshot and migrate original receive folders.
+You can also create a wallet and issue new one-time payment requests entirely in the standalone browser. The local companion provides a second way to create wallets, export checked backups and migrate multiple original receive folders. [Receive while offline and catch up later](browser/README.md#receive-a-payment-including-while-offline)
 
 ## Start the local companion
 

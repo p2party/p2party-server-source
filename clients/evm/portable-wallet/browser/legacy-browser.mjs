@@ -1,6 +1,6 @@
-import { CompactEncrypt, base64url } from "jose";
+import { base64url } from "jose";
 import { receiveOwner } from "@p2party/ledger-client";
-import { CHAIN, GENESIS, HEADER } from "../format.mjs";
+import { CHAIN, GENESIS, packArchive } from "../format.mjs";
 import { importSigner } from "./keys.mjs";
 
 // A legacy receive folder represents one unit. Compare its independently
@@ -29,14 +29,13 @@ export async function convertLegacy(privateDer, nonce, expected) {
   if (!signer)
     throw Error("This file is not a supported Testnet 1 spending key.");
   const key = crypto.getRandomValues(new Uint8Array(32));
-  let plain;
   try {
     const { commitment, suite } = receiveOwner(signer, nonce);
     if (commitment !== expected)
       throw Error("These files do not open that receive commitment.");
     const walletId = crypto.randomUUID();
-    plain = new TextEncoder().encode(
-      JSON.stringify({
+    const archive = await packArchive(
+      {
         version: 1,
         chainId: CHAIN,
         genesis: GENESIS,
@@ -50,11 +49,9 @@ export async function convertLegacy(privateDer, nonce, expected) {
             nonce: base64url.encode(nonce),
           },
         ],
-      }),
+      },
+      key,
     );
-    const archive = await new CompactEncrypt(plain)
-      .setProtectedHeader(HEADER)
-      .encrypt(key);
     return {
       archive,
       code: "P2W1-" + base64url.encode(key),
@@ -63,7 +60,6 @@ export async function convertLegacy(privateDer, nonce, expected) {
   } finally {
     signer.lock();
     key.fill(0);
-    plain?.fill(0);
   }
 }
 

@@ -54,16 +54,23 @@ const licensePaths = {
   "@noble/hashes": "LICENSE",
   "@noble/curves": "LICENSE",
   jose: "LICENSE.md",
+  qr: "LICENSE",
 };
 const licenses = [];
 for (const [name, file] of Object.entries(licensePaths))
   licenses.push(
     name + "\n" + (await source("../node_modules/" + name + "/" + file)),
   );
+licenses.push(
+  "qr (additional license)\n" +
+    (await source("../node_modules/qr/LICENSE-MIT")),
+);
 if (licenses.some((s) => s.includes("-->")))
   throw new Error("Invalid license delimiter.");
 html +=
-  "\n<!-- Bundled dependency licenses\n" + licenses.join("\n\n") + "\n-->\n";
+  "\n<!-- Bundled dependency licenses\n" +
+  licenses.map((license) => license.replace(/[ \t]+$/gm, "")).join("\n\n") +
+  "\n-->\n";
 await writeFile(local("./restore-wallet.html"), html);
 const checksum = hash(html, "hex") + "  restore-wallet.html\n";
 await writeFile(local("./restore-wallet.html.sha256"), checksum);
