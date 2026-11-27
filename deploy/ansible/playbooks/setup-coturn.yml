@@ -253,6 +253,9 @@
         - /etc/logrotate.d/coturn
         - /var/log/turnserver
 
+    - name: Install the service capability required by the TLS listener
+      import_tasks: "{{ playbook_dir }}/../tasks/coturn-service-capability.yml"
+
     - name: Enable and start coturn
       systemd:
         name: coturn

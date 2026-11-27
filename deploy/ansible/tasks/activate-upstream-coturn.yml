@@ -25,6 +25,9 @@
   register: old_coturn
   changed_when: false
 
+- name: Install the service capability required by the TLS listener
+  import_tasks: "{{ playbook_dir }}/../tasks/coturn-service-capability.yml"
+
 - name: Check the release metadata before touching the active service
   shell: |
     set -eu
@@ -111,7 +114,7 @@
         name: coturn
         daemon_reload: true
         state: restarted
-      when: old_coturn.stdout != coturn_new_version or coturn_directives.changed
+      when: old_coturn.stdout != coturn_new_version or coturn_directives.changed or coturn_service_capability.changed
 
     - name: Verify running executable, TLS handshake and STUN binding
       shell: |
