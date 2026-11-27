@@ -16,12 +16,24 @@ import type {
 export const pingMilliseconds = 20000;
 
 const configuredPort = process.env.PORT;
-const port =
-  configuredPort === undefined ? 3001 : Number.parseInt(configuredPort, 10);
-if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
+const port = configuredPort === undefined ? 3001 : Number(configuredPort);
+if (
+  (configuredPort !== undefined && !/^\d+$/.test(configuredPort)) ||
+  !Number.isSafeInteger(port) ||
+  port < 1 ||
+  port > 65535
+)
   throw new Error("PORT must be an integer between 1 and 65535");
 const signalingHost = requireSignalingHost(process.env.SIGNALING_HOST);
 assertSecureTurnSecret(process.env.COTURN_SECRET);
+
+// The service manager loads the staged EnvironmentFile and runs this exact
+// binary as the worker. Module initialization also validates the database
+// URL, certificate readability and admission limits without opening a socket.
+if (process.argv[2] === "--check-config") {
+  console.log("p2party: configuration valid");
+  process.exit(0);
+}
 
 const events: P2PartyWSEvents = {
   // Peers appear in the journal only as per-boot tags, never by stable id.

@@ -69,7 +69,7 @@ interface PlaybookTask {
   file?: Record<string, unknown>;
   command?: { argv?: string[] };
   slurp?: Record<string, unknown>;
-  loop?: string[];
+  loop?: string[] | string;
   vars?: Record<string, string>;
   template?: Record<string, unknown>;
   copy?: Record<string, unknown>;
@@ -162,6 +162,8 @@ describe("production deployment contract", () => {
       "Copy the Prisma config",
       "Stage the compiled binary",
       "Stage the signaling environment file",
+      "Validate the staged environment as the signaling worker",
+      "Stage the private migration environment",
       "Stage the systemd unit files",
       "Validate the candidate Caddy configuration",
     ])
@@ -171,9 +173,9 @@ describe("production deployment contract", () => {
       ({ name }) => name === "Report that preparing the release failed",
     )?.fail?.msg;
     expect(preparedFailure).toContain(
-      "Production is still running the previous release, untouched.",
+      "Preparation failed before this run stopped any signaling worker",
     );
-    expect(preparedFailure).toContain("an earlier deploy had already stopped");
+    expect(preparedFailure).toContain("An earlier deploy left");
 
     // Every installed unit, the legacy cloud-init name included, is stopped
     // and disabled: Restart=always does not restart a stopped unit and a
@@ -292,6 +294,69 @@ describe("production deployment contract", () => {
     });
   });
 
+  test("systemd validates the staged configuration and bounds all migration processes", () => {
+    const play = playWithTask(deploy, "Apply migrations against Postgres");
+    expect(play.vars?.release_staging).toBe("/var/lib/p2party-release-staging");
+    const directory = task(play, "Ensure the release staging directory exists");
+    expect(directory.file).toMatchObject({
+      owner: "root",
+      group: "{{ app.group }}",
+      mode: "0710",
+    });
+    expect(task(play, "Stage the compiled binary").copy?.owner).toBe("root");
+    const validate = task(
+      play,
+      "Validate the staged environment as the signaling worker",
+    );
+    const migrate = task(play, "Apply migrations against Postgres");
+    for (const [unit, envFile] of [
+      [validate, ".env"],
+      [migrate, "migration.env"],
+    ] as const) {
+      const argv = unit.command?.argv ?? [];
+      expect(argv[0]).toBe("/usr/bin/systemd-run");
+      expect(argv).toContain("--uid={{ app.user }}");
+      expect(argv).toContain("--gid={{ app.group }}");
+      expect(argv).toContain(
+        `--property=EnvironmentFile={{ release_staging }}/${envFile}`,
+      );
+      expect(argv).toContain("--wait");
+      expect(argv).toContain("--pipe");
+      expect(unit.environment).toBeUndefined();
+    }
+    expect(validate.command?.argv?.slice(-3)).toEqual([
+      "--",
+      "{{ release_staging }}/p2party-server",
+      "--check-config",
+    ]);
+    expect(validate.command?.argv).toContain("--property=PrivateNetwork=yes");
+    expect(validate.loop).toBe("{{ signaling_instance_ports }}");
+    for (const name of [
+      "Stage the signaling environment file",
+      "Stage the private migration environment",
+    ]) {
+      const staged = task(play, name);
+      expect(staged.template).toMatchObject({
+        owner: "root",
+        group: "root",
+        mode: "0600",
+      });
+      expect(staged.diff).toBe(false);
+    }
+    for (const bound of [
+      "RuntimeMaxSec=300s",
+      "TimeoutStopSec=10s",
+      "KillMode=control-group",
+    ])
+      expect(migrate.command?.argv).toContain(`--property=${bound}`);
+    const migrationEnv = readAnsible("templates/migration.env.j2");
+    expect(migrationEnv).toContain("CHECKPOINT_DISABLE=1");
+    expect(migrationEnv).toContain(
+      "DATABASE_URL={{ postgres_connection_url }}&options=",
+    );
+    expect(migrate.command?.argv).toContain("--no-env-file");
+  });
+
   test("initial-setup refuses to start signaling services while a deploy is unfinished", () => {
     const deployPlay = playWithTask(
       deploy,
@@ -329,8 +394,11 @@ describe("production deployment contract", () => {
 
   test("every provisioning path installs verified PostgreSQL TLS ahead of client cutover", () => {
     expect(productionVars).toContain("ssl_mode: verify-full");
+    expect(productionVars).toContain(
+      "sslrootcert={{ database.ssl_root_cert | urlencode }}",
+    );
     expect(signalingEnvironment).toContain(
-      "sslrootcert={{ database.ssl_root_cert }}",
+      "DATABASE_URL={{ postgres_connection_url }}",
     );
     expect(signalingEnvironment).toContain("TRUST_LOCAL_PROXY=true");
     expect(signalingEnvironment).toContain(
@@ -888,7 +956,9 @@ describe("production deployment contract", () => {
     expect(deploy).toContain(
       '"{{ migration_tooling }}/node_modules/prisma/build/index.js"',
     );
-    expect(deploy.slice(migrate)).toContain('chdir: "{{ app.home }}/server"');
+    expect(deploy.slice(migrate)).toContain(
+      "--property=WorkingDirectory={{ app.home }}/server",
+    );
     expect(deploy).not.toContain("bunx prisma@");
     expect(deploy).toContain('dest: "{{ app.home }}/server/prisma.config.ts"');
     expect(deploy).toContain(
@@ -1072,6 +1142,48 @@ const rootExecutions = (files: { file: string; plays: Raw[] }[]): string[] => {
       for (const [key, args] of Object.entries(t)) {
         // The program, its arguments and its directory, in any position, and
         // any module's `validate` command.
+        // systemd-run drops the user and group before executing the payload.
+        // Only recognize these precise manager options; an unexpected option
+        // or a shell around the command still receives the ordinary check.
+        if (
+          /^(ansible\.(builtin|legacy)\.)?command$/.test(key) &&
+          args &&
+          typeof args === "object" &&
+          "argv" in args &&
+          Array.isArray(args.argv)
+        ) {
+          const argv = args.argv as string[];
+          const delimiter = argv.indexOf("--");
+          const options = argv.slice(1, delimiter);
+          if (
+            argv[0] === "/usr/bin/systemd-run" &&
+            delimiter > 1 &&
+            options.includes("--uid={{ app.user }}") &&
+            options.includes("--gid={{ app.group }}") &&
+            options.every(
+              (option) =>
+                [
+                  "--quiet",
+                  "--wait",
+                  "--pipe",
+                  "--collect",
+                  "--uid={{ app.user }}",
+                  "--gid={{ app.group }}",
+                  "--property=EnvironmentFile={{ release_staging }}/.env",
+                  "--property=EnvironmentFile={{ release_staging }}/migration.env",
+                  "--property=WorkingDirectory={{ app.home }}/server",
+                  "--property=PrivateNetwork=yes",
+                  "--property=KillMode=control-group",
+                  "--setenv=PORT={{ item }}",
+                  "--setenv=PATH={{ app.home }}/.bun/bin:/usr/local/bin:/usr/bin:/bin",
+                ].includes(option) ||
+                /^--property=(RuntimeMaxSec|TimeoutStopSec)=[1-9][0-9]*s$/.test(
+                  option,
+                ),
+            )
+          )
+            continue;
+        }
         const runs = RUNS.test(key)
           ? JSON.stringify(args)
           : typeof args === "object" && args !== null && "validate" in args

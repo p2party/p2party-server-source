@@ -144,6 +144,44 @@ describeWithThrowawayPostgres("one-time re-key of stored identities", () => {
     );
   });
 
+  test("the deployed Prisma connection stops waiting for a table lock", async () => {
+    database = await freshDatabase(migrationNames.slice(0, 2));
+    const migrationEnv = readFileSync(
+      join(repositoryRoot, "deploy/ansible/templates/migration.env.j2"),
+      "utf8",
+    );
+    const options = /&options=([^\n]+)/.exec(migrationEnv)?.[1];
+    expect(decodeURIComponent(options ?? "")).toBe(
+      "-c lock_timeout=10s -c statement_timeout=120s",
+    );
+    await database.client.query("BEGIN");
+    await database.client.query(
+      'LOCK TABLE "PendingSignal" IN ACCESS EXCLUSIVE MODE',
+    );
+    // Release even if a future engine silently ignores startup options.
+    const client = database.client;
+    const release = setTimeout(() => {
+      void client.query("ROLLBACK");
+    }, 22_000);
+    try {
+      const result = await prismaMigrate(
+        `${database.url}&options=${options}`,
+        migrationNames,
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toMatch(/lock timeout/i);
+      const failed = await client.query(
+        'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL',
+      );
+      expect(failed.rows.map((row) => row.migration_name)).toEqual([
+        migrationNames[2],
+      ]);
+    } finally {
+      clearTimeout(release);
+      await client.query("ROLLBACK");
+    }
+  }, 35_000);
+
   test("startup re-keys every old identity before accepting connections", async () => {
     database = await freshDatabase(before);
     const { old, derived, nonCanonical } = await seed(database.client);

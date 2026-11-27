@@ -9,7 +9,7 @@ import type { PrismaConfig } from "prisma/config";
  * The fallback matters: `prisma generate` only reads the schema and never
  * opens a connection, so it must not require a live DATABASE_URL. `migrate`
  * does connect, and is always run with the real value (deploy.yml passes it in
- * the task environment). A placeholder here fails loudly at connect time
+ * the migration service’s EnvironmentFile). A placeholder here fails loudly at connect time
  * rather than silently pointing somewhere real.
  *
  * The import is `import type` and the default export is a plain object ON

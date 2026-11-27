@@ -20,15 +20,19 @@ TLS, then on the signaling host:
 1. prepares the release while the old one keeps serving: installs migration
    tooling from this release's `package.json` and `bun.lock` (a registry
    fetch), copies the schema and migrations, stages the new binary, its
-   environment file and its units in `~p2party/server/release-staging/`, and
-   renders and validates a candidate Caddy configuration. Nothing the running
-   workers read changes. If any of this fails, the play ends with "Report that
-   preparing the release failed" and production is still running the previous
-   release, untouched;
+   environment and units in `/var/lib/p2party-release-staging/`, and
+   validates the candidate Caddy configuration. For each configured port,
+   systemd loads the staged environment and runs the staged binary's
+   `--check-config` as the service account with network access isolated.
+   A failure stops the deploy here. Check the workers' current health and
+   the failed task. Earlier TLS provisioning may already have run;
 2. stops and disables every signaling worker (`p2party-signaling*.service`), so
    neither `Restart=always` nor a reboot can start one while the schema changes,
    and writes the marker `/var/lib/p2party-migration-failed` (below);
-3. applies pending migrations;
+3. applies pending migrations as the service account. PostgreSQL allows 10
+   seconds to acquire a lock and 120 seconds for each statement. systemd
+   allows 300 seconds for the full CLI run, then terminates the process group
+   and kills any survivors after 10 seconds;
 4. only if they succeed, installs the staged binary, environment file and
    units, removes the marker, installs the Caddy configuration, then enables and
    starts the desired workers and verifies their version through Caddy.
@@ -94,9 +98,12 @@ this order, and compares the staged binary afterwards:
 
 Then, in the deploy play's prepare block, after the binary is staged and before
 any worker is stopped, the staged file's SHA-256 (read with `stat`, symlinks not
-followed) must equal the built binary's. Nothing staged is executed on the
-host: a worker's account owns the staging directory's parent, so running it,
-as root above all, would run whatever was put there.
+followed) must equal the built binary's. Root owns the staging directory and
+its parent. The service account can traverse the directory and execute the
+binary. systemd reads the root-only environment file before starting it.
+Configuration validation checks the PostgreSQL URL and CA file, signing
+authority, TURN secret length when configured, port and admission limits.
+The check exits before opening a connection or changing the schema.
 
 To install the pinned Bun on the signaling host, download the release zip for
 its architecture and check it before unpacking. The SHA-256 values for
@@ -211,9 +218,13 @@ When `prisma migrate deploy` fails or is interrupted, the play ends with
 "Report the failed migration and how to recover", whose message is the steps
 below. Every signaling worker is then stopped and disabled, and the previous
 binary is still in place, so nothing serves. The migrate task is hidden from the
-Ansible output (`no_log`: its environment holds the connection string), so the
-play writes Prisma's output to `/var/log/p2party-migration-failure.log`,
-readable by root only, with the database password replaced by `<redacted>`.
+Ansible output. systemd reads the database URL from a root-only environment
+file on the host. The play writes Prisma's output to
+`/var/log/p2party-migration-failure.log`, readable by root only, with the
+database password replaced by `<redacted>`. The log can contain database row
+values. A migration that timed out can have committed statements. Inspect its
+history before choosing a recovery command. A successful deploy removes both
+staged environment files and any previous migration error log.
 
 Prisma does not run a migration in a transaction, and a statement can commit
 without Prisma recording the migration as finished. Each migration this release

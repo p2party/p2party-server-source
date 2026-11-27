@@ -39,6 +39,9 @@ database:
   # multiple workers, or a restart storm can exhaust the server's slots.
   connection_limit: 10
 
+# Shared by the worker and Prisma. Jinja's urlencode leaves '/' unescaped.
+postgres_connection_url: "postgresql://{{ database.user | urlencode | replace('/', '%2F') }}:{{ database.password | urlencode | replace('/', '%2F') }}@{{ database.host }}:{{ database.port }}/{{ database.name | urlencode | replace('/', '%2F') }}?schema=public&sslmode={{ database.ssl_mode }}&sslrootcert={{ database.ssl_root_cert | urlencode }}"
+
 logging:
   level: info
   log_retention_days: 30

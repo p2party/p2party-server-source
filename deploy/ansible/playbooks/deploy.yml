@@ -181,8 +181,8 @@
     # manifest/lockfile that passed the release audit.
     migration_tooling: "{{ app.home }}/server/migration-tooling"
     # The new binary, environment and units wait here until the migration has
-    # succeeded. Root-only; nothing reads it but the install tasks.
-    release_staging: "{{ app.home }}/server/release-staging"
+    # succeeded. Only root may modify these files or rename their parent.
+    release_staging: /var/lib/p2party-release-staging
     # A failed migration writes Prisma's output here (root-only, password
     # removed) and leaves the marker that initial-setup.yml checks.
     migration_log: /var/log/p2party-migration-failure.log
@@ -203,8 +203,9 @@
       1. Read why it failed in {{ migration_log }} (root only) on the
          signaling host and, when Prisma recorded a failed migration, in its
          row of "_prisma_migrations" ("logs" column).
-      2. Fix the cause: a lock another session held, the database
-         unreachable, a full disk.
+      2. Check for contention, lost connectivity or disk errors. A lock may
+         wait 10s, a statement 120s, and the migration service 300s plus
+         10s for termination. Inspect migration history even after a timeout.
       3. Once the deploy and its migration have stopped, open the application
          database on the PostgreSQL host:
          sudo -u postgres psql -X -p {{ database.port | quote }} -d {{ database.name | quote }}
@@ -245,9 +246,8 @@
     # before any worker is stopped: the journal drop-in, the migration tooling
     # (a registry fetch), the schema and migrations, and the new binary, its
     # environment file, its units and the Caddy configuration, all staged
-    # under {{ release_staging }} or as a candidate file. Nothing the running
-    # workers read is changed. A failure here ends the play with production
-    # still running the previous release, untouched.
+    # under {{ release_staging }} or as a candidate file. This block does
+    # not stop, install or restart a worker.
     - name: Prepare the release without touching the running workers
       block:
         - name: Ensure the journald drop-in directory exists
@@ -351,21 +351,20 @@
             path: "{{ release_staging }}"
             state: directory
             owner: root
-            group: root
-            mode: "0700"
+            group: "{{ app.group }}"
+            mode: "0710"
 
         - name: Stage the compiled binary
           copy:
             src: "{{ repo_path }}/{{ binary_name }}"
             dest: "{{ release_staging }}/p2party-server"
-            owner: "{{ app.user }}"
+            owner: root
             group: "{{ app.group }}"
             mode: "0755"
 
         # The service runs the Bun embedded in the binary, which the build
         # record names. The staged file must be byte for byte that binary. It
-        # is read, never executed: a worker owns the staging directory's
-        # parent, and nothing staged runs as root.
+        # is checked before the service account executes it to validate config.
         - name: Read the staged binary's SHA-256
           stat:
             path: "{{ release_staging }}/p2party-server"
@@ -393,13 +392,44 @@
           template:
             src: "{{ playbook_dir }}/../templates/signaling.env.j2"
             dest: "{{ release_staging }}/.env"
-            owner: "{{ app.user }}"
-            group: "{{ app.group }}"
+            owner: root
+            group: root
             mode: "0600"
           # The rendered file contains both database and TURN credentials.
           # Keep an operator's --diff from copying either secret into the
           # Ansible log.
           diff: false
+
+        - name: Validate the staged environment as the signaling worker
+          command:
+            argv:
+              - /usr/bin/systemd-run
+              - --quiet
+              - --wait
+              - --pipe
+              - --collect
+              - "--uid={{ app.user }}"
+              - "--gid={{ app.group }}"
+              - "--property=EnvironmentFile={{ release_staging }}/.env"
+              - --property=PrivateNetwork=yes
+              - --property=RuntimeMaxSec=20s
+              - --property=TimeoutStopSec=2s
+              - "--setenv=PORT={{ item }}"
+              - --
+              - "{{ release_staging }}/p2party-server"
+              - --check-config
+          loop: "{{ signaling_instance_ports }}"
+          changed_when: false
+
+        - name: Stage the private migration environment
+          template:
+            src: "{{ playbook_dir }}/../templates/migration.env.j2"
+            dest: "{{ release_staging }}/migration.env"
+            owner: root
+            group: root
+            mode: "0600"
+          diff: false
+          no_log: true
 
         # Same reasoning for the unit files. PORT is set here, per instance,
         # and a deploy that ships a new binary against stale units cannot fix
@@ -484,17 +514,15 @@
         - name: Report that preparing the release failed
           fail:
             msg: |
-              Preparing the release failed before this run stopped any
-              signaling worker or touched the database; nothing the running
-              workers read was changed. The failed task is named above this
-              message. Fix its cause (for example a registry fetch that failed
-              during `bun install`) and run this playbook again.
+              Preparation failed before this run stopped any signaling worker
+              or applied migrations. Earlier provisioning tasks, including
+              PostgreSQL TLS, may already have run. Inspect the failed task
+              above, correct its cause and rerun deploy/deploy.sh.
               {% if earlier_interrupted_deploy.stat.exists %}
-              But an earlier deploy had already stopped every worker and not
-              finished ({{ migration_failure_marker }} exists): nothing is
-              serving, and the steps in that file still apply.
+              An earlier deploy left {{ migration_failure_marker }}. Follow
+              its recovery steps before starting any worker.
               {% else %}
-              Production is still running the previous release, untouched.
+              Check current signaling service status and health on each host.
               {% endif %}
 
     # ------------------------------------------------------------------
@@ -551,22 +579,29 @@
     - name: Apply Postgres migrations
       block:
         - name: Apply migrations against Postgres
-          become_user: "{{ app.user }}"
           command:
             argv:
+              - /usr/bin/systemd-run
+              - --quiet
+              - --wait
+              - --pipe
+              - --collect
+              - "--uid={{ app.user }}"
+              - "--gid={{ app.group }}"
+              - "--property=EnvironmentFile={{ release_staging }}/migration.env"
+              - "--property=WorkingDirectory={{ app.home }}/server"
+              - --property=RuntimeMaxSec=300s
+              - --property=TimeoutStopSec=10s
+              - --property=KillMode=control-group
+              - "--setenv=PATH={{ app.home }}/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+              - --
               - "{{ app.home }}/.bun/bin/bun"
+              - --no-env-file
               - "{{ migration_tooling }}/node_modules/prisma/build/index.js"
               - migrate
               - deploy
-            chdir: "{{ app.home }}/server"
-          environment:
-            # Prisma's subprocesses need the same installed Bun; no shell profile
-            # or globally installed Prisma package participates in this migration.
-            PATH: "{{ app.home }}/.bun/bin:{{ ansible_facts['env'].PATH }}"
-            DATABASE_URL: "postgresql://{{ database.user | urlencode }}:{{ database.password | urlencode }}@{{ database.host }}:{{ database.port }}/{{ database.name }}?schema=public&sslmode={{ database.ssl_mode }}&sslrootcert={{ database.ssl_root_cert }}"
-          # The connection string exists only in this task's environment, so the
-          # task is hidden from the Ansible log; a failure's output goes to
-          # {{ migration_log }} instead (rescue below).
+          # The system manager reads the root-only credential file. A hung
+          # Bun or schema-engine child dies with the transient service.
           no_log: true
           register: migration_result
           # A failed migration stops the deploy in the rescue below, before the
@@ -578,12 +613,10 @@
         - name: Write the failed migration's output for the operator
           copy:
             dest: "{{ migration_log }}"
-            content: >-
-              {{ ((migration_result.stdout | default('')) ~ '\n'
-                  ~ (migration_result.stderr | default(''))
-                  ~ '\n' ~ (migration_result.msg | default('')))
-                 | replace((database.password | urlencode) or '<no password>', '<redacted>')
-                 | replace(database.password or '<no password>', '<redacted>') }}
+            content: |
+              {% for line in [migration_result.stdout | default(''), migration_result.stderr | default(''), migration_result.msg | default('')] %}
+              {{ line | replace((database.password | urlencode | replace('/', '%2F')) or '<no password>', '<redacted>') | replace(database.password or '<no password>', '<redacted>') }}
+              {% endfor %}
             owner: root
             group: root
             mode: "0600"
@@ -833,6 +866,15 @@
         fail_msg: >-
           Public signaling health reported an unexpected payload after cutover:
           {{ public_signaling_health.content | default('no response body') }}
+
+    - name: Remove private staged environments and any previous migration error
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ release_staging }}/.env"
+        - "{{ release_staging }}/migration.env"
+        - "{{ migration_log }}"
 
     - name: Deployment complete
       debug:

@@ -54,7 +54,11 @@ export interface PostgresConnection {
  * disposable local databases; production supplies verify-full and a pinned CA.
  */
 export const postgresConnection = (raw: string): PostgresConnection => {
+  // URL errors can include the full input, including database credentials.
+  if (!URL.canParse(raw)) throw new Error("Invalid PostgreSQL DATABASE_URL");
   const url = new URL(raw);
+  if (!["postgres:", "postgresql:"].includes(url.protocol))
+    throw new Error("DATABASE_URL must use the PostgreSQL scheme");
   const mode = url.searchParams.get("sslmode")?.toLowerCase();
   const rootCert = url.searchParams.get("sslrootcert");
   if (
