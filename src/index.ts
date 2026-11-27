@@ -39,6 +39,21 @@ if (process.argv[2] === "--check-config") {
   process.exit(0);
 }
 
+if (process.argv[2] === "--check-ledger-state") {
+  if (!configuredLedger) throw new Error("Native ledger is disabled");
+  const candidate = new LedgerStore(
+    configuredLedger,
+    process.env.DATABASE_URL!,
+  );
+  try {
+    await candidate.preflight();
+  } finally {
+    await candidate.close();
+  }
+  console.log("p2party: ledger database preflight passed");
+  process.exit(0);
+}
+
 const events: P2PartyWSEvents = {
   // Peers appear in the journal only as per-boot tags, never by stable id.
   open: (ws: P2PartyWSClient) => {

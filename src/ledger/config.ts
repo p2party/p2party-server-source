@@ -49,6 +49,7 @@ export type LedgerConfig = {
   units: GenesisUnit[];
   genesisHash: string;
   verifier: string;
+  corsOrigins: string[];
 };
 
 function suiteMask(suites: unknown): number {
@@ -82,6 +83,28 @@ function readGenesis(path: string) {
   } finally {
     closeSync(fd);
   }
+}
+export function ledgerCorsOrigins(value: string | undefined): string[] {
+  if (!value) return [];
+  const origins = value.split(",");
+  if (origins.length > 16 || value.length > 2048)
+    throw new Error("Invalid LEDGER_CORS_ORIGINS");
+  if (origins.length === 1 && origins[0] === "*") return origins;
+  for (const origin of origins) {
+    let url: URL;
+    try {
+      url = new URL(origin);
+    } catch {
+      throw new Error("Invalid LEDGER_CORS_ORIGINS");
+    }
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    if (
+      url.origin !== origin ||
+      (url.protocol !== "https:" && !(local && url.protocol === "http:"))
+    )
+      throw new Error("Invalid LEDGER_CORS_ORIGINS");
+  }
+  return [...new Set(origins)];
 }
 export function ledgerConfig(env: NodeJS.ProcessEnv): LedgerConfig | undefined {
   if (env.LEDGER_ENABLED === undefined || env.LEDGER_ENABLED === "false")
@@ -173,5 +196,10 @@ export function ledgerConfig(env: NodeJS.ProcessEnv): LedgerConfig | undefined {
     }).trim() !== "demos-ledger-verify/1"
   )
     throw new Error("Unsupported native ledger verifier");
-  return { ...config, genesisHash, verifier };
+  return {
+    ...config,
+    genesisHash,
+    verifier,
+    corsOrigins: ledgerCorsOrigins(env.LEDGER_CORS_ORIGINS),
+  };
 }

@@ -121,7 +121,7 @@ export class P2PartyWS {
       fetch(req: Request, server: Server<P2PartyWSData>) {
         const url = new URL(req.url);
 
-        if (url.pathname === "/rpc") {
+        if (url.pathname === "/rpc" || url.pathname === "/rpc/health") {
           return ledgerHandler
             ? ledgerHandler(req)
             : new Response(null, { status: 404 });

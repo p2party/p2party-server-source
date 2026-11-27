@@ -469,6 +469,10 @@
         # restarted against an older .env exits at startup. initial-setup.yml
         # also writes this file, but a deploy must not depend on someone having
         # re-run provisioning.
+        - name: Prepare the native validation artifacts before staging the worker environment
+          include_tasks: "{{ playbook_dir }}/../tasks/prepare-ledger.yml"
+          when: ledger_enabled | default(false) | bool
+
         - name: Stage the signaling environment file
           template:
             src: "{{ playbook_dir }}/../templates/signaling.env.j2"
@@ -500,6 +504,27 @@
               - "{{ release_staging }}/p2party-server"
               - --check-config
           loop: "{{ signaling_instance_ports }}"
+          changed_when: false
+
+        - name: Check stored ledger genesis or database creation permission before stopping workers
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/systemd-run
+              - --quiet
+              - --wait
+              - --pipe
+              - --collect
+              - "--uid={{ app.user }}"
+              - "--gid={{ app.group }}"
+              - "--property=EnvironmentFile={{ release_staging }}/.env"
+              - --property=NoNewPrivileges=yes
+              - --property=ProtectSystem=strict
+              - --property=RuntimeMaxSec=20s
+              - --property=TimeoutStopSec=2s
+              - --
+              - "{{ release_staging }}/p2party-server"
+              - --check-ledger-state
+          when: ledger_enabled | default(false) | bool
           changed_when: false
 
         - name: Stage the private migration environment
@@ -1037,6 +1062,32 @@
         fail_msg: >-
           Public signaling health reported an unexpected payload after cutover:
           {{ public_signaling_health.content | default('no response body') }}
+
+    - name: Verify the configured chain and public testnet head through each worker and Caddy
+      when: ledger_enabled | default(false) | bool
+      block:
+        - name: Read native validator health on all release paths
+          ansible.builtin.uri:
+            url: "{{ item }}/rpc/health"
+            return_content: true
+            use_proxy: false
+            timeout: 8
+          loop: "{{ (signaling_instance_ports | map('regex_replace', '^', 'http://127.0.0.1:') | list) + ['https://' ~ domains.signaling] }}"
+          register: ledger_health
+          retries: 4
+          delay: 2
+          until: ledger_health.status == 200
+
+        - name: Require the expected chain identifiers and a valid committed height
+          ansible.builtin.assert:
+            that:
+              - item.json.status == 'ok'
+              - item.json.chainId == ledger_chain_id
+              - item.json.rpcChainId == '0x%x' | format(ledger_rpc_chain_id)
+              - item.json.height is match('^0x(0|[1-9a-f][0-9a-f]*)$')
+          loop: "{{ ledger_health.results }}"
+          loop_control:
+            label: "{{ item.item }}"
 
     - name: Remove private staged environments and any previous migration error
       file:

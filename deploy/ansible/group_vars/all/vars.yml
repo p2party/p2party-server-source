@@ -107,3 +107,7 @@ bun:
 logging:
   log_retention_days: 14
   log_max_size: 100M
+
+# Resolved only when the operator explicitly enables the native ledger.
+ledger_verifier_path: "/opt/p2party-ledger/{{ ledger_verifier_sha256 }}/demos-ledger-verify"
+ledger_genesis_path: "/opt/p2party-ledger/genesis/{{ ledger_genesis_sha256 }}.json"

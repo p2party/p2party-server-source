@@ -192,6 +192,10 @@
     # Binary is deployed by deploy.yml playbook
     # This playbook sets up the environment and systemd services
 
+    - name: Prepare the native validation artifacts when the testnet is enabled
+      include_tasks: "{{ playbook_dir }}/../tasks/prepare-ledger.yml"
+      when: ledger_enabled | default(false) | bool
+
     - name: Deploy .env file
       template:
         src: "{{ playbook_dir }}/../templates/signaling.env.j2"

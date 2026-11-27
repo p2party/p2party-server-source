@@ -69,6 +69,24 @@ worker and the public `/health` endpoint report `version: "0.2.0"` and
 WebSocket authority from `domains.signaling`. Clients include this authority
 in the login signature.
 
+## Public testnet release
+
+Ledger validation is optional in 0.2.1. To enable P2Party Testnet 1, add these variables under `signaling_production.vars` in the private operational inventory used by both setup and release. Replace the two controller source paths with absolute paths to the reviewed files. Keep the same configuration for subsequent releases. [Public genesis and grants](testnet/README.md) · [Native Linux build](https://github.com/ondemos/libdemos/actions/runs/45985760486)
+
+```yaml
+ledger_enabled: true
+ledger_chain_id: "0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73c760"
+ledger_rpc_chain_id: 1345474644
+ledger_cors_origins: ["*"]
+ledger_verifier_src: "/absolute/path/to/demos-ledger-verify"
+ledger_verifier_source_commit: "243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0"
+ledger_verifier_sha256: "f8f06cf56f5409a7c6071eaa7131f93b729431f4bbf72091e7a2bacdc306027b"
+ledger_genesis_src: "/absolute/path/to/p2party-server/deploy/testnet/genesis.json"
+ledger_genesis_sha256: "38d42d50a5a6d5ceb43fd6f63235e542716b1df5ccff59161c5fd7810aed17c6"
+```
+
+The play checks the controller files, installs them beneath root-owned, content-addressed paths in `/opt/p2party-ledger`, and exercises both signature suites as the worker. The staged binary checks its environment offline. A separate read-only database preflight checks initialization permission on a new node, or the stored chain identity and table access on an existing node. Both run before workers stop. Successful startup initializes or reopens the durable `p2party_ledger` schema. Include it in database backups. The release then checks `/rpc/health` through each worker and Caddy. Disabling the option on a subsequent release closes the routes and preserves stored history. [RPC limits and configuration](../src/ledger/README.md)
+
 ## Which Bun, and where it is checked
 
 `package.json`'s `packageManager` is the one place the Bun version is written

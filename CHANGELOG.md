@@ -4,12 +4,20 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. Release 0.2.0
-speaks signaling protocol 5.
+`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 and 0.2.1
+speak signaling protocol 5.
 
 ## [Unreleased]
 
+## [0.2.1]
+
+- Add P2Party Testnet 1, an opt-in validating node for 128 valueless genesis units. The native verifier checks ML-DSA-65 and SLH-DSA-SHA2-192s transfers. PostgreSQL commits each spend and receipt together. A sender who loses the response can resubmit exactly the same signed bytes and recover the receipt. [Testnet and grants](deploy/testnet/README.md) · [Native RPC](src/ledger/README.md)
+- Expose chain ID, ledger height and indexed balances to ethers and viem HTTP providers. Native transfers require the full owner commitment and a post-quantum signature. [Client examples](clients/evm/README.md)
+- Stage the checksum-pinned native helper and public genesis, run both signature suites under the worker identity, then verify database permissions or existing genesis before cutover. When explicitly enabled, `/rpc/health` identifies the chain and stored height. Operators choose allowed browser origins. [Release procedure](deploy/README.md#public-testnet-release) · [Roadmap](ROADMAP.md)
+
 ## [0.2.0]
+
+- Production verified protocol 5 for direct and TURN-relayed two-browser transfers on November 27, 2026. The fleet reached Ubuntu 24.04.5, Caddy 2.11.9, coturn 4.19.2 and PostgreSQL 19.0. The database upgrade preserved signed identity state, application grants and verified TLS. [Database upgrade record](deploy/postgresql-upgrade.md) · [Host maintenance](deploy/ansible/fleet-maintenance.md)
 
 - Upgrade the Cloudflare Terraform provider to 5.29.0 and pin the PostgreSQL Ansible collection to 5.1.3. Existing Cloudflare state and TLS rollback inputs are covered in the deployment guide.
 

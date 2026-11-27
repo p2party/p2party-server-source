@@ -6,13 +6,11 @@ import {
   RpcError,
 } from "./config";
 import { LedgerStore, busy } from "./store";
+import { ethRead } from "./ethReads";
 
-const cors = {
-  "access-control-allow-origin": "*",
-  "cache-control": "no-store",
-};
+const responseHeaders = { "cache-control": "no-store" };
 const maxBody = 68 * 1024;
-const json = (v: unknown) => Response.json(v, { headers: cors });
+const json = (v: unknown) => Response.json(v, { headers: responseHeaders });
 async function readBody(request: Request) {
   if (Number(request.headers.get("content-length")) > maxBody)
     throw new RangeError();
@@ -62,6 +60,9 @@ async function call(store: LedgerStore, method: string, params: unknown) {
     case "eth_chainId":
       argumentsOf(params, 0);
       return hexQuantity(store.config.rpcChainId);
+    case "eth_blockNumber":
+    case "eth_getBalance":
+      return ethRead(store, method, params);
     case "demos_getHead":
       argumentsOf(params, 0);
       return store.head();
@@ -132,7 +133,31 @@ async function reply(store: LedgerStore, req: unknown) {
 }
 export function ledgerRpc(store: LedgerStore) {
   let inFlight = 0;
-  return async (request: Request): Promise<Response> => {
+  const dispatch = async (request: Request): Promise<Response> => {
+    if (new URL(request.url).pathname === "/rpc/health") {
+      if (request.method !== "GET")
+        return new Response(null, {
+          status: 405,
+          headers: { ...responseHeaders, Allow: "GET" },
+        });
+      if (inFlight >= 8)
+        return new Response(null, { status: 429, headers: responseHeaders });
+      inFlight++;
+      try {
+        return json({
+          status: "ok",
+          rpcChainId: hexQuantity(store.config.rpcChainId),
+          ...(await store.head()),
+        });
+      } catch {
+        return Response.json(
+          { status: "unavailable" },
+          { status: 503, headers: responseHeaders },
+        );
+      } finally {
+        inFlight--;
+      }
+    }
     if (request.method === "OPTIONS") {
       const method = request.headers.get("access-control-request-method");
       const headers =
@@ -144,11 +169,11 @@ export function ledgerRpc(store: LedgerStore) {
         (method && method !== "POST") ||
         headers.some((h) => h !== "content-type")
       )
-        return new Response(null, { status: 403, headers: cors });
+        return new Response(null, { status: 403, headers: responseHeaders });
       return new Response(null, {
         status: 204,
         headers: {
-          ...cors,
+          ...responseHeaders,
           "access-control-allow-methods": "POST, OPTIONS",
           "access-control-allow-headers": "Content-Type",
           "access-control-max-age": "600",
@@ -159,7 +184,7 @@ export function ledgerRpc(store: LedgerStore) {
     if (request.method !== "POST")
       return new Response(null, {
         status: 405,
-        headers: { ...cors, Allow: "POST, OPTIONS" },
+        headers: { ...responseHeaders, Allow: "POST, OPTIONS" },
       });
     if (
       request.headers
@@ -168,11 +193,11 @@ export function ledgerRpc(store: LedgerStore) {
         ?.trim()
         .toLowerCase() !== "application/json"
     )
-      return new Response(null, { status: 415, headers: cors });
+      return new Response(null, { status: 415, headers: responseHeaders });
     if (inFlight >= 8)
       return Response.json(
         failure(null, busy().code, "Validator busy; retry"),
-        { status: 429, headers: { ...cors, "retry-after": "1" } },
+        { status: 429, headers: { ...responseHeaders, "retry-after": "1" } },
       );
     inFlight++;
     try {
@@ -181,9 +206,9 @@ export function ledgerRpc(store: LedgerStore) {
         input = await readBody(request);
       } catch (e) {
         if (e instanceof RangeError)
-          return new Response(null, { status: 413, headers: cors });
+          return new Response(null, { status: 413, headers: responseHeaders });
         if (e instanceof RpcError)
-          return new Response(null, { status: 408, headers: cors });
+          return new Response(null, { status: 408, headers: responseHeaders });
         return json(failure(null, -32700, "Parse error"));
       }
       if (Array.isArray(input)) {
@@ -196,14 +221,36 @@ export function ledgerRpc(store: LedgerStore) {
         }
         return results.length
           ? json(results)
-          : new Response(null, { status: 204, headers: cors });
+          : new Response(null, { status: 204, headers: responseHeaders });
       }
       const result = await reply(store, input);
       return result === undefined
-        ? new Response(null, { status: 204, headers: cors })
+        ? new Response(null, { status: 204, headers: responseHeaders })
         : json(result);
     } finally {
       inFlight--;
     }
+  };
+  return async (request: Request): Promise<Response> => {
+    const origin = request.headers.get("origin");
+    const wildcard = store.config.corsOrigins.includes("*");
+    if (
+      origin &&
+      !wildcard &&
+      !store.config.corsOrigins.includes(origin) &&
+      origin !== new URL(request.url).origin
+    )
+      return new Response(null, {
+        status: 403,
+        headers: { ...responseHeaders, Vary: "Origin" },
+      });
+    const response = await dispatch(request);
+    if (wildcard) response.headers.set("access-control-allow-origin", "*");
+    else {
+      response.headers.append("vary", "Origin");
+      if (origin && store.config.corsOrigins.includes(origin))
+        response.headers.set("access-control-allow-origin", origin);
+    }
+    return response;
   };
 }

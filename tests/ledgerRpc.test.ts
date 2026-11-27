@@ -1,9 +1,17 @@
 import { expect, test } from "bun:test";
-import { ledgerConfig, bytes, quantity } from "../src/ledger/config";
+import {
+  ledgerConfig,
+  ledgerCorsOrigins,
+  bytes,
+  quantity,
+} from "../src/ledger/config";
 import { ledgerRpc } from "../src/ledger/rpc";
 import type { LedgerStore } from "../src/ledger/store";
 
-const rpc = () => ledgerRpc({ config: { rpcChainId: 77 } } as LedgerStore);
+const rpc = () =>
+  ledgerRpc({
+    config: { rpcChainId: 77, corsOrigins: [] },
+  } as unknown as LedgerStore);
 const request = (body: BodyInit) =>
   new Request("http://localhost/rpc", {
     method: "POST",
@@ -20,6 +28,42 @@ test("ledger startup requires explicit opt-in, chain identity and native verifie
   for (const invalid of ["0x", "0x00", "0x-1", "0X1", "0x8000000000000000"])
     expect(() => quantity(invalid)).toThrow();
   expect(() => bytes("0xAZ", 1)).toThrow();
+});
+test("public browser access requires an explicit wildcard and never grants credentials", async () => {
+  expect(ledgerCorsOrigins(undefined)).toEqual([]);
+  expect(ledgerCorsOrigins("https://a.example,https://a.example")).toEqual([
+    "https://a.example",
+  ]);
+  expect(ledgerCorsOrigins("http://[::1]:8080")).toEqual(["http://[::1]:8080"]);
+  for (const value of [
+    "*,https://a.example",
+    "http://a.example",
+    "https://u:p@a.example",
+    "https://a.example/path",
+    Array(17).fill("https://a.example").join(","),
+  ]) {
+    expect(() => ledgerCorsOrigins(value)).toThrow();
+  }
+  const handle = ledgerRpc({
+    config: { rpcChainId: 77, corsOrigins: ledgerCorsOrigins("*") },
+  } as unknown as LedgerStore);
+  const preflight = (header: string) =>
+    new Request("http://localhost/rpc", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://wallet.example",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": header,
+      },
+    });
+  const publicResponse = await handle(preflight("Content-Type"));
+  expect(publicResponse.status).toBe(204);
+  expect(publicResponse.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  expect(publicResponse.headers.has("Access-Control-Allow-Credentials")).toBe(
+    false,
+  );
+  expect((await handle(preflight("Authorization"))).status).toBe(403);
+  expect((await rpc()(preflight("Content-Type"))).status).toBe(403);
 });
 test("RPC bounds transport, batch size and malformed values", async () => {
   const handle = rpc();

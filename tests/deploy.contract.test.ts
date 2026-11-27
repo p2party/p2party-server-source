@@ -136,6 +136,36 @@ const coturnDefault = (name: string): number => {
 };
 
 describe("production deployment contract", () => {
+  test("native validation is opt-in and gates its artifacts and database before worker cutover", () => {
+    const pinned = readAnsible("tasks/prepare-ledger.yml");
+    const environment = readAnsible("templates/signaling.env.j2");
+    const included =
+      'include_tasks: "{{ playbook_dir }}/../tasks/prepare-ledger.yml"';
+    const guarded = "when: ledger_enabled | default(false) | bool";
+    expect(environment).toContain(
+      "{% if ledger_enabled | default(false) | bool %}\nLEDGER_ENABLED=true",
+    );
+    expect(deploy).toContain(included + "\n          " + guarded);
+    expect(initialSetup).toContain(included + "\n      " + guarded);
+    expect(pinned).toContain(
+      "ledger_verifier_sha256 == 'f8f06cf56f5409a7c6071eaa7131f93b729431f4bbf72091e7a2bacdc306027b'",
+    );
+    expect(pinned).toContain(
+      "item.stat.checksum | default('') == item.item.sha",
+    );
+    expect(pinned).toContain("ansible_become: false");
+    expect(pinned).toContain('become_user: "{{ app.user }}"');
+    const prepare = deploy.indexOf(included);
+    const preflight = deploy.indexOf("- --check-ledger-state");
+    const stop = deploy.indexOf(
+      "- name: Stop and disable every signaling worker before migrating",
+    );
+    const health = deploy.indexOf('url: "{{ item }}/rpc/health"');
+    expect(prepare).toBeGreaterThan(-1);
+    expect(preflight).toBeGreaterThan(prepare);
+    expect(stop).toBeGreaterThan(preflight);
+    expect(health).toBeGreaterThan(stop);
+  });
   test("the deploy playbook stops every worker before it migrates and installs the binary only after", () => {
     const play = playWithTask(deploy, "Apply migrations against Postgres");
     const tasks = flatten(play.tasks);
@@ -1258,6 +1288,8 @@ const rootExecutions = (files: { file: string; plays: Raw[] }[]): string[] => {
                   "--property=EnvironmentFile={{ release_staging }}/migration.env",
                   "--property=WorkingDirectory={{ app.home }}/server",
                   "--property=PrivateNetwork=yes",
+                  "--property=NoNewPrivileges=yes",
+                  "--property=ProtectSystem=strict",
                   "--property=KillMode=control-group",
                   "--setenv=PORT={{ item }}",
                   "--setenv=PATH={{ bun.install_dir }}/bin:/usr/local/bin:/usr/bin:/bin",

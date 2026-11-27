@@ -1,0 +1,122 @@
+---
+# All paths installed here are root-owned and content addressed. A still-running
+# worker can continue to use its previous verifier and genesis during preparation.
+- name: Require explicit testnet identity and local artifact pins
+  ansible.builtin.assert:
+    that:
+      - ledger_chain_id is match('^0x[0-9a-f]{64}$')
+      - ledger_rpc_chain_id is integer and ledger_rpc_chain_id > 0 and ledger_rpc_chain_id <= 9007199254740991
+      - ledger_cors_origins is sequence and ledger_cors_origins is not string and ledger_cors_origins | length <= 16
+      - ledger_verifier_src is match('^/') and ledger_genesis_src is match('^/')
+      - ledger_verifier_sha256 is match('^[0-9a-f]{64}$') and ledger_genesis_sha256 is match('^[0-9a-f]{64}$')
+      - ledger_verifier_source_commit == '243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0'
+      - ledger_verifier_sha256 == 'f8f06cf56f5409a7c6071eaa7131f93b729431f4bbf72091e7a2bacdc306027b'
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: Supply the native build revision, pinned local verifier and public genesis, chain IDs, and permitted CORS origins before enabling the ledger.
+
+- name: Restrict values that will be written to the worker environment
+  ansible.builtin.assert:
+    that:
+      - item is string and item is match('^(\*|https://[A-Za-z0-9.\-:\[\]]+|http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?)$')
+      - item != '*' or ledger_cors_origins | length == 1
+  loop: "{{ ledger_cors_origins }}"
+
+- name: Check both operator-supplied artifacts on the controller
+  ansible.builtin.stat:
+    path: "{{ item.src }}"
+    follow: false
+    checksum_algorithm: sha256
+  loop:
+    - { src: "{{ ledger_verifier_src }}", sha: "{{ ledger_verifier_sha256 }}" }
+    - { src: "{{ ledger_genesis_src }}", sha: "{{ ledger_genesis_sha256 }}" }
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_become: false
+  register: ledger_controller_artifacts
+
+- name: Require both controller files to match their pins
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - item.stat.checksum | default('') == item.item.sha
+  loop: "{{ ledger_controller_artifacts.results }}"
+  loop_control:
+    label: "{{ item.item.src }}"
+
+- name: Check the configured public genesis identity before installing it
+  vars:
+    ledger_public_genesis: "{{ lookup('ansible.builtin.file', ledger_genesis_src) | from_json }}"
+  ansible.builtin.assert:
+    that:
+      - ledger_controller_artifacts.results[1].stat.size <= 1048576
+      - ledger_public_genesis.chainId == ledger_chain_id
+      - ledger_public_genesis.rpcChainId == ledger_rpc_chain_id
+
+- name: Create root-owned native ledger release directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/p2party-ledger
+    - "/opt/p2party-ledger/{{ ledger_verifier_sha256 }}"
+    - /opt/p2party-ledger/genesis
+
+- name: Install the pinned standalone helper and public genesis
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {
+        src: "{{ ledger_verifier_src }}",
+        dest: "{{ ledger_verifier_path }}",
+        mode: "0555",
+      }
+    - {
+        src: "{{ ledger_genesis_src }}",
+        dest: "{{ ledger_genesis_path }}",
+        mode: "0444",
+      }
+
+- name: Verify the installed native ledger artifact bytes and ownership
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    follow: false
+    checksum_algorithm: sha256
+  loop:
+    - {
+        path: "{{ ledger_verifier_path }}",
+        sha: "{{ ledger_verifier_sha256 }}",
+        mode: "0555",
+      }
+    - {
+        path: "{{ ledger_genesis_path }}",
+        sha: "{{ ledger_genesis_sha256 }}",
+        mode: "0444",
+      }
+  register: ledger_installed_artifacts
+  failed_when: >-
+    not (ledger_installed_artifacts.stat.isreg | default(false)) or
+    ledger_installed_artifacts.stat.uid != 0 or ledger_installed_artifacts.stat.gid != 0 or
+    ledger_installed_artifacts.stat.mode != item.mode or ledger_installed_artifacts.stat.checksum != item.sha
+
+- name: Install public known-answer vectors alongside the native executable
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/ledger-verifier-v1-vectors.json"
+    dest: "/opt/p2party-ledger/{{ ledger_verifier_sha256 }}/vectors-v1.json"
+    owner: root
+    group: root
+    mode: "0444"
+
+- name: Exercise both native signature suites as the unprivileged signaling worker
+  ansible.builtin.script: >-
+    {{ playbook_dir }}/../files/check-ledger-verifier.py {{ ledger_verifier_path }} /opt/p2party-ledger/{{ ledger_verifier_sha256 }}/vectors-v1.json
+  become: true
+  become_user: "{{ app.user }}"
+  changed_when: false

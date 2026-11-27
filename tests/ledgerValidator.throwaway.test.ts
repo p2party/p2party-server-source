@@ -60,6 +60,29 @@ function launch(dbUrl: string, env: Record<string, string> = {}) {
   children.add(child);
   return { child, url: `http://127.0.0.1:${port}` };
 }
+function checkLedger(dbUrl: string, env: Record<string, string>) {
+  return Bun.spawnSync(
+    [
+      process.execPath,
+      "--no-env-file",
+      "run",
+      join(repositoryRoot, "src/index.ts"),
+      "--check-ledger-state",
+    ],
+    {
+      cwd: repositoryRoot,
+      env: {
+        PATH: process.env.PATH,
+        DATABASE_URL: dbUrl,
+        SIGNALING_HOST: "localhost",
+        ...env,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 8000,
+    },
+  ).exitCode;
+}
 async function ready(w: ReturnType<typeof launch>) {
   for (let i = 0; i < 160; i++) {
     if (w.child.exitCode !== null)
@@ -109,12 +132,15 @@ test.skipIf(!enabled)(
     writeFileSync(file, JSON.stringify(genesis));
     const env = {
       LEDGER_ENABLED: "true",
+      LEDGER_CORS_ORIGINS: "https://wallet.example",
       LEDGER_CHAIN_ID: v.chainId,
       LEDGER_GENESIS_FILE: file,
       LEDGER_VERIFIER: verifier!,
     };
     const disabled = await ready(launch(db.url));
     expect((await post(disabled.url, {})).status).toBe(404);
+    expect((await fetch(disabled.url + "/rpc/health")).status).toBe(404);
+    expect(checkLedger(db.url, env)).toBe(0);
     expect(
       (
         await db.client.query(
@@ -242,7 +268,9 @@ test.skipIf(!enabled)(
       },
     });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+    expect(preflight.headers.get("access-control-allow-origin")).toBe(
+      browserOrigin,
+    );
     expect(preflight.headers.has("access-control-allow-credentials")).toBe(
       false,
     );
@@ -251,9 +279,27 @@ test.skipIf(!enabled)(
       headers: { origin: browserOrigin, "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "eth_chainId" }),
     });
-    expect(browser.headers.get("access-control-allow-origin")).toBe("*");
+    expect(browser.headers.get("access-control-allow-origin")).toBe(
+      browserOrigin,
+    );
     expect((await browser.json()).result).toBe("0x1fbb");
+    const denied = await fetch(restarted.url + "/rpc", {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://another.example",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(denied.status).toBe(403);
+    expect(denied.headers.has("access-control-allow-origin")).toBe(false);
+    expect(await (await fetch(restarted.url + "/rpc/health")).json()).toEqual({
+      status: "ok",
+      chainId: v.chainId,
+      rpcChainId: "0x1fbb",
+      height: "0x3",
+    });
     writeFileSync(file, JSON.stringify({ ...genesis, rpcChainId: 8124 }));
+    expect(checkLedger(db.url, env)).not.toBe(0);
     const wrong = launch(db.url, env);
     expect(await wrong.child.exited).not.toBe(0);
     children.delete(wrong.child);

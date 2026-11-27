@@ -9,6 +9,14 @@ Application messages and files do not pass through this server. Their
 end-to-end encryption and per-message DataChannels live in
 [`p2party-js`](https://github.com/p2party/p2party-js).
 
+## Production and public testnet
+
+On November 27, 2026, public signaling 0.2.0 served protocol 5. Two browsers transferred data over both a direct connection and a forced TURN relay. The fleet ran Ubuntu 24.04.5 with kernel 6.8.0-151, Caddy 2.11.9, coturn 4.19.2 and PostgreSQL 19.0. [P2Party app](https://p2party.com) · [Signaling health](https://signaling.p2party.com/health) · [Deployment guide](deploy/README.md)
+
+Release 0.2.1 adds an optional validating node to the same signaling process. P2Party Testnet 1 starts with 128 valueless units and one operator ordering signed transfers. Once the operator enables the testnet, check its identity and height at `GET /rpc/health`. Wallets can query balances with ethers or viem, generate a fresh receive commitment and submit native post-quantum transfers. [Testnet health](https://signaling.p2party.com/rpc/health) · [Request a test unit](deploy/testnet/README.md) · [Client examples](clients/evm/README.md) · [RPC methods](src/ledger/README.md)
+
+For the trust assumptions, deployment evidence and work needed for independent validators, see the [roadmap](ROADMAP.md). The validator uses the [libdemos transfer codec](https://github.com/ondemos/libdemos/tree/243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0/ledger).
+
 ## Requirements
 
 - Bun 1.4.5 or newer
@@ -58,10 +66,6 @@ plus `db:migrate` against a real PostgreSQL
 Git work tree. Prettier itself reads only the top-level `.gitignore`, so given
 `.` it would also read, and `format` would rewrite, the ignored Terraform state,
 Ansible vault and inventory under `deploy/` (`tests/formatScripts.test.ts`).
-
-### Optional native ledger validator
-
-An explicitly configured signaling worker can validate signed native transfers and persist an ordered PostgreSQL log. The RPC endpoint is disabled by default. [Validator configuration, methods and tests](src/ledger/README.md)
 
 ### Testing against PostgreSQL
 

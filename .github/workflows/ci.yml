@@ -45,3 +45,46 @@ jobs:
         run: bun run test
       - name: Check formatting
         run: bun run format:check
+
+  native-ledger:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      P2PARTY_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Build the verifier and test fixtures from the immutable public native release
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends postgresql libpq-dev libssl-dev libsodium-dev cmake pkg-config
+          git init -q "$RUNNER_TEMP/ledger-src"
+          git -C "$RUNNER_TEMP/ledger-src" fetch -q --depth=1 https://github.com/ondemos/libdemos.git 243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0
+          git -C "$RUNNER_TEMP/ledger-src" checkout -q --detach FETCH_HEAD
+          cmake -S "$RUNNER_TEMP/ledger-src/ledger" -B "$RUNNER_TEMP/ledger-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build "$RUNNER_TEMP/ledger-build" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/ledger-build" --output-on-failure
+          echo "P2PARTY_TEST_LEDGER_VERIFIER=$RUNNER_TEMP/ledger-build/demos-ledger-verify" >> "$GITHUB_ENV"
+          echo "P2PARTY_TEST_LEDGER_FIXTURE=$RUNNER_TEMP/ledger-build/demos-ledger-fixture" >> "$GITHUB_ENV"
+      - name: Test ledger RPC through real signaling workers and PostgreSQL
+        run: |
+          set -euo pipefail
+          bin="$(pg_config --bindir)"
+          data="$RUNNER_TEMP/ledger-db"
+          "$bin/initdb" -D "$data" -U postgres --auth-local=peer --auth-host=scram-sha-256 --pwfile=<(printf '%s\n' postgres) >/dev/null
+          "$bin/pg_ctl" -D "$data" -l "$RUNNER_TEMP/ledger-db.log" -o "-h 127.0.0.1 -p 55432 -k $RUNNER_TEMP" -w start
+          trap '"$bin/pg_ctl" -D "$data" -m fast -w stop' EXIT
+          bun install --frozen-lockfile
+          bun run db:generate
+          python3 deploy/ansible/files/check-ledger-verifier.py "$P2PARTY_TEST_LEDGER_VERIFIER" deploy/ansible/files/ledger-verifier-v1-vectors.json
+          bun test tests/ledgerRpc.test.ts tests/ledgerValidator.throwaway.test.ts tests/ledgerEthReads.throwaway.test.ts
+          npm ci --prefix clients/evm
+          npm test --prefix clients/evm
+          npm run test:validator --prefix clients/evm
