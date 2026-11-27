@@ -1,4 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  fsyncSync,
+  linkSync,
+  openSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { ReceiptFrontier } from "./receiptFrontier";
 import { bytes, hex, hexQuantity, ledgerConfig, quantity } from "./config";
 import { ledgerRpc } from "./rpc";
 import { LedgerStore } from "./store";
@@ -69,6 +78,10 @@ export async function verifyPeer(
   store: LedgerStore,
   endpoint: string,
   through?: bigint,
+  options: {
+    anchor?: { height: bigint; historyHash: Buffer; logRoot: Buffer };
+    record?: (id: Buffer) => void;
+  } = {},
 ) {
   const ask = localPeer(endpoint);
   const head = object(await ask("demos_getHead"));
@@ -95,6 +108,31 @@ export async function verifyPeer(
     .update("p2party/replay/v1\0")
     .update(bytes(identity, 32))
     .digest();
+  const anchor = options.anchor;
+  if (
+    anchor &&
+    (anchor.height < 0n ||
+      anchor.height > height ||
+      anchor.historyHash.length !== 64 ||
+      anchor.logRoot.length !== 64)
+  )
+    throw new Error("Previous checkpoint falls outside the requested history");
+  if (anchor && anchor.height > previous)
+    throw new Error(
+      "Catch up the replica to the previous signed height before attesting",
+    );
+  const frontier = new ReceiptFrontier();
+  const checkAnchor = (n: bigint) => {
+    if (
+      anchor?.height === n &&
+      (!digest.equals(anchor.historyHash) ||
+        !frontier.root().equals(anchor.logRoot))
+    )
+      throw new Error(
+        "History disagrees with the operator's previous checkpoint",
+      );
+  };
+  checkAnchor(0n);
   for (let n = 1n; n <= height; ++n) {
     const number = hexQuantity(n);
     const peer = object(await ask("demos_getTransferByHeight", [number]));
@@ -130,27 +168,55 @@ export async function verifyPeer(
       .update(position)
       .update(expected.id)
       .digest();
+    frontier.append(expected.id);
+    checkAnchor(n);
+    options.record?.(expected.id);
   }
   return {
     chainId: store.config.chainId,
     genesisHash: identity,
     height: hexQuantity(height),
     historyHash: hex(digest),
+    logRoot: hex(frontier.root()),
   };
 }
 
 if (import.meta.main) {
-  const args = process.argv.slice(2);
-  const serve = args.at(-1) === "--serve";
-  if (serve) args.pop();
-  const [endpoint, through] = args;
+  const [endpoint, ...args] = process.argv.slice(2);
   const database = process.env.LEDGER_REPLICA_DATABASE_URL;
-  if (!endpoint || !database || args.length > 2)
+  if (!endpoint || !database)
     throw new Error(
-      "Usage: bun run ledger:verify-peer LOCAL_RPC_URL [THROUGH_HEIGHT_HEX] [--serve]; configure LEDGER_REPLICA_DATABASE_URL",
+      "Supply a loopback RPC URL and LEDGER_REPLICA_DATABASE_URL",
     );
   peerUrl(endpoint);
-  const targetHeight = through === undefined ? undefined : quantity(through);
+  const targetHeight = args[0]?.startsWith("0x")
+    ? quantity(args.shift())
+    : undefined;
+  let serve = false,
+    exportPath: string | undefined;
+  let anchor:
+    { height: bigint; historyHash: Buffer; logRoot: Buffer } | undefined;
+  while (args.length) {
+    const flag = args.shift();
+    if (flag === "--serve" && !serve) serve = true;
+    else if (
+      flag === "--export-log" &&
+      !exportPath &&
+      args[0] &&
+      !args[0].startsWith("--")
+    )
+      exportPath = args.shift();
+    else if (flag === "--anchor" && !anchor)
+      anchor = {
+        height: quantity(args.shift()),
+        historyHash: bytes(args.shift(), 64),
+        logRoot: bytes(args.shift(), 64),
+      };
+    else
+      throw new Error(
+        "Expected optional height, --anchor HEIGHT HISTORY_HASH LOG_ROOT, --export-log NEW_FILE or --serve",
+      );
+  }
   const db = new URL(database);
   if (
     !["postgres:", "postgresql:"].includes(db.protocol) ||
@@ -166,9 +232,46 @@ if (import.meta.main) {
   const store = new LedgerStore(config, database);
   try {
     await store.initialize("replica");
-    console.log(
-      JSON.stringify(await verifyPeer(store, endpoint, targetHeight)),
-    );
+    // Publish a complete file only after every receipt and the prior anchor verified.
+    const temp = exportPath
+      ? exportPath + "." + randomUUID() + ".tmp"
+      : undefined;
+    const fd = temp ? openSync(temp, "wx", 0o600) : undefined;
+    try {
+      const verified = await verifyPeer(store, endpoint, targetHeight, {
+        anchor,
+        record:
+          fd === undefined
+            ? undefined
+            : (id) => {
+                // A short write is possible even for a regular file.
+                const line = Buffer.from(hex(id) + "\n", "ascii");
+                for (let offset = 0; offset < line.length;) {
+                  const written = writeSync(
+                    fd,
+                    line,
+                    offset,
+                    line.length - offset,
+                  );
+                  if (!written) throw new Error("Incomplete receipt export");
+                  offset += written;
+                }
+              },
+      });
+      if (fd !== undefined && temp && exportPath) {
+        fsyncSync(fd);
+        linkSync(temp, exportPath);
+      }
+      console.log(JSON.stringify(verified));
+    } finally {
+      if (fd !== undefined && temp) {
+        try {
+          closeSync(fd);
+        } finally {
+          unlinkSync(temp);
+        }
+      }
+    }
     if (serve) {
       const read = ledgerRpc(store, { readOnly: true });
       const listener = Bun.serve({

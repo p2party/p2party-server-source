@@ -53,4 +53,47 @@ The first command verifies the advertised head. A peer above 10,000 transfers re
 
 Compare checkpoints at the same height. The initial digest is SHA-512 of the UTF-8 domain `p2party/replay/v1`, a zero byte and the 32-byte canonical genesis hash returned by `demos_getGenesisHash`. This genesis hash covers the decoded chain ID, RPC chain ID, suite policy and sorted units. The downloadable file has a separate byte-level checksum. Each subsequent digest is SHA-512 of the preceding 64-byte digest, the height as eight big-endian bytes, and the 64-byte transfer ID. The replica recomputes each new transfer ID, signature, input spend and output from its own database and native verifier before committing it.
 
-A matching checkpoint establishes agreement on that prefix. The proposer still selects transaction order and can withhold transfers. The loopback comparison has no operator signatures, quorum or fork-choice rule. A conflicting prefix stops synchronization for operator review.
+A matching checkpoint establishes agreement on that prefix. The proposer still selects transaction order and can withhold transfers. Replay reports the history it checked. Operators can attest to that prefix with the local command below. A conflicting prefix stops synchronization for operator review.
+
+## Sign a local checkpoint
+
+The commands below run on a local test network. The public Testnet 1 proposer still has one operator. Each signer runs Node 26.13.1 with post-quantum key support, Bun, its own verified genesis and verifier, and a dedicated replica database. Each uses a separate operator directory outside the checkout. The signing process replays a loopback peer. It never accepts a checkpoint supplied by that peer for signing.
+
+For a two-operator exercise, each operator runs one of the first two commands on their own machine. Exchange the public PEM files and compare their printed key IDs over an independently trusted channel. The public keys identify checkpoint signers and carry no spending authority.
+
+```sh
+node tools/ledger-checkpoint.mjs init "$OPERATOR_A" ml-dsa-65
+node tools/ledger-checkpoint.mjs init "$OPERATOR_B" slh-dsa-sha2-192s
+node tools/ledger-checkpoint.mjs policy "$CHAIN_ID" "$GENESIS_HASH" a-public.pem b-public.pem > policy.json
+```
+
+Use the chain ID and **canonical genesis hash** from each operator’s verified genesis checkpoint. Each operator must pin the same roster. The policy supports two through sixteen distinct keys and requires every listed signature. Both suites can appear in one roster. An unavailable operator prevents issuing the next certificate. Current certificates have no automatic expiry and an older certificate can remain cryptographically valid. A client needing freshness must pin a minimum height or compare against a known recent checkpoint.
+
+On each machine, set the same ledger environment as for `ledger:verify-peer`, including a dedicated `LEDGER_REPLICA_DATABASE_URL`. Set `LOCAL_RPC` to a local proposer or forwarded loopback peer, and `HEIGHT` to an explicit canonical hex height present on both replicas. Exchange the resulting public witness files.
+
+```sh
+node tools/ledger-checkpoint.mjs attest "$OPERATOR_A" policy.json "$LOCAL_RPC" "$HEIGHT" > a-witness.json
+node tools/ledger-checkpoint.mjs attest "$OPERATOR_B" policy.json "$LOCAL_RPC" "$HEIGHT" > b-witness.json
+node tools/ledger-checkpoint.mjs combine policy.json a-witness.json b-witness.json > certificate.json
+node tools/ledger-checkpoint.mjs verify policy.json certificate.json "$LOCAL_RPC"
+```
+
+The verifier authenticates the certificate against the pinned policy, replays the same height and compares both digests. To check an archived certificate offline against a previously verified local replay, use `verify-file POLICY CERTIFICATE REPLAY_JSON`. Only use `REPLAY_JSON` from a trusted source. The signed statement binds the chain, genesis, height, rolling replay digest, receipt-log root, policy and signer identity. Each key signs a single versioned binary encoding. The tests include an independent encoding vector. [Checkpoint encoding](../../tools/checkpoint-crypto.mjs) · [ML-DSA standard](https://csrc.nist.gov/pubs/fips/204/final) · [SLH-DSA standard](https://csrc.nist.gov/pubs/fips/205/final)
+
+The operator directory contains an unencrypted PKCS#8 secret protected by filesystem permissions and a SQLite decision journal. A successful signature and its height are committed together before the witness is printed. An exact retry returns the recorded witness. The next attestation must extend the previously signed prefix, including across a roster change. After losing or restoring a replica, catch it up to the last signed height before signing again. Protect the journal and key together. Cloning a key with two writable journals or restoring an old journal defeats this safeguard. The certificate attests to the listed keys' agreement on a prefix. Fork selection, operator independence, availability and finality require separate rules.
+
+## Prove a receipt from a verified checkpoint
+
+Each verified receipt contributes its 64-byte move ID in ledger order. Height one is leaf index zero. `logRoot` uses the [RFC 9162 tree shape and domain prefixes](https://www.rfc-editor.org/rfc/rfc9162#section-2.1) with SHA-512. It commits to ordered receipts; balances and spent-state proofs need a separate state commitment. The earlier `historyHash` remains available for comparing sequential replays.
+
+With the `demos-ledger-log` executable built from the local libdemos receipt-proof branch, export a verified prefix to a new file. The exporter writes one lowercase, 0x-prefixed move ID per line. An interrupted or rejected verification leaves any existing destination untouched.
+
+```sh
+bun run ledger:verify-peer "$LOCAL_RPC" "$HEIGHT" --export-log receipts.txt > replay.json
+node tools/ledger-checkpoint.mjs verify-file policy.json certificate.json replay.json > trusted.json
+ROOT=$(jq -r .logRoot trusted.json)
+demos-ledger-log inclusion "$INDEX" < receipts.txt > inclusion.txt
+demos-ledger-log verify-inclusion "$HEIGHT" "$INDEX" "$MOVE_ID" "$ROOT" < inclusion.txt
+```
+
+To check that one certified tree extends another, verify each certificate against the same pinned policy, then call `demos-ledger-log consistency "$OLD_HEIGHT" < receipts.txt > consistency.txt`. The receiver calls `demos-ledger-log verify-consistency "$OLD_HEIGHT" "$HEIGHT" "$OLD_ROOT" "$ROOT" < consistency.txt` using those trusted roots. A proof for an empty prefix records no earlier receipts. Inclusion of a move does not establish that the corresponding output remains unspent.

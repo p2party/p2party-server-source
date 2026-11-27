@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -151,26 +157,91 @@ test.skipIf(!verifier || !fixture || !throwawayServerUrl)(
         weight: "0x8",
         spentHeight: null,
       });
-      const cli = Bun.spawn(
-        [
-          process.execPath,
-          "--no-env-file",
-          "run",
-          "src/ledger/verifyPeer.ts",
-          endpoint,
-        ],
-        {
-          env: { ...env, LEDGER_REPLICA_DATABASE_URL: databases[1]!.url },
-          stdout: "pipe",
-          stderr: "pipe",
-        },
+      const runReplay = async (...args: string[]) => {
+        const cli = Bun.spawn(
+          [
+            process.execPath,
+            "--no-env-file",
+            "run",
+            "src/ledger/verifyPeer.ts",
+            endpoint,
+            ...args,
+          ],
+          {
+            env: { ...env, LEDGER_REPLICA_DATABASE_URL: databases[1]!.url },
+            stdout: "pipe",
+            stderr: "ignore",
+          },
+        );
+        const [exitCode, output] = await Promise.all([
+          cli.exited,
+          new Response(cli.stdout).text(),
+        ]);
+        return { exitCode, output };
+      };
+      const idsPath = join(directory, "receipt-ids.txt");
+      const run = await runReplay(
+        "0x2",
+        "--anchor",
+        "0x1",
+        checkpoint.historyHash,
+        checkpoint.logRoot,
+        "--export-log",
+        idsPath,
       );
-      const [exitCode, output] = await Promise.all([
-        cli.exited,
-        new Response(cli.stdout).text(),
-      ]);
-      expect(exitCode).toBe(0);
-      expect(JSON.parse(output)).toEqual(agreed);
+      expect(run.exitCode).toBe(0);
+      expect(JSON.parse(run.output)).toEqual(agreed);
+      expect(readFileSync(idsPath, "utf8")).toBe(first + "\n" + second + "\n");
+      expect(
+        (await runReplay("0x1", "--export-log", idsPath)).exitCode,
+      ).not.toBe(0);
+      expect(readFileSync(idsPath, "utf8")).toBe(first + "\n" + second + "\n");
+      const invalid = join(directory, "invalid.txt");
+      expect(
+        (
+          await runReplay(
+            "0x2",
+            "--anchor",
+            "0x1",
+            "0x" + "00".repeat(64),
+            checkpoint.logRoot,
+            "--export-log",
+            invalid,
+          )
+        ).exitCode,
+      ).not.toBe(0);
+      expect(existsSync(invalid)).toBe(false);
+      const logTool = process.env.P2PARTY_TEST_LEDGER_LOG;
+      if (logTool) {
+        const ids = readFileSync(idsPath);
+        const native = (args: string[], input: Buffer | string) =>
+          execFileSync(logTool, args, {
+            input,
+            encoding: "utf8",
+            timeout: 3000,
+          }).trimEnd();
+        expect(native(["root"], ids)).toBe(agreed.logRoot);
+        const path = native(["inclusion", "0x1"], ids);
+        expect(
+          native(
+            ["verify-inclusion", "0x2", "0x1", second, agreed.logRoot],
+            path + "\n",
+          ),
+        ).toBe("ok");
+        const growth = native(["consistency", "0x1"], ids);
+        expect(
+          native(
+            [
+              "verify-consistency",
+              "0x1",
+              "0x2",
+              checkpoint.logRoot,
+              agreed.logRoot,
+            ],
+            growth + "\n",
+          ),
+        ).toBe("ok");
+      }
       const readReplica = ledgerRpc(replica, { readOnly: true });
       const response = await readReplica(
         new Request(endpoint, {

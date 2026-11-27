@@ -22,6 +22,7 @@
     "effect": "3.22.5"
   },
   "scripts": {
+    "ledger:checkpoint": "node tools/ledger-checkpoint.mjs",
     "ledger:verify-peer": "bun run src/ledger/verifyPeer.ts",
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
