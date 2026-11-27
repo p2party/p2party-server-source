@@ -4,21 +4,21 @@ import {
   areBoundedLabels,
   isBoundedCandidate,
   isBoundedDescription,
-  isProtocolV4,
+  isProtocolV5,
   MAX_DATA_CHANNEL_LABEL_CHARS,
   MAX_DATA_CHANNEL_LABELS,
   MAX_ICE_FIELD_CHARS,
   MAX_ICE_CANDIDATE_CHARS,
   MAX_SDP_CHARS,
-} from "../../src/utils/protocolV4";
+} from "../../src/utils/signalingProtocol";
 
-describe("protocol-v4 signaling boundary", () => {
-  test("accepts only exact version 4", () => {
-    expect(isProtocolV4(4)).toBe(true);
-    expect(isProtocolV4(3)).toBe(false);
-    expect(isProtocolV4(2)).toBe(false);
-    expect(isProtocolV4("4")).toBe(false);
-    expect(isProtocolV4(undefined)).toBe(false);
+describe("protocol-v5 signaling boundary", () => {
+  test("accepts only exact version 5", () => {
+    expect(isProtocolV5(5)).toBe(true);
+    expect(isProtocolV5(4)).toBe(false);
+    expect(isProtocolV5(2)).toBe(false);
+    expect(isProtocolV5("4")).toBe(false);
+    expect(isProtocolV5(undefined)).toBe(false);
   });
 
   test("bounds descriptions, candidates, and labels", () => {

@@ -7,8 +7,8 @@ import handleMessage from "../../src/utils/handleMessage";
 import { wsClients } from "../../src/wsServer";
 import {
   MAX_SIGNALING_MESSAGE_CHARS,
-  PROTOCOL_VERSION,
-} from "../../src/utils/protocolV4";
+  SIGNALING_PROTOCOL_VERSION,
+} from "../../src/utils/signalingProtocol";
 
 import type {
   P2PartyWSClient,
@@ -84,7 +84,7 @@ describe("handleMessage malformed-shape closes carry 1003", () => {
     }
 
     expect(ws.closeArgs).toEqual([{ code: 1003, reason: expect.any(String) }]);
-    expect(ws.closeArgs[0]!.reason).toContain("Malformed protocol-v4");
+    expect(ws.closeArgs[0]!.reason).toContain("Malformed protocol-v5");
   });
 
   test("a structurally malformed room request closes with 1003", async () => {
@@ -97,9 +97,9 @@ describe("handleMessage malformed-shape closes carry 1003", () => {
         JSON.stringify({
           type: "room",
           fromPeerId: PEER_ID,
-          roomUrl: "ab".repeat(32),
+          roomLocator: "ab".repeat(64),
           roomRequestId: "00000000-0000-4000-8000-000000000004",
-          protocolVersion: 4,
+          protocolVersion: 5,
           extraField: "not part of the wire shape",
         }),
         noopEvents,
@@ -109,6 +109,23 @@ describe("handleMessage malformed-shape closes carry 1003", () => {
     }
 
     expect(ws.closeArgs).toEqual([{ code: 1003, reason: expect.any(String) }]);
+  });
+
+  test("server refuses a frame carrying roomUrl before dispatch", async () => {
+    const ws = verifiedSocket();
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: "extension",
+        protocolVersion: 5,
+        fromPeerId: PEER_ID,
+        roomUrl: "ab".repeat(32),
+      }),
+      noopEvents,
+    );
+    expect(ws.closeArgs).toEqual([
+      { code: 1003, reason: "Malformed protocol-v5 room locator" },
+    ]);
   });
 
   test("a description with an out-of-enum type closes with 1003", async () => {
@@ -124,7 +141,7 @@ describe("handleMessage malformed-shape closes carry 1003", () => {
           fromPeerPublicKey: "ab".repeat(32),
           toPeerId: OTHER_PEER_ID,
           roomId: ROOM_ID,
-          protocolVersion: 4,
+          protocolVersion: 5,
           description: { type: "not-a-real-sdp-type", sdp: "v=0" },
         }),
         noopEvents,
@@ -182,7 +199,7 @@ describe("handleMessage keeps every other cause of the same catch bare", () => {
  * anything the client sent.
  */
 describe("version mismatch", () => {
-  const REASON = `Unsupported signaling protocol version; this server speaks version ${String(PROTOCOL_VERSION)}`;
+  const REASON = `Unsupported signaling protocol version; this server speaks version ${String(SIGNALING_PROTOCOL_VERSION)}`;
 
   const unauthenticatedSocket = (): P2PartyWSClient & {
     closeArgs: { code?: number; reason?: string }[];
@@ -238,9 +255,9 @@ describe("version mismatch", () => {
         {
           type: "room",
           fromPeerId: PEER_ID,
-          roomUrl: "ab".repeat(32),
+          roomLocator: "ab".repeat(64),
           roomRequestId: "00000000-0000-4000-8000-000000000004",
-          protocolVersion: PROTOCOL_VERSION - 1,
+          protocolVersion: SIGNALING_PROTOCOL_VERSION - 1,
         },
       ],
       [
@@ -251,7 +268,7 @@ describe("version mismatch", () => {
           fromPeerId: PEER_ID,
           challenge: "cd".repeat(32),
           signature: "ef".repeat(64),
-          protocolVersion: PROTOCOL_VERSION + 1,
+          protocolVersion: SIGNALING_PROTOCOL_VERSION + 1,
         },
       ],
       [
@@ -295,7 +312,7 @@ describe("version mismatch", () => {
       fromPeerId: PEER_ID,
       challenge: "cd".repeat(32),
       signature: "ef".repeat(64),
-      protocolVersion: PROTOCOL_VERSION + 1,
+      protocolVersion: SIGNALING_PROTOCOL_VERSION + 1,
     });
     expect(ws.data.isVerified).toBe(false);
     expect(ws.data.isAuthenticating).toBe(false);

@@ -232,7 +232,7 @@ interface CreationWindow {
 }
 export interface AdmissionLease {
   release(): void;
-  authenticate(): boolean;
+  authenticate(identity: string): boolean;
   message(): boolean;
   roomMutation(): boolean;
   /**
@@ -285,7 +285,7 @@ export class AdmissionController {
     this.identities = new BucketTable(limits.trackedAddresses);
   }
 
-  reserve(ip: string, identity: string): AdmissionLease | undefined {
+  reserve(ip: string): AdmissionLease | undefined {
     if (this.connections >= this.limits.connections) return undefined;
     const now = this.now();
     const sources = admissionSources(ip);
@@ -304,6 +304,7 @@ export class AdmissionController {
       return undefined;
     // A public key is public: unproved sockets must never reserve its identity
     // quota, otherwise anyone could lock a known user's key out of the service.
+    let identity = "";
     let key: Bucket | undefined;
     let identityCharge: CreationWindow | undefined;
     this.ips.open(sources.key, address);
@@ -319,9 +320,10 @@ export class AdmissionController {
         if (key) this.identities.close(identity, key);
         this.connections--;
       },
-      authenticate: () => {
+      authenticate: (provedIdentity) => {
         if (released) return false;
-        if (key) return true;
+        if (key) return identity === provedIdentity;
+        identity = provedIdentity;
         const candidate = this.identities.use(identity, this.now());
         if (candidate.active >= this.limits.connectionsPerIdentity)
           return false;

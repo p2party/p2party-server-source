@@ -1,6 +1,6 @@
 ---
 # ============================================================================
-# Deploy the protocol-v4 signaling server
+# Deploy the protocol-v5 signaling server
 # ============================================================================
 # Ported from the older `server` repo's playbook, with the parts that no
 # longer describe this server removed rather than carried along:
@@ -729,7 +729,7 @@
       assert:
         that:
           - item.json.status == "ok"
-          - item.json.protocolVersion == 4
+          - item.json.protocolVersion == 5
           - item.json.version == expected_server_version
           - item.json.serverId is string
           - (item.json.serverId | trim | length) > 0
@@ -827,7 +827,7 @@
       assert:
         that:
           - public_signaling_health.json.status == "ok"
-          - public_signaling_health.json.protocolVersion == 4
+          - public_signaling_health.json.protocolVersion == 5
           - public_signaling_health.json.version == expected_server_version
           - public_signaling_health.json.serverId in signaling_server_ids
         fail_msg: >-

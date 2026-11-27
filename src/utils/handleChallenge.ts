@@ -1,3 +1,5 @@
+import { loginProof, requireSignalingHost } from "./loginProof";
+import { provisionalPeerId } from "./peerIdentity";
 import ondemos from "@ondemos/core";
 
 import {
@@ -5,7 +7,7 @@ import {
   isSocketChallengeBound,
   PERMANENT_CLOSE_CODE,
 } from "./socketAuth";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
 import { describeError } from "./logError";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -21,6 +23,7 @@ type VerifySignature = (
 ) => Promise<boolean>;
 
 export interface ChallengeVerificationOptions {
+  signalingHost?: string;
   verifySignature?: VerifySignature;
 }
 
@@ -67,20 +70,20 @@ const rejectAuthentication = (
 };
 
 /**
- * Verify possession of the Ed25519 secret bound during this socket's open.
+ * Verify possession of the signing key supplied in the first client frame.
  *
  * The nonce and challenge id live only on this WebSocket. Historical database
  * signatures are neither read nor accepted, and successful verification
  * consumes the pending state before the socket can enter the global registry.
  */
 const handleChallenge = async (
-  fromPeerId: string,
+  publicKey: string,
   ws: P2PartyWSClient,
   challenge: string,
   signature: string,
   options: ChallengeVerificationOptions = {},
 ): Promise<WebSocketMessageSuccessfulChallenge | false> => {
-  if (!isSocketChallengeBound(ws.data, fromPeerId, challenge))
+  if (!isSocketChallengeBound(ws.data, challenge))
     return rejectAuthentication(
       ws,
       "Challenge is not the fresh challenge bound to this WebSocket",
@@ -92,9 +95,14 @@ const handleChallenge = async (
   ws.data.isAuthenticating = true;
   try {
     const verification = await (options.verifySignature ?? ondemos.verify)(
-      hexBytes(challenge),
+      loginProof(
+        requireSignalingHost(
+          options.signalingHost ?? process.env.SIGNALING_HOST,
+        ),
+        challenge,
+      ),
       hexBytes(signature),
-      hexBytes(ws.data.publicKey),
+      hexBytes(publicKey),
     );
     if (!verification)
       return rejectAuthentication(
@@ -103,10 +111,13 @@ const handleChallenge = async (
         true,
       );
 
+    ws.data.publicKey = publicKey;
+    ws.data.peerId = provisionalPeerId(publicKey);
     return {
       type: "challenge",
+      peerId: ws.data.peerId,
       challengeId: consumeSocketChallenge(ws.data),
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SIGNALING_PROTOCOL_VERSION,
     } satisfies WebSocketMessageSuccessfulChallenge;
   } catch (error) {
     ws.data.isAuthenticating = false;

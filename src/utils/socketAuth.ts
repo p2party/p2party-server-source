@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 
-import { BUILD_MISMATCH_CLOSE_CODE, PROTOCOL_VERSION } from "./protocolV4";
+import {
+  BUILD_MISMATCH_CLOSE_CODE,
+  SIGNALING_PROTOCOL_VERSION,
+} from "./signalingProtocol";
 
 export interface SocketAuthState {
   peerId: string;
@@ -64,15 +67,15 @@ export const REPLACED_SESSION_CLOSE_REASON =
 
 /**
  * Close code for a message that is well-formed JSON, declares a protocol
- * version the server matches, but violates the exact protocol-v4 wire shape
+ * version the server matches, but violates the exact protocol-v5 wire shape
  * for its `type` -- an extra/missing field, a wrong field type, or a value
  * outside the bounds an `isExact*`/`isBounded*` guard checks (handleMessage.ts,
- * protocolV4.ts). Retrying changes nothing: the same bytes fail the same
+ * signalingProtocol.ts). Retrying changes nothing: the same bytes fail the same
  * validator forever, so this is the SDK's 1003 ("unsupported data") case --
  * a build mismatch, not PERMANENT_CLOSE_CODE's "you were refused or
  * superseded" case. A frame that declares another protocol version, or none,
  * is the other build mismatch: it closes with this same code and the reason
- * PROTOCOL_VERSION_MISMATCH_REASON (protocolV4.ts). The server speaks one
+ * PROTOCOL_VERSION_MISMATCH_REASON (signalingProtocol.ts). The server speaks one
  * version with no fallback, so the same build is refused on every socket.
  *
  * This must never be applied to a throw a healthy client can hit from a
@@ -146,20 +149,16 @@ const isUuid = (value: string): boolean =>
 
 export const createFreshSocketChallenge = (
   state: SocketAuthState,
-  peerId: string,
-  publicKey: string,
   nonce = crypto.randomBytes(32).toString("hex"),
   challengeId: string = crypto.randomUUID(),
 ) => {
-  if (!isUuid(peerId) || !isUuid(challengeId))
+  if (!isUuid(challengeId))
     throw new Error("WebSocket peer or challenge id is malformed");
-  if (!isCanonicalPublicKey(publicKey))
-    throw new Error("WebSocket public key is not canonical Ed25519 hex");
   if (!/^[0-9a-f]{64}$/.test(nonce))
     throw new Error("WebSocket challenge nonce is malformed");
 
-  state.peerId = peerId;
-  state.publicKey = publicKey;
+  state.peerId = "";
+  state.publicKey = "";
   state.challengeNonce = nonce;
   state.challengeId = challengeId;
   // An unproven socket has no generation: the value only becomes meaningful,
@@ -169,26 +168,21 @@ export const createFreshSocketChallenge = (
   state.isAuthenticating = false;
 
   return {
-    type: "peerId" as const,
-    peerId,
+    type: "authChallenge" as const,
     challenge: nonce,
-    protocolVersion: PROTOCOL_VERSION,
-    message: `Connected to WebSocket server. Your client id is ${peerId}`,
+    protocolVersion: SIGNALING_PROTOCOL_VERSION,
   };
 };
 
 export const isSocketChallengeBound = (
   state: SocketAuthState,
-  peerId: string,
   challenge: string,
 ): boolean =>
   !state.isVerified &&
   !state.isAuthenticating &&
-  state.peerId === peerId &&
   state.challengeNonce.length === 64 &&
   state.challengeNonce === challenge &&
-  state.challengeId.length > 0 &&
-  isCanonicalPublicKey(state.publicKey);
+  state.challengeId.length > 0;
 
 /**
  * The wire form of a socket's generation: `undefined` when there is none.

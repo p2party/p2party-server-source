@@ -4,16 +4,14 @@ export interface WebSocketMessagePong {
 }
 
 export interface WebSocketMessageChallengeRequest {
-  type: "peerId";
-  peerId: string;
+  type: "authChallenge";
   challenge: string;
   protocolVersion: number;
-  message: string;
 }
 
 export interface WebSocketMessageChallengeResponse {
   type: "challenge";
-  fromPeerId: string;
+  publicKey: string;
   challenge: string;
   signature: string;
   protocolVersion: number;
@@ -22,6 +20,7 @@ export interface WebSocketMessageChallengeResponse {
 export interface WebSocketMessageSuccessfulChallenge {
   type: "challenge";
   challengeId: string;
+  peerId: string;
   protocolVersion: number;
 }
 
@@ -35,7 +34,7 @@ export interface WebSocketTurnCredentials {
 export interface WebSocketMessageRoomIdRequest {
   type: "room";
   fromPeerId: string;
-  roomUrl: string;
+  roomLocator: string;
   roomRequestId: string;
   protocolVersion: number;
 }
@@ -43,7 +42,7 @@ export interface WebSocketMessageRoomIdRequest {
 export interface WebSocketMessageRoomIdResponse {
   type: "roomId";
   roomId: string;
-  roomUrl: string;
+  roomLocator: string;
   roomRequestId: string;
   protocolVersion: number;
   /** Omitted when no relay is configured; clients then stay STUN-only. */
@@ -53,14 +52,14 @@ export interface WebSocketMessageRoomIdResponse {
 export interface WebSocketMessageLeaveRoomRequest {
   type: "leaveRoom";
   fromPeerId: string;
-  roomUrl: string;
+  roomLocator: string;
   roomLeaveId: string;
   protocolVersion: number;
 }
 
 export interface WebSocketMessageRoomLeftResponse {
   type: "roomLeft";
-  roomUrl: string;
+  roomLocator: string;
   roomLeaveId: string;
   protocolVersion: number;
 }
@@ -107,7 +106,6 @@ export interface WebSocketMessagePeersRequest {
   roomId: string;
   protocolVersion: number;
   rosterRequestId?: string;
-  excludedPeerIds?: string[];
   targetPeerIds?: string[];
 }
 

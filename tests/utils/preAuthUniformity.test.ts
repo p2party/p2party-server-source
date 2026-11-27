@@ -47,13 +47,21 @@ const runProbe = async () => {
       close: { code: number; reason: string };
       queries: string[];
     }
-  > & { connectedSessionUntouched: boolean };
+  > & {
+    connectedSessionUntouched: boolean;
+    legacyClose: { code: number; reason: string };
+  };
 };
 
 describe("pre-authentication responses", () => {
   test("unknown and known identities get the same pre-auth response", async () => {
     const observed = await runProbe();
 
+    expect(observed.legacyClose).toEqual({
+      code: 1003,
+      reason:
+        "Unsupported signaling protocol version; this server speaks version 5",
+    });
     const states = [
       "registered",
       "oldStyle",
@@ -71,7 +79,7 @@ describe("pre-authentication responses", () => {
     expect(observed.connectedSessionUntouched).toBe(true);
     expect(observed.registered).toEqual({
       frames: [
-        '{"type":"peerId","peerId":"<derived peer id>","challenge":"<nonce>","protocolVersion":4,"message":"Connected to WebSocket server. Your client id is <derived peer id>"}',
+        '{"type":"authChallenge","challenge":"<nonce>","protocolVersion":5}',
         '{"type":"error","fromAction":"sendChallengeResponse","error":{"message":"Challenge response signature cannot be verified"}}',
       ],
       close: {

@@ -186,7 +186,7 @@ const candidate = (
   candidate: {
     candidate: "candidate:1 1 udp 2122260223 192.0.2.1 54400 typ host",
   },
-  protocolVersion: 4,
+  protocolVersion: 5,
 });
 
 /** A relay wired to `store` at the database boundary, with real modules above it. */
@@ -291,7 +291,7 @@ describe("candidate relay database work", () => {
       roomId: ROOM_ID,
       fromPeerPublicKey: SENDER_KEY,
       description: { type: "offer", sdp: "v=0" },
-      protocolVersion: 4,
+      protocolVersion: 5,
     };
 
     await relay(store, clients).description(source.ws, description);

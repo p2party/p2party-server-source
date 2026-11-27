@@ -1,5 +1,5 @@
 /** The one signaling protocol version this server speaks; there is no negotiation. */
-export const PROTOCOL_VERSION = 4;
+export const SIGNALING_PROTOCOL_VERSION = 5;
 /**
  * The close-code contract's code for a build mismatch, which retrying on a
  * new socket cannot fix: the SDK's 1003 ("unsupported data"), which its
@@ -9,13 +9,13 @@ export const PROTOCOL_VERSION = 4;
  */
 export const BUILD_MISMATCH_CLOSE_CODE = 1003;
 /**
- * The close for a frame whose `protocolVersion` is not PROTOCOL_VERSION, or
+ * The close for a frame whose `protocolVersion` is not SIGNALING_PROTOCOL_VERSION, or
  * that has none (only `pong` carries no version): the same build sends the
  * same version on every socket. The reason names only this server's version,
  * never a value the client sent.
  */
 export const PROTOCOL_VERSION_MISMATCH_CLOSE_CODE = BUILD_MISMATCH_CLOSE_CODE;
-export const PROTOCOL_VERSION_MISMATCH_REASON = `Unsupported signaling protocol version; this server speaks version ${String(PROTOCOL_VERSION)}`;
+export const PROTOCOL_VERSION_MISMATCH_REASON = `Unsupported signaling protocol version; this server speaks version ${String(SIGNALING_PROTOCOL_VERSION)}`;
 export const MAX_SIGNALING_MESSAGE_CHARS = 512 * 1024;
 export const MAX_SDP_CHARS = 256 * 1024;
 export const MAX_ICE_CANDIDATE_CHARS = 4096;
@@ -23,14 +23,14 @@ export const MAX_ICE_FIELD_CHARS = 256;
 export const MAX_DATA_CHANNEL_LABELS = 64;
 export const MAX_DATA_CHANNEL_LABEL_CHARS = 193;
 
-export const isProtocolV4 = (value: unknown): value is 4 =>
-  value === PROTOCOL_VERSION;
+export const isProtocolV5 = (value: unknown): value is 5 =>
+  value === SIGNALING_PROTOCOL_VERSION;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
 /**
- * Exact projection of the SDK's protocol-v4 signaling bounds.
+ * Exact projection of the SDK's protocol-v5 signaling bounds.
  *
  * The limits apply to the browser fields, not JSON wrapper overhead. Keeping
  * this shape identical on both sides prevents an SDK-valid boundary value from

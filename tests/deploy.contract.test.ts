@@ -333,6 +333,9 @@ describe("production deployment contract", () => {
       "sslrootcert={{ database.ssl_root_cert }}",
     );
     expect(signalingEnvironment).toContain("TRUST_LOCAL_PROXY=true");
+    expect(signalingEnvironment).toContain(
+      "SIGNALING_HOST={{ domains.signaling }}",
+    );
     for (const play of [deploy, initialSetup, installPostgres])
       expect(play).toContain("import_playbook: postgres-tls.yml");
     expect(postgresTls).toContain("subjectAltName=IP:{{ network.postgres }}");

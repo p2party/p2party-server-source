@@ -1,8 +1,8 @@
-export const deriveRoomIdentifier = (roomUrl: string): string => {
-  if (!/^[0-9a-f]{64}$/.test(roomUrl))
-    throw new Error("Room token must be 64 lowercase hexadecimal characters");
+/** The SDK transmits the SHA-512 identifier already used by the room index. */
+export const isRoomLocator = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{128}$/.test(value);
 
-  const hasher = new Bun.CryptoHasher("sha512");
-  hasher.update(roomUrl);
-  return hasher.digest("hex").toLowerCase();
+export const requireRoomLocator = (value: string): string => {
+  if (!isRoomLocator(value)) throw new Error("Invalid room locator");
+  return value;
 };

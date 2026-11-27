@@ -1,3 +1,5 @@
+import handleInterval from "./handleInterval";
+import { isRoomLocator } from "./roomIdentifier";
 import { isUUID, isHexadecimal } from "./formats";
 import { persistVerifiedIdentity, undoIdentityCommit } from "./peerIdentity";
 import type { IdentityCommit, RoutingClaim } from "./peerIdentity";
@@ -14,11 +16,11 @@ import {
   areBoundedLabels,
   isBoundedCandidate,
   isBoundedDescription,
-  isProtocolV4,
+  isProtocolV5,
   MAX_SIGNALING_MESSAGE_CHARS,
   PROTOCOL_VERSION_MISMATCH_CLOSE_CODE,
   PROTOCOL_VERSION_MISMATCH_REASON,
-} from "./protocolV4";
+} from "./signalingProtocol";
 import {
   activateVerifiedSocket,
   isCurrentVerifiedSocket,
@@ -48,7 +50,7 @@ import type {
 } from "../utils/interfaces";
 
 /**
- * Marks exactly the nine "Malformed protocol-v4 <thing>" throws below, so the
+ * Marks exactly the nine "Malformed protocol-v5 <thing>" throws below, so the
  * catch at the bottom of handleMessage can close with
  * MALFORMED_PROTOCOL_CLOSE_CODE for those alone. Everything else the same
  * catch can see -- the identity check, the oversized-frame guard,
@@ -56,11 +58,11 @@ import type {
  * still closes bare, because none of those are provably a client-build
  * mismatch that retrying cannot fix.
  */
-class MalformedProtocolV4Message extends Error {}
+class MalformedProtocolV5Message extends Error {}
 
 /**
  * A frame that declares another protocol version, or none. Closed with the
- * contract's version-mismatch code and reason (protocolV4.ts).
+ * contract's version-mismatch code and reason (signalingProtocol.ts).
  */
 class UnsupportedProtocolVersion extends Error {}
 
@@ -141,16 +143,15 @@ export const isExactRoomRequest = (
     hasExactKeys(candidate, [
       "type",
       "fromPeerId",
-      "roomUrl",
+      "roomLocator",
       "roomRequestId",
       "protocolVersion",
     ]) &&
     candidate.type === "room" &&
-    isProtocolV4(candidate.protocolVersion) &&
+    isProtocolV5(candidate.protocolVersion) &&
     typeof candidate.fromPeerId === "string" &&
     isUUID(candidate.fromPeerId) &&
-    typeof candidate.roomUrl === "string" &&
-    /^[0-9a-f]{64}$/.test(candidate.roomUrl) &&
+    isRoomLocator(candidate.roomLocator) &&
     typeof candidate.roomRequestId === "string" &&
     isUUID(candidate.roomRequestId, 4)
   );
@@ -167,15 +168,14 @@ export const isExactLeaveRoomRequest = (
       "type",
       "protocolVersion",
       "fromPeerId",
-      "roomUrl",
+      "roomLocator",
       "roomLeaveId",
     ]) &&
     candidate.type === "leaveRoom" &&
-    isProtocolV4(candidate.protocolVersion) &&
+    isProtocolV5(candidate.protocolVersion) &&
     typeof candidate.fromPeerId === "string" &&
     isUUID(candidate.fromPeerId) &&
-    typeof candidate.roomUrl === "string" &&
-    /^[0-9a-f]{64}$/.test(candidate.roomUrl) &&
+    isRoomLocator(candidate.roomLocator) &&
     typeof candidate.roomLeaveId === "string" &&
     isUUID(candidate.roomLeaveId, 4)
   );
@@ -194,7 +194,7 @@ export const isBoundedPeersRequest = (
       ids.every((id) => typeof id === "string" && isUUID(id)));
   return (
     msg.type === "peers" &&
-    isProtocolV4(msg.protocolVersion) &&
+    isProtocolV5(msg.protocolVersion) &&
     typeof msg.fromPeerId === "string" &&
     isUUID(msg.fromPeerId) &&
     typeof msg.roomId === "string" &&
@@ -202,7 +202,7 @@ export const isBoundedPeersRequest = (
     (msg.rosterRequestId === undefined ||
       (typeof msg.rosterRequestId === "string" &&
         isUUID(msg.rosterRequestId, 4))) &&
-    boundedIds(msg.excludedPeerIds) &&
+    !("excludedPeerIds" in msg) &&
     boundedIds(msg.targetPeerIds)
   );
 };
@@ -211,11 +211,12 @@ const handleMessage = async (
   ws: P2PartyWSClient,
   message: P2PartyWSMsg,
   events: P2PartyWSEvents,
+  signalingHost = process.env.SIGNALING_HOST,
 ) => {
   try {
     const serialized = message.toString();
     if (serialized.length > MAX_SIGNALING_MESSAGE_CHARS)
-      throw new Error("Signaling message exceeds the protocol-v4 limit");
+      throw new Error("Signaling message exceeds the protocol-v5 limit");
 
     const msg:
       | WebSocketMessagePong
@@ -232,14 +233,22 @@ const handleMessage = async (
 
     // Before the identity check, so a client of another protocol version is
     // told so whatever else it gets wrong, authenticated or not.
-    if (msg.type !== "pong" && !isProtocolV4(msg.protocolVersion))
+    if (
+      (msg.type !== "pong" || "protocolVersion" in msg) &&
+      !isProtocolV5(msg.protocolVersion)
+    )
       throw new UnsupportedProtocolVersion(
         "Unsupported signaling protocol version",
       );
+    if ("roomUrl" in msg)
+      throw new MalformedProtocolV5Message(
+        "Malformed protocol-v5 room locator",
+      );
     if (
-      !("fromPeerId" in msg) ||
-      msg.fromPeerId !== ws.data.peerId ||
-      (msg.type !== "challenge" && !isCurrentVerifiedSocket(wsClients, ws))
+      msg.type !== "challenge" &&
+      (!("fromPeerId" in msg) ||
+        msg.fromPeerId !== ws.data.peerId ||
+        !isCurrentVerifiedSocket(wsClients, ws))
     )
       throw new Error("WebSocket identity is not freshly authenticated");
     if (
@@ -254,7 +263,7 @@ const handleMessage = async (
     switch (msg.type) {
       case "pong": {
         if (!isExactPongMessage(msg))
-          throw new MalformedProtocolV4Message("Malformed protocol-v4 pong");
+          throw new MalformedProtocolV5Message("Malformed protocol-v5 pong");
         ws.data.isAlive = true;
         clearTimeout(ws.data.pongTimeout); // Clear the pong timeout
         ws.data.pongTimeout = undefined;
@@ -266,26 +275,33 @@ const handleMessage = async (
         if (
           hasExactKeys(msg, [
             "type",
-            "fromPeerId",
+            "publicKey",
             "challenge",
             "signature",
             "protocolVersion",
           ]) &&
-          isProtocolV4(msg.protocolVersion) &&
-          isUUID(msg.fromPeerId) &&
+          isProtocolV5(msg.protocolVersion) &&
+          typeof msg.publicKey === "string" &&
+          /^[0-9a-f]{64}$/.test(msg.publicKey) &&
+          typeof msg.challenge === "string" &&
+          typeof msg.signature === "string" &&
           isHexadecimal(msg.challenge) &&
           msg.challenge.length === 64 &&
           isHexadecimal(msg.signature) &&
           msg.signature.length === 128
         ) {
           const authenticated = await handleChallenge(
-            msg.fromPeerId,
+            msg.publicKey,
             ws,
             msg.challenge,
             msg.signature,
+            { signalingHost },
           );
           if (authenticated) {
-            if (ws.data.admission && !ws.data.admission.authenticate()) {
+            if (
+              ws.data.admission &&
+              !ws.data.admission.authenticate(msg.publicKey)
+            ) {
               ws.data.isVerified = false;
               ws.close(1013, "Identity admission limit reached");
               break;
@@ -304,6 +320,7 @@ const handleMessage = async (
             ws.send(JSON.stringify(authenticated));
             if (ws.data.authenticationTimeout)
               clearTimeout(ws.data.authenticationTimeout);
+            ws.data.pingInterval = handleInterval(ws);
             ws.subscribe("global");
             events.open(ws);
             // An older socket of this identity whose claim this commit took:
@@ -312,8 +329,8 @@ const handleMessage = async (
             await evictReplacedClaim(ws.data.peerId, committed.replaced);
           }
         } else {
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 challenge response",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 challenge response",
           );
         }
         break;
@@ -324,22 +341,27 @@ const handleMessage = async (
           await handleLeaveRoom(
             msg.fromPeerId,
             ws,
-            msg.roomUrl,
+            msg.roomLocator,
             msg.roomLeaveId,
           );
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 room leave",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 room leave",
           );
         break;
       }
 
       case "room": {
         if (isExactRoomRequest(msg)) {
-          await handleRoom(msg.fromPeerId, ws, msg.roomUrl, msg.roomRequestId);
+          await handleRoom(
+            msg.fromPeerId,
+            ws,
+            msg.roomLocator,
+            msg.roomRequestId,
+          );
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 room request",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 room request",
           );
         break;
       }
@@ -347,7 +369,7 @@ const handleMessage = async (
       case "peerConnection": {
         if (
           msg.type === "peerConnection" &&
-          isProtocolV4(msg.protocolVersion) &&
+          isProtocolV5(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.toPeerId) &&
           isUUID(msg.roomId)
@@ -359,8 +381,8 @@ const handleMessage = async (
             ws,
           );
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 peer-connection response",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 peer-connection response",
           );
         break;
       }
@@ -372,19 +394,18 @@ const handleMessage = async (
             ws,
             msg.roomId,
             msg.rosterRequestId,
-            msg.excludedPeerIds,
             msg.targetPeerIds,
           );
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 peers request",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 peers request",
           );
         break;
       }
 
       case "candidate": {
         if (
-          isProtocolV4(msg.protocolVersion) &&
+          isProtocolV5(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.roomId) &&
           isUUID(msg.toPeerId) &&
@@ -392,8 +413,8 @@ const handleMessage = async (
         ) {
           await handleCandidate(ws, msg);
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 ICE candidate",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 ICE candidate",
           );
 
         break;
@@ -401,7 +422,7 @@ const handleMessage = async (
 
       case "description": {
         if (
-          isProtocolV4(msg.protocolVersion) &&
+          isProtocolV5(msg.protocolVersion) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.roomId) &&
           isUUID(msg.toPeerId) &&
@@ -409,8 +430,8 @@ const handleMessage = async (
         ) {
           await handleDescription(ws, msg);
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 description",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 description",
           );
 
         break;
@@ -418,7 +439,7 @@ const handleMessage = async (
 
       case "connection": {
         if (
-          isProtocolV4(msg.protocolVersion) &&
+          isProtocolV5(msg.protocolVersion) &&
           isUUID(msg.roomId) &&
           isUUID(msg.fromPeerId) &&
           isUUID(msg.toPeerId) &&
@@ -426,8 +447,8 @@ const handleMessage = async (
         ) {
           await handlePeerConnection(ws, msg);
         } else
-          throw new MalformedProtocolV4Message(
-            "Malformed protocol-v4 connection request",
+          throw new MalformedProtocolV5Message(
+            "Malformed protocol-v5 connection request",
           );
 
         break;
@@ -450,7 +471,7 @@ const handleMessage = async (
         PROTOCOL_VERSION_MISMATCH_CLOSE_CODE,
         PROTOCOL_VERSION_MISMATCH_REASON,
       );
-    else if (error instanceof MalformedProtocolV4Message)
+    else if (error instanceof MalformedProtocolV5Message)
       ws.close(MALFORMED_PROTOCOL_CLOSE_CODE, error.message);
     else ws.close();
   }

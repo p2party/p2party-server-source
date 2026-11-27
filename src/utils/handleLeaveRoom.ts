@@ -1,7 +1,7 @@
 import { prisma as sharedPrisma } from "../prismaClient";
 import { wsClients } from "../wsServer";
-import { PROTOCOL_VERSION } from "./protocolV4";
-import { deriveRoomIdentifier } from "./roomIdentifier";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
+import { requireRoomLocator } from "./roomIdentifier";
 import { isCurrentVerifiedSocket } from "./socketAuth";
 import { runPeerRoomMutation } from "./peerRoomMutationQueue";
 import { describeError } from "./logError";
@@ -35,7 +35,7 @@ const handleLeaveRoomWithClient = async (
   announce: AnnounceRoomLeave,
   fromPeerId: string,
   ws: P2PartyWSClient,
-  roomUrl: string,
+  roomLocator: string,
   roomLeaveId: string,
 ): Promise<void> => {
   try {
@@ -49,7 +49,7 @@ const handleLeaveRoomWithClient = async (
       )
         throw new Error("Room leave was sent from an unauthenticated socket");
 
-      const identifier = deriveRoomIdentifier(roomUrl);
+      const identifier = requireRoomLocator(roomLocator);
       // The nested room filter produces the same empty result for a missing
       // room and for a real room this peer never joined. No existence bit is
       // exposed.
@@ -101,8 +101,8 @@ const handleLeaveRoomWithClient = async (
       ws.send(
         JSON.stringify({
           type: "roomLeft",
-          protocolVersion: PROTOCOL_VERSION,
-          roomUrl,
+          protocolVersion: SIGNALING_PROTOCOL_VERSION,
+          roomLocator,
           roomLeaveId,
         } satisfies WebSocketMessageRoomLeftResponse),
       );
@@ -142,7 +142,7 @@ export const createHandleLeaveRoom =
   (
     fromPeerId: string,
     ws: P2PartyWSClient,
-    roomUrl: string,
+    roomLocator: string,
     roomLeaveId: string,
   ) =>
     handleLeaveRoomWithClient(
@@ -153,7 +153,7 @@ export const createHandleLeaveRoom =
       announce ?? createAnnounceRoomLeave(prisma, { clients }),
       fromPeerId,
       ws,
-      roomUrl,
+      roomLocator,
       roomLeaveId,
     );
 

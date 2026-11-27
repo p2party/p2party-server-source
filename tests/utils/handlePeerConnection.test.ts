@@ -68,7 +68,7 @@ describe("peer connection target fencing", () => {
       fromPeerId: SOURCE_ID,
       toPeerId: TARGET_ID,
       labels: ["main"],
-      protocolVersion: 4,
+      protocolVersion: 5,
     };
     const handle = createHandlePeerConnection(prisma, {
       clients,

@@ -22,7 +22,7 @@ const PEER_ID = "00000000-0000-4000-8000-000000000001";
 const ROOM_ID = "00000000-0000-4000-8000-000000000002";
 const ROOM_REQUEST_ID = "00000000-0000-4000-8000-000000000003";
 const ROOM_LEAVE_ID = "00000000-0000-4000-8000-000000000004";
-const ROOM_TOKEN = "ab".repeat(32);
+const ROOM_LOCATOR = "ab".repeat(64);
 const PUBLIC_KEY = "cd".repeat(32);
 
 type MembershipPrisma = Pick<ProcessPrismaClient, "peer" | "room">;
@@ -38,16 +38,16 @@ const deferred = () => {
 const roomFrame = JSON.stringify({
   type: "room",
   fromPeerId: PEER_ID,
-  roomUrl: ROOM_TOKEN,
+  roomLocator: ROOM_LOCATOR,
   roomRequestId: ROOM_REQUEST_ID,
-  protocolVersion: 4,
+  protocolVersion: 5,
 });
 const leaveFrame = JSON.stringify({
   type: "leaveRoom",
   fromPeerId: PEER_ID,
-  roomUrl: ROOM_TOKEN,
+  roomLocator: ROOM_LOCATOR,
   roomLeaveId: ROOM_LEAVE_ID,
-  protocolVersion: 4,
+  protocolVersion: 5,
 });
 
 const membershipFixture = (
@@ -129,8 +129,8 @@ const membershipFixture = (
   const dispatch = async (ws: P2PartyWSClient, frame: P2PartyWSMsg) => {
     const message = JSON.parse(frame.toString()) as { type: string };
     if (message.type === "room")
-      await room(PEER_ID, ws, ROOM_TOKEN, ROOM_REQUEST_ID);
-    else await leave(PEER_ID, ws, ROOM_TOKEN, ROOM_LEAVE_ID);
+      await room(PEER_ID, ws, ROOM_LOCATOR, ROOM_REQUEST_ID);
+    else await leave(PEER_ID, ws, ROOM_LOCATOR, ROOM_LEAVE_ID);
   };
 
   return {

@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
 import { createHandleRoom } from "../../src/utils/handleRoom";
-import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "../../src/utils/signalingProtocol";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const ROOM_ID = "00000000-0000-4000-8000-000000000001";
-const ROOM_TOKEN = "cc".repeat(32);
+// UTF-8 SHA-512 of the lowercase capability "ab".repeat(32), shared with the SDK.
+const ROOM_LOCATOR =
+  "99d606e763d446b3009e635dd74b32340c9b8bd8eaf580ad481af7c9b154d5521630c569a8d055bceac34296504ec852b4eca15384774b9bca1f10cd7d047f94";
 const ROOM_REQUEST_ID = "00000000-0000-4000-8000-000000000099";
 const PEERS = [
   {
@@ -126,7 +128,7 @@ describe("concurrent room joins", () => {
     const handleRoom = createHandleRoom(database, clients);
     await Promise.all(
       PEERS.map((peer) =>
-        handleRoom(peer.id, socket(peer), ROOM_TOKEN, ROOM_REQUEST_ID),
+        handleRoom(peer.id, socket(peer), ROOM_LOCATOR, ROOM_REQUEST_ID),
       ),
     );
 
@@ -142,6 +144,7 @@ describe("concurrent room joins", () => {
         .filter(({ type }) => type === "roomId")
         .every(({ roomRequestId }) => roomRequestId === ROOM_REQUEST_ID),
     ).toBe(true);
+    expect(room?.identifier).toBe(ROOM_LOCATOR);
     expect(room?.peers.map(({ id }) => id).sort()).toEqual(
       PEERS.map(({ id }) => id).sort(),
     );
@@ -213,7 +216,7 @@ describe("concurrent room joins", () => {
         handleRoom(
           ws.data.peerId,
           ws,
-          ROOM_TOKEN,
+          ROOM_LOCATOR,
           `00000000-0000-4000-8000-${(0x200 + i).toString(16).padStart(12, "0")}`,
         ),
       );
@@ -248,8 +251,8 @@ describe("concurrent room joins", () => {
         }),
       },
       room: {
-        upsert: async () => ({ id: ROOM_ID, identifier: ROOM_TOKEN }),
-        update: async () => ({ id: ROOM_ID, identifier: ROOM_TOKEN }),
+        upsert: async () => ({ id: ROOM_ID, identifier: ROOM_LOCATOR }),
+        update: async () => ({ id: ROOM_ID, identifier: ROOM_LOCATOR }),
       },
     } as unknown as Parameters<typeof createHandleRoom>[0];
     const responses: unknown[] = [];
@@ -278,7 +281,7 @@ describe("concurrent room joins", () => {
       await createHandleRoom(database, clients)(
         peer.id,
         socket,
-        ROOM_TOKEN,
+        ROOM_LOCATOR,
         ROOM_REQUEST_ID,
       );
 
@@ -287,16 +290,16 @@ describe("concurrent room joins", () => {
       expect(Object.keys(response).sort()).toEqual([
         "protocolVersion",
         "roomId",
+        "roomLocator",
         "roomRequestId",
-        "roomUrl",
         "turnCredentials",
         "type",
       ]);
       expect(response.type).toBe("roomId");
       expect(response.roomId).toBe(ROOM_ID);
       expect(response.roomRequestId).toBe(ROOM_REQUEST_ID);
-      expect(response.roomUrl).toBe(ROOM_TOKEN);
-      expect(response.protocolVersion).toBe(PROTOCOL_VERSION);
+      expect(response.roomLocator).toBe(ROOM_LOCATOR);
+      expect(response.protocolVersion).toBe(SIGNALING_PROTOCOL_VERSION);
       expect("urls" in response).toBe(false);
       expect("username" in response).toBe(false);
       expect("credential" in response).toBe(false);

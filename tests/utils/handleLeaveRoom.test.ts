@@ -7,7 +7,7 @@ import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const PEER_ID = "00000000-0000-4000-8000-000000000001";
 const ROOM_ID = "00000000-0000-4000-8000-000000000002";
-const ROOM_TOKEN = "cd".repeat(32);
+const ROOM_LOCATOR = "cd".repeat(64);
 const ROOM_LEAVE_ID = "00000000-0000-4000-8000-000000000003";
 const PUBLIC_KEY = "ab".repeat(32);
 
@@ -49,8 +49,8 @@ const registryFor = (ws: P2PartyWSClient) =>
 
 const acknowledgement = {
   type: "roomLeft",
-  protocolVersion: 4,
-  roomUrl: ROOM_TOKEN,
+  protocolVersion: 5,
+  roomLocator: ROOM_LOCATOR,
   roomLeaveId: ROOM_LEAVE_ID,
 };
 
@@ -82,7 +82,7 @@ describe("authenticated idempotent room leave", () => {
     await createHandleLeaveRoom(prisma, registryFor(socket.ws))(
       PEER_ID,
       socket.ws,
-      ROOM_TOKEN,
+      ROOM_LOCATOR,
       ROOM_LEAVE_ID,
     );
 
@@ -95,7 +95,7 @@ describe("authenticated idempotent room leave", () => {
       acknowledgement,
     ]);
     expect(Object.keys(JSON.parse(socket.sent[0]!)).sort()).toEqual(
-      ["type", "protocolVersion", "roomUrl", "roomLeaveId"].sort(),
+      ["type", "protocolVersion", "roomLocator", "roomLeaveId"].sort(),
     );
     expect(socket.closeCalls()).toBe(0);
   });
@@ -117,7 +117,7 @@ describe("authenticated idempotent room leave", () => {
     await createHandleLeaveRoom(prisma, registryFor(socket.ws))(
       PEER_ID,
       socket.ws,
-      ROOM_TOKEN,
+      ROOM_LOCATOR,
       ROOM_LEAVE_ID,
     );
 
@@ -146,7 +146,7 @@ describe("authenticated idempotent room leave", () => {
     await createHandleLeaveRoom(prisma, registryFor(socket.ws))(
       PEER_ID,
       socket.ws,
-      ROOM_TOKEN,
+      ROOM_LOCATOR,
       ROOM_LEAVE_ID,
     );
 
@@ -177,7 +177,7 @@ describe("authenticated idempotent room leave", () => {
         await createHandleLeaveRoom(prisma, registryFor(socket.ws))(
           PEER_ID,
           socket.ws,
-          ROOM_TOKEN,
+          ROOM_LOCATOR,
           ROOM_LEAVE_ID,
         );
       } finally {
@@ -213,7 +213,7 @@ describe("authenticated idempotent room leave", () => {
       const leave = createHandleLeaveRoom(prisma, clients)(
         PEER_ID,
         socket.ws,
-        ROOM_TOKEN,
+        ROOM_LOCATOR,
         ROOM_LEAVE_ID,
       );
       await Promise.resolve();

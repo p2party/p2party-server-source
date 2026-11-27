@@ -4,7 +4,7 @@ import type { P2PartyWSClient } from "../wsServer";
 export const PING_INTERVAL = 10000; // Send ping every 10 seconds
 export const PONG_TIMEOUT = 5000; // Wait 5 seconds for pong response
 
-const handleInterval = async (ws: P2PartyWSClient) => {
+const handleInterval = (ws: P2PartyWSClient) => {
   return setInterval(() => {
     if (!ws.data.isAlive) {
       console.log("Client did not respond to ping. Terminating connection.");

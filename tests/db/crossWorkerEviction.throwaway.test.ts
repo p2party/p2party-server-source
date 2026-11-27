@@ -1,3 +1,4 @@
+import { loginProof } from "../../src/utils/loginProof";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
@@ -43,6 +44,7 @@ const startWorker = async (databaseUrl: string): Promise<Worker> => {
         HOME: process.env.HOME ?? "",
         DATABASE_URL: databaseUrl,
         PORT: String(port),
+        SIGNALING_HOST: `127.0.0.1:${port}`,
       },
       stdout: "ignore",
       stderr: "ignore",
@@ -76,7 +78,7 @@ const login = (port: number, id: ReturnType<typeof identity>) =>
     generation: string;
     closed: Promise<{ code: number; reason: string }>;
   }>((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?publickey=${id.key}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     let markClosed!: (close: { code: number; reason: string }) => void;
     const closed = new Promise<{ code: number; reason: string }>((done) => {
       markClosed = done;
@@ -92,18 +94,18 @@ const login = (port: number, id: ReturnType<typeof identity>) =>
         challenge?: string;
         challengeId?: string;
       };
-      if (frame.type === "peerId")
+      if (frame.type === "authChallenge")
         ws.send(
           JSON.stringify({
             type: "challenge",
-            fromPeerId: frame.peerId,
+            publicKey: id.key,
             challenge: frame.challenge,
             signature: sign(
               null,
-              new Uint8Array(Buffer.from(frame.challenge!, "hex")),
+              loginProof(`127.0.0.1:${port}`, frame.challenge!),
               id.privateKey,
             ).toString("hex"),
-            protocolVersion: 4,
+            protocolVersion: 5,
           }),
         );
       if (frame.type === "challenge")

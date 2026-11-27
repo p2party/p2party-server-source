@@ -12,15 +12,15 @@ describe("bounded signaling admission", () => {
       { ...admissionLimits, connectionsPerIp: 1, attemptsPerIpPerMinute: 3 },
       () => now,
     );
-    const first = guard.reserve("192.0.2.1", "first")!;
+    const first = guard.reserve("192.0.2.1")!;
     expect(first).toBeDefined();
-    expect(guard.reserve("192.0.2.1", "other")).toBeUndefined();
+    expect(guard.reserve("192.0.2.1")).toBeUndefined();
     first.release();
     first.release();
-    expect(guard.reserve("192.0.2.1", "second")).toBeDefined();
-    expect(guard.reserve("192.0.2.1", "third")).toBeUndefined();
+    expect(guard.reserve("192.0.2.1")).toBeDefined();
+    expect(guard.reserve("192.0.2.1")).toBeUndefined();
     now += 60001;
-    expect(guard.reserve("192.0.2.2", "third")).toBeDefined();
+    expect(guard.reserve("192.0.2.2")).toBeDefined();
   });
 
   test("unproved users cannot consume a known identity's quota", () => {
@@ -28,12 +28,12 @@ describe("bounded signaling admission", () => {
       ...admissionLimits,
       connectionsPerIdentity: 1,
     });
-    const unproved = guard.reserve("192.0.2.1", "victim")!;
-    const actual = guard.reserve("192.0.2.2", "victim")!;
-    expect(actual.authenticate()).toBe(true);
-    expect(unproved.authenticate()).toBe(false);
+    const unproved = guard.reserve("192.0.2.1")!;
+    const actual = guard.reserve("192.0.2.2")!;
+    expect(actual.authenticate("victim")).toBe(true);
+    expect(unproved.authenticate("victim")).toBe(false);
     actual.release();
-    expect(unproved.authenticate()).toBe(true);
+    expect(unproved.authenticate("victim")).toBe(true);
   });
 
   test("identity message and room budgets survive socket replacement", () => {
@@ -46,14 +46,14 @@ describe("bounded signaling admission", () => {
       },
       () => now,
     );
-    const first = guard.reserve("192.0.2.1", "identity")!;
-    expect(first.authenticate()).toBe(true);
+    const first = guard.reserve("192.0.2.1")!;
+    expect(first.authenticate("identity")).toBe(true);
     expect(first.message()).toBe(true);
     expect(first.message()).toBe(true);
     expect(first.roomMutation()).toBe(true);
     first.release();
-    const next = guard.reserve("192.0.2.2", "identity")!;
-    expect(next.authenticate()).toBe(true);
+    const next = guard.reserve("192.0.2.2")!;
+    expect(next.authenticate("identity")).toBe(true);
     expect(next.message()).toBe(false);
     expect(next.roomMutation()).toBe(false);
     now += 60000;
@@ -68,9 +68,9 @@ describe("bounded signaling admission", () => {
       () => now,
     );
     const table = (guard as unknown as { ips: { size: number } }).ips;
-    guard.reserve("192.0.2.1", "identity")!.release();
+    guard.reserve("192.0.2.1")!.release();
     // A full table evicts the idle entry instead of refusing the newcomer.
-    expect(guard.reserve("192.0.2.2", "other")).toBeDefined();
+    expect(guard.reserve("192.0.2.2")).toBeDefined();
     expect(table.size).toBe(1);
     expect(guard.newIdentity()).toBe(true);
     expect(guard.newIdentity()).toBe(false);
@@ -89,11 +89,11 @@ describe("bounded signaling admission", () => {
       }
     ).ips;
     for (const address of ["192.0.2.1", "192.0.2.2", "192.0.2.3"])
-      guard.reserve(address, address)!.release();
+      guard.reserve(address)!.release();
     // A refused attempt still marks 192.0.2.1 as recently used.
-    expect(guard.reserve("192.0.2.1", "again")).toBeUndefined();
+    expect(guard.reserve("192.0.2.1")).toBeUndefined();
 
-    expect(guard.reserve("192.0.2.4", "new")).toBeDefined();
+    expect(guard.reserve("192.0.2.4")).toBeDefined();
     expect(table.size).toBe(3);
     expect(table.has("192.0.2.2")).toBe(false);
     expect(table.has("192.0.2.1")).toBe(true);
@@ -101,19 +101,19 @@ describe("bounded signaling admission", () => {
 
     // The evicted key starts a fresh window; 192.0.2.3 is now the least
     // recently used idle key.
-    expect(guard.reserve("192.0.2.2", "back")).toBeDefined();
+    expect(guard.reserve("192.0.2.2")).toBeDefined();
     expect(table.has("192.0.2.3")).toBe(false);
-    expect(guard.reserve("192.0.2.5", "open")).toBeDefined();
+    expect(guard.reserve("192.0.2.5")).toBeDefined();
     expect(table.has("192.0.2.1")).toBe(false);
 
     // Every entry now holds an open socket. Those are never evicted, and the
     // newcomer is still admitted and counted: the table exceeds its bound
     // only by entries with open sockets, which MAX_CONNECTIONS bounds.
-    expect(guard.reserve("192.0.2.6", "open")).toBeDefined();
+    expect(guard.reserve("192.0.2.6")).toBeDefined();
     expect(table.size).toBe(4);
     for (const address of ["192.0.2.2", "192.0.2.4", "192.0.2.5", "192.0.2.6"])
       expect(table.has(address)).toBe(true);
-    expect(guard.reserve("192.0.2.6", "rate-limited")).toBeUndefined();
+    expect(guard.reserve("192.0.2.6")).toBeUndefined();
   });
 
   test("one /64 shares one bucket", () => {
@@ -122,15 +122,13 @@ describe("bounded signaling admission", () => {
       connectionsPerIp: 2,
     });
     const source = (remote: string) => admissionAddress(remote, null, false)!;
-    expect(guard.reserve(source("2001:db8:aaaa:bbbb::1"), "a")).toBeDefined();
+    expect(guard.reserve(source("2001:db8:aaaa:bbbb::1"))).toBeDefined();
     expect(
-      guard.reserve(source("2001:db8:aaaa:bbbb:ffff:ffff:ffff:ffff"), "b"),
+      guard.reserve(source("2001:db8:aaaa:bbbb:ffff:ffff:ffff:ffff")),
     ).toBeDefined();
     // Same /64 written with upper case and without compression.
-    expect(
-      guard.reserve(source("2001:DB8:AAAA:BBBB:0:0:0:3"), "c"),
-    ).toBeUndefined();
-    expect(guard.reserve(source("2001:db8:aaaa:bbbc::1"), "d")).toBeDefined();
+    expect(guard.reserve(source("2001:DB8:AAAA:BBBB:0:0:0:3"))).toBeUndefined();
+    expect(guard.reserve(source("2001:db8:aaaa:bbbc::1"))).toBeDefined();
     expect((guard as unknown as { ips: Map<string, unknown> }).ips.size).toBe(
       2,
     );
@@ -157,12 +155,11 @@ describe("bounded signaling admission", () => {
               null,
               false,
             )!,
-            "aa".repeat(32),
           )
         )
           held++;
     expect(held).toBe(32);
-    expect(guard.reserve("198.51.100.7", "bb".repeat(32))).toBeDefined();
+    expect(guard.reserve("198.51.100.7")).toBeDefined();
   });
 
   test("one /48 cannot hold the global socket pool", () => {
@@ -186,14 +183,13 @@ describe("bounded signaling admission", () => {
               null,
               false,
             )!,
-            "aa".repeat(32),
           )
         )
           held++;
     // 10% of 2048.
     expect(held).toBe(204);
-    expect(guard.reserve("198.51.100.7", "bb".repeat(32))).toBeDefined();
-    expect(guard.reserve("2001:db8:aaab:1::1", "cc".repeat(32))).toBeDefined();
+    expect(guard.reserve("198.51.100.7")).toBeDefined();
+    expect(guard.reserve("2001:db8:aaab:1::1")).toBeDefined();
   });
 
   test("one-shot upgrades from one /64 cannot fill the address table", () => {
@@ -209,13 +205,12 @@ describe("bounded signaling admission", () => {
             null,
             false,
           )!,
-          "aa".repeat(32),
         )
         ?.release();
     expect((guard as unknown as { ips: Map<string, unknown> }).ips.size).toBe(
       1,
     );
-    expect(guard.reserve("198.51.100.7", "bb".repeat(32))).toBeDefined();
+    expect(guard.reserve("198.51.100.7")).toBeDefined();
   });
 
   test("ipv4-mapped address shares the ipv4 bucket", () => {
@@ -224,10 +219,10 @@ describe("bounded signaling admission", () => {
       ...admissionLimits,
       connectionsPerIp: 1,
     });
-    expect(plainFirst.reserve(source("192.0.2.1"), "a")).toBeDefined();
-    expect(plainFirst.reserve(source("::ffff:192.0.2.1"), "b")).toBeUndefined();
-    expect(plainFirst.reserve(source("::ffff:c000:201"), "c")).toBeUndefined();
-    expect(plainFirst.reserve(source("192.0.2.2"), "d")).toBeDefined();
+    expect(plainFirst.reserve(source("192.0.2.1"))).toBeDefined();
+    expect(plainFirst.reserve(source("::ffff:192.0.2.1"))).toBeUndefined();
+    expect(plainFirst.reserve(source("::ffff:c000:201"))).toBeUndefined();
+    expect(plainFirst.reserve(source("192.0.2.2"))).toBeDefined();
 
     const mappedFirst = new AdmissionController({
       ...admissionLimits,
@@ -238,10 +233,9 @@ describe("bounded signaling admission", () => {
     expect(
       mappedFirst.reserve(
         admissionAddress("127.0.0.1", "::ffff:198.51.100.5", true)!,
-        "a",
       ),
     ).toBeDefined();
-    expect(mappedFirst.reserve(source("198.51.100.5"), "b")).toBeUndefined();
+    expect(mappedFirst.reserve(source("198.51.100.5"))).toBeUndefined();
   });
 
   test("one key cannot exhaust the global creation budget", () => {
@@ -255,11 +249,8 @@ describe("bounded signaling admission", () => {
       () => now,
     );
     const proved = (remote: string, identity: string) => {
-      const lease = guard.reserve(
-        admissionAddress(remote, null, false)!,
-        identity,
-      )!;
-      expect(lease.authenticate()).toBe(true);
+      const lease = guard.reserve(admissionAddress(remote, null, false)!)!;
+      expect(lease.authenticate(identity)).toBe(true);
       return lease;
     };
     // Two sockets of one /64 are one key.
@@ -290,7 +281,7 @@ describe("bounded signaling admission", () => {
     expect(admitted).toBe(120);
 
     // An unproved socket creates nothing.
-    const unproved = guard.reserve("203.0.113.1", "unproved")!;
+    const unproved = guard.reserve("203.0.113.1")!;
     now += 60000;
     expect(unproved.newIdentity()).toBe(false);
     expect(unproved.newMembership()).toBe(false);
@@ -308,11 +299,8 @@ describe("bounded signaling admission", () => {
       () => 100000,
     );
     const proved = (remote: string, identity: string) => {
-      const lease = guard.reserve(
-        admissionAddress(remote, null, false)!,
-        identity,
-      )!;
-      expect(lease.authenticate()).toBe(true);
+      const lease = guard.reserve(admissionAddress(remote, null, false)!)!;
+      expect(lease.authenticate(identity)).toBe(true);
       return lease;
     };
     let identities = 0,

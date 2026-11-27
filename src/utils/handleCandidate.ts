@@ -2,7 +2,7 @@ import { findRoomTarget } from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
 import { sendToPeerOnServer } from "../pubsub";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
 import { isCurrentVerifiedSocket } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -39,7 +39,7 @@ const handleCandidateWithDependencies = async (
     candidate: msg.candidate,
     fromPeerId: msg.fromPeerId,
     roomId: msg.roomId,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SIGNALING_PROTOCOL_VERSION,
     message: `Received candidate for RTCPeerConnection from client ${msg.fromPeerId}`,
   } as WebSocketMessageCandidateReceive);
 

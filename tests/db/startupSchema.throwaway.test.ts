@@ -42,6 +42,7 @@ const start = async (databaseUrl: string) => {
         HOME: process.env.HOME ?? "",
         DATABASE_URL: databaseUrl,
         PORT: String(port),
+        SIGNALING_HOST: `127.0.0.1:${port}`,
       },
       stdout: "pipe",
       stderr: "pipe",

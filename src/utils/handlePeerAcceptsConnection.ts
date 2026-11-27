@@ -10,7 +10,7 @@ import type {
   WebSocketMessagePeersResponse,
 } from "../utils/interfaces";
 import findRoomPeers from "./findRoomPeers";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
 import { isCurrentVerifiedSocket, wireSocketGeneration } from "./socketAuth";
 import { peerLogTag } from "./logTag";
 import { describeError } from "./logError";
@@ -98,7 +98,7 @@ const handlePeerAcceptsConnectionWithClient = async (
             socketGeneration: wireSocketGeneration(ws.data),
           },
         ],
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: SIGNALING_PROTOCOL_VERSION,
       } as WebSocketMessagePeersResponse);
 
       const peerWsClient = clients.get(toPeerId);

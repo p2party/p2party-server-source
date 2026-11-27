@@ -28,7 +28,7 @@ the migrations to a fresh disposable PostgreSQL instance.
 ## Change guidelines
 
 1. Open an issue before a large protocol or persistence change.
-2. Keep protocol-v4 inputs bounded and bind all actions to the authenticated
+2. Keep protocol-v5 inputs bounded and bind all actions to the authenticated
    WebSocket identity.
 3. Add focused tests for success, malformed input, replay, and cross-room or
    cross-identity attempts.

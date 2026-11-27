@@ -22,8 +22,8 @@ fix to reach supported deployments before publishing details.
 
 ## Supported version
 
-Release 0.1.4 on the default branch supports protocol v4 only.
-Older protocol versions are rejected rather than negotiated.
+This branch accepts signaling protocol 5. Deploy the matching server before
+updating clients. Released server 0.1.4 speaks protocol 4.
 
 ## Cryptographic scope
 
@@ -33,7 +33,7 @@ Neither repository has completed an independent third-party security audit;
 avoid claims to the contrary.
 
 The signaling operator can observe identity public keys, peer IDs, room
-membership, IP/network metadata, and TURN use. The current server does not
+locators and membership, IP/network metadata, and TURN use. The current server does not
 provide blind rendezvous or hide room membership from its operator. Reports
 that cross the signaling and message-cryptography boundary may still be sent to
 `security@p2party.com`; include the affected repository and commit.

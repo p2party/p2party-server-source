@@ -10,7 +10,7 @@ import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const ROOM_ID = "00000000-0000-4000-8000-0000000000a1";
 const OTHER_ROOM_ID = "00000000-0000-4000-8000-0000000000a2";
-const ROOM_TOKEN = "cd".repeat(32);
+const ROOM_LOCATOR = "cd".repeat(64);
 const ROOM_LEAVE_ID = "00000000-0000-4000-8000-0000000000a3";
 const OTHER_SERVER = "22222222-2222-4222-8222-222222222222";
 
@@ -79,7 +79,7 @@ const peerLeft = (
   peerId: LEAVER,
   reason,
   socketGeneration,
-  protocolVersion: 4,
+  protocolVersion: 5,
 });
 
 /** Room-mates as the membership query returns them, with routing claims. */
@@ -129,7 +129,7 @@ describe("departure signalling: leave", () => {
         clients,
         sendToPeerOnServer: remote.send,
       }),
-    )(LEAVER, leaver, ROOM_TOKEN, ROOM_LEAVE_ID);
+    )(LEAVER, leaver, ROOM_LOCATOR, ROOM_LEAVE_ID);
 
     // Read after the membership row is gone, online members only.
     expect(order).toEqual(["unlink", "members"]);
@@ -146,8 +146,8 @@ describe("departure signalling: leave", () => {
     expect(frames(leaver)).toEqual([
       {
         type: "roomLeft",
-        protocolVersion: 4,
-        roomUrl: ROOM_TOKEN,
+        protocolVersion: 5,
+        roomLocator: ROOM_LOCATOR,
         roomLeaveId: ROOM_LEAVE_ID,
       },
     ]);
@@ -202,9 +202,9 @@ describe("departure signalling: leave", () => {
 
     // The production wiring: the handler builds its own announcer.
     const leave = createHandleLeaveRoom(prisma as never, clients);
-    await leave(LEAVER, leaver, ROOM_TOKEN, ROOM_LEAVE_ID);
+    await leave(LEAVER, leaver, ROOM_LOCATOR, ROOM_LEAVE_ID);
     // The membership is already absent: the same acknowledgement, no frame.
-    await leave(LEAVER, leaver, ROOM_TOKEN, ROOM_LEAVE_ID);
+    await leave(LEAVER, leaver, ROOM_LOCATOR, ROOM_LEAVE_ID);
 
     expect(membershipReads).toBe(1);
     expect(frames(local)).toEqual([peerLeft(ROOM_ID, "left")]);
@@ -241,7 +241,7 @@ describe("departure signalling: leave", () => {
       await createHandleLeaveRoom(prisma as never, clients)(
         LEAVER,
         leaver,
-        ROOM_TOKEN,
+        ROOM_LOCATOR,
         ROOM_LEAVE_ID,
       );
     } finally {
@@ -434,9 +434,8 @@ describe("departure signalling: cost", () => {
     const cycle = async () => {
       const lease = admission.reserve(
         `198.51.100.${String(announced.length % 250)}`,
-        "identity",
       )!;
-      expect(lease.authenticate()).toBe(true);
+      expect(lease.authenticate("identity")).toBe(true);
       const leaver = socket(LEAVER, LEAVER_GENERATION);
       leaver.data.admission = lease;
       const clients = new Map<string, P2PartyWSClient>([
@@ -491,7 +490,7 @@ describe("departure signalling: cost", () => {
 
   test("a socket that never authenticated has no identity to charge", () => {
     const admission = new limits.AdmissionController(limits.admissionLimits);
-    const lease = admission.reserve("198.51.100.1", "identity")!;
+    const lease = admission.reserve("198.51.100.1")!;
     lease.release();
     expect(lease.offlineAnnouncement()).toBe(false);
   });
@@ -525,8 +524,8 @@ describe("departure signalling: cost", () => {
     let identities = 0;
     /** A new identity's last socket, from `address`, closing once. */
     const close = async (address: string) => {
-      const lease = admission.reserve(address, `identity-${++identities}`)!;
-      expect(lease.authenticate()).toBe(true);
+      const lease = admission.reserve(address)!;
+      expect(lease.authenticate(`identity-${++identities}`)).toBe(true);
       const leaver = socket(LEAVER, LEAVER_GENERATION);
       leaver.data.admission = lease;
       const clients = new Map<string, P2PartyWSClient>([[LEAVER, leaver]]);
@@ -582,8 +581,8 @@ describe("departure signalling: cost", () => {
   test("a skipped announcement changes nothing else", async () => {
     const admission = new limits.AdmissionController(limits.admissionLimits);
     // The address has one frame of its budget left.
-    const earlier = admission.reserve("198.51.100.9", "earlier")!;
-    expect(earlier.authenticate()).toBe(true);
+    const earlier = admission.reserve("198.51.100.9")!;
+    expect(earlier.authenticate("earlier")).toBe(true);
     expect(
       earlier.departureFrames(
         limits.MAX_DEPARTURE_FRAMES_PER_SOURCE_PER_MINUTE - 1,
@@ -592,8 +591,8 @@ describe("departure signalling: cost", () => {
     earlier.release();
 
     const leaver = socket(LEAVER, LEAVER_GENERATION);
-    const lease = admission.reserve("198.51.100.9", "leaver")!;
-    expect(lease.authenticate()).toBe(true);
+    const lease = admission.reserve("198.51.100.9")!;
+    expect(lease.authenticate("leaver")).toBe(true);
     leaver.data.admission = lease;
     const local = socket(LOCAL, "55555555-5555-4555-8555-555555555555");
     const clients = new Map<string, P2PartyWSClient>([
@@ -635,7 +634,7 @@ describe("departure signalling: cost", () => {
       prisma as never,
       clients,
       peers.createAnnounceRoomLeave(prisma as never, dependencies),
-    )(LEAVER, leaver, ROOM_TOKEN, ROOM_LEAVE_ID);
+    )(LEAVER, leaver, ROOM_LOCATOR, ROOM_LEAVE_ID);
     expect(unlinked).toBe(1);
     expect(frames(leaver).map((frame) => frame.type)).toEqual(["roomLeft"]);
     expect(leaver.closes).toBe(0);
@@ -737,7 +736,7 @@ describe("departure signalling: ordering", () => {
           publicKey: requester.data.publicKey,
           socketGeneration: SUCCESSOR_GENERATION,
         },
-        protocolVersion: 4,
+        protocolVersion: 5,
       },
     ]);
   });

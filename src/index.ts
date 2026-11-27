@@ -1,3 +1,4 @@
+import { requireSignalingHost } from "./utils/loginProof";
 import { P2PartyWS } from "./wsServer";
 import { startupDatabaseCheck } from "./db/schemaCheck";
 import { assertSecureTurnSecret } from "./utils/socketAuth";
@@ -19,6 +20,7 @@ const port =
   configuredPort === undefined ? 3001 : Number.parseInt(configuredPort, 10);
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
   throw new Error("PORT must be an integer between 1 and 65535");
+const signalingHost = requireSignalingHost(process.env.SIGNALING_HOST);
 assertSecureTurnSecret(process.env.COTURN_SECRET);
 
 const events: P2PartyWSEvents = {
@@ -59,7 +61,7 @@ if (startup.rekeyed)
 await initPubSub();
 const roomRetention = startRoomRetention();
 
-new P2PartyWS(port, events);
+new P2PartyWS(port, events, signalingHost);
 
 // Release this instance's peer claims and routing rows on the way out, so a
 // reconnecting peer is not routed to a process that no longer exists.

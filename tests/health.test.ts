@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { PROTOCOL_VERSION } from "../src/utils/protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "../src/utils/signalingProtocol";
 import { SERVER_VERSION } from "../src/version";
 
 /**
@@ -20,7 +20,7 @@ describe("health endpoint", () => {
           if (url.pathname === "/health")
             return Response.json({
               status: "ok",
-              protocolVersion: PROTOCOL_VERSION,
+              protocolVersion: SIGNALING_PROTOCOL_VERSION,
               version: SERVER_VERSION,
               serverId: "test-instance",
             });
@@ -38,7 +38,7 @@ describe("health endpoint", () => {
 
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.status).toBe("ok");
-      expect(body.protocolVersion).toBe(4);
+      expect(body.protocolVersion).toBe(5);
       expect(body.version).toBe(SERVER_VERSION);
       // Distinguishes instances behind the load balancer.
       expect(typeof body.serverId).toBe("string");

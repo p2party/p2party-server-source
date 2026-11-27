@@ -70,15 +70,15 @@ describe("explicit membership snapshots", () => {
         rosterRequestId: requestId,
         roomId,
         peers: [{ ...members[1], socketGeneration: requestId }, members[2]],
-        protocolVersion: 4,
+        protocolVersion: 5,
       },
     ]);
     expect(f.frames[1][0]?.type).toBe("peerConnection");
   });
 
-  test("terminal exclusions suppress introductions, never censor snapshot membership", async () => {
+  test("only requested members receive introductions and snapshots include every member", async () => {
     const f = fixture();
-    await f.handler(ids[0], f.sockets[0], roomId, requestId, [ids[1]]);
+    await f.handler(ids[0], f.sockets[0], roomId, requestId, [ids[2]]);
     expect((f.frames[0][0]?.peers as unknown[]).length).toBe(2);
     expect(f.frames[1]).toEqual([]);
     expect(f.frames[2][0]?.type).toBe("peerConnection");
@@ -91,14 +91,14 @@ describe("explicit membership snapshots", () => {
     expect(f.frames[1][0]?.type).toBe("peerConnection");
   });
 
-  test("member targets narrow introductions while exclusions win and snapshots stay complete", async () => {
+  test("member targets narrow introductions including the empty list and snapshots stay complete", async () => {
     const f = fixture();
-    await f.handler(ids[0], f.sockets[0], roomId, requestId, [], [ids[2]]);
+    await f.handler(ids[0], f.sockets[0], roomId, requestId, [ids[2]]);
     expect((f.frames[0][0]?.peers as unknown[]).length).toBe(2);
     expect(f.frames[1]).toEqual([]);
     expect(f.frames[2][0]?.type).toBe("peerConnection");
     f.frames[2].length = 0;
-    await f.handler(ids[0], f.sockets[0], roomId, ids[1], [ids[2]], [ids[2]]);
+    await f.handler(ids[0], f.sockets[0], roomId, ids[1], []);
     expect((f.frames[0][1]?.peers as unknown[]).length).toBe(2);
     expect(f.frames[1]).toEqual([]);
     expect(f.frames[2]).toEqual([]);

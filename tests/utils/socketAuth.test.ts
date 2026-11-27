@@ -13,7 +13,7 @@ import {
   TURN_CREDENTIAL_CONTRACT,
   unregisterSocketIfCurrent,
 } from "../../src/utils/socketAuth";
-import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "../../src/utils/signalingProtocol";
 
 import type {
   ReplaceableSocketAuthClient,
@@ -56,40 +56,30 @@ describe("fresh per-WebSocket authentication state", () => {
 
     const request = createFreshSocketChallenge(
       auth,
-      PEER_ID,
-      "ab".repeat(32),
       "cd".repeat(32),
       CHALLENGE_ID,
     );
 
     expect(request).toEqual({
-      type: "peerId",
-      peerId: PEER_ID,
+      type: "authChallenge",
       challenge: "cd".repeat(32),
-      protocolVersion: PROTOCOL_VERSION,
-      message: `Connected to WebSocket server. Your client id is ${PEER_ID}`,
+      protocolVersion: SIGNALING_PROTOCOL_VERSION,
     });
     expect("signature" in request).toBe(false);
     expect("credential" in request).toBe(false);
     expect(auth.isVerified).toBe(false);
-    expect(isSocketChallengeBound(auth, PEER_ID, "cd".repeat(32))).toBe(true);
+    expect(isSocketChallengeBound(auth, "cd".repeat(32))).toBe(true);
   });
 
   test("successful proof consumes the nonce so it cannot be replayed", () => {
     const auth = state();
-    createFreshSocketChallenge(
-      auth,
-      PEER_ID,
-      "ab".repeat(32),
-      "cd".repeat(32),
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(auth, "cd".repeat(32), CHALLENGE_ID);
 
     expect(consumeSocketChallenge(auth)).toBe(CHALLENGE_ID);
     expect(auth.isVerified).toBe(true);
     expect(auth.challengeNonce).toBe("");
     expect(auth.challengeId).toBe("");
-    expect(isSocketChallengeBound(auth, PEER_ID, "cd".repeat(32))).toBe(false);
+    expect(isSocketChallengeBound(auth, "cd".repeat(32))).toBe(false);
   });
 });
 

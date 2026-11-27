@@ -4,7 +4,7 @@ import type { ProcessPrismaClient } from "../prismaClient";
 
 import { wsClients } from "../wsServer";
 import { releasePeer, sendToPeer, sendToPeerOnServer } from "../pubsub";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
 import { describeError } from "./logError";
 import {
   isCurrentVerifiedSocket,
@@ -38,7 +38,6 @@ const handlePeersWithClient = async (
   ws: P2PartyWSClient,
   roomId: string,
   rosterRequestId?: string,
-  excludedPeerIds: readonly string[] = [],
   targetPeerIds?: readonly string[],
 ) => {
   const isCurrentRequester = () =>
@@ -144,7 +143,7 @@ const handlePeersWithClient = async (
                     : {}),
                 };
               }),
-            protocolVersion: PROTOCOL_VERSION,
+            protocolVersion: SIGNALING_PROTOCOL_VERSION,
           } satisfies WebSocketMessagePeersResponse),
         );
 
@@ -155,7 +154,6 @@ const handlePeersWithClient = async (
           room &&
           room.peers[i] &&
           room.peers[i].id !== fromPeerId &&
-          !excludedPeerIds.includes(room.peers[i].id) &&
           (targetPeerIds === undefined ||
             targetPeerIds.includes(room.peers[i].id))
         ) {
@@ -170,7 +168,7 @@ const handlePeersWithClient = async (
               // identity departed can tell its return from a stale report.
               socketGeneration: wireSocketGeneration(ws.data),
             },
-            protocolVersion: PROTOCOL_VERSION,
+            protocolVersion: SIGNALING_PROTOCOL_VERSION,
           } satisfies WebSocketMessageConnectionRequest);
           const peerWsClient = clients.get(peer.id);
 
@@ -255,7 +253,6 @@ export const createHandlePeers =
     ws: P2PartyWSClient,
     roomId: string,
     rosterRequestId?: string,
-    excludedPeerIds?: readonly string[],
     targetPeerIds?: readonly string[],
   ) =>
     handlePeersWithClient(
@@ -266,7 +263,6 @@ export const createHandlePeers =
       ws,
       roomId,
       rosterRequestId,
-      excludedPeerIds,
       targetPeerIds,
     );
 
@@ -366,7 +362,7 @@ const peerLeftDeliveries = (
     peerId: departure.peerId,
     reason: departure.reason,
     socketGeneration: departure.socketGeneration,
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: SIGNALING_PROTOCOL_VERSION,
   } satisfies WebSocketMessagePeerLeft);
   const deliveries: DepartureDelivery[] = [];
   for (const member of recipients) {

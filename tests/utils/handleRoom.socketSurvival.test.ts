@@ -5,7 +5,7 @@ import { createHandleRoom } from "../../src/utils/handleRoom";
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
 const ROOM_ID = "00000000-0000-4000-8000-000000000001";
-const ROOM_TOKEN = "cc".repeat(32);
+const ROOM_LOCATOR = "cc".repeat(64);
 const ROOM_REQUEST_ID = "00000000-0000-4000-8000-000000000099";
 const PEER_ID = "00000000-0000-4000-8000-000000000002";
 const PEER_KEY = "aa".repeat(32);
@@ -85,7 +85,7 @@ describe("the room requester's socket survives a server-side fault", () => {
       clients,
     );
 
-    await handleRoom(PEER_ID, ws, ROOM_TOKEN, ROOM_REQUEST_ID);
+    await handleRoom(PEER_ID, ws, ROOM_LOCATOR, ROOM_REQUEST_ID);
 
     expect(ws.wasTerminated()).toBe(false);
     expect(ws.closeArgs).toEqual([]);
@@ -117,15 +117,15 @@ describe("the room requester's socket survives a server-side fault", () => {
           upsert: async () => {
             // Simulate a successor replacing this socket mid-mutation.
             clients.set(PEER_ID, successor);
-            return { id: ROOM_ID, identifier: ROOM_TOKEN };
+            return { id: ROOM_ID, identifier: ROOM_LOCATOR };
           },
-          update: async () => ({ id: ROOM_ID, identifier: ROOM_TOKEN }),
+          update: async () => ({ id: ROOM_ID, identifier: ROOM_LOCATOR }),
         },
       } as never,
       clients,
     );
 
-    await handleRoom(PEER_ID, ws, ROOM_TOKEN, ROOM_REQUEST_ID);
+    await handleRoom(PEER_ID, ws, ROOM_LOCATOR, ROOM_REQUEST_ID);
 
     expect(ws.sent).toEqual([]);
     expect(ws.wasTerminated()).toBe(true);

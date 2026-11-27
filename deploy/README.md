@@ -50,6 +50,12 @@ statement within its own bound of 60 seconds (normally a no-op); a re-key that
 runs past it is cancelled, changes nothing, and ends the start with the same
 kind of line. `Restart=always` then only repeats the refusal.
 
+Deploy the protocol-5 server before clients that use its keyless WebSocket
+upgrade. The signaling environment sets `SIGNALING_HOST` to the public
+WebSocket authority from `domains.signaling`. Clients include this authority
+in the login signature. Both the direct and public health checks require
+`protocolVersion` 5.
+
 ## Which Bun, and where it is checked
 
 `package.json`'s `packageManager` is the one place the Bun version is written

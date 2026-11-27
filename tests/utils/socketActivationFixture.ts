@@ -1,3 +1,4 @@
+import { provisionalPeerId } from "../../src/utils/peerIdentity";
 import { randomBytes, randomUUID } from "node:crypto";
 import { expect } from "bun:test";
 
@@ -15,10 +16,10 @@ import type {
   RoutingClaim,
 } from "../../src/utils/peerIdentity";
 
-export const PEER_ID = "00000000-0000-4000-8000-000000000001";
 /** The instance these sockets live on. */
 export const HERE = "11111111-1111-4111-8111-111111111111";
 const KEY = "ab".repeat(32);
+export const PEER_ID = provisionalPeerId(KEY);
 const SIGNATURE = "ef".repeat(64);
 /** The close an authenticated socket gets when a newer session replaces it. */
 export const REPLACED = {
@@ -75,8 +76,9 @@ export const deferred = <T>() => {
 /** Issue a fresh challenge and answer it, through the real handleChallenge. */
 export const prove = async (ws: Socket, valid = true) => {
   const nonce = randomBytes(32).toString("hex");
-  createFreshSocketChallenge(ws.data, PEER_ID, KEY, nonce, randomUUID());
-  return handleChallenge(PEER_ID, ws, nonce, SIGNATURE, {
+  createFreshSocketChallenge(ws.data, nonce, randomUUID());
+  return handleChallenge(KEY, ws, nonce, SIGNATURE, {
+    signalingHost: "example.org",
     verifySignature: async () => valid,
   });
 };

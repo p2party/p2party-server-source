@@ -1,7 +1,6 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 import handleConnection from "../../src/utils/handleConnection";
-import { provisionalPeerId } from "../../src/utils/peerIdentity";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
@@ -48,46 +47,17 @@ const socket = (): P2PartyWSClient & {
   return ws;
 };
 
-const errorFrame = (raw: string) =>
-  JSON.parse(raw) as {
-    type: string;
-    fromAction: string;
-    error: { message: string };
-  };
-
-describe("identity bootstrap", () => {
-  test("a key that cannot be bound closes with 1011 (retryable), not a bare terminate", async () => {
-    // The upgrade handler admits only 64 lowercase hex characters, so this is
-    // a server-side invariant failing, not evidence about the client: a
-    // generic error frame, then a graceful close the client may retry.
-    const ws = socket();
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
-    let peerId: string;
-    try {
-      peerId = await handleConnection("AB".repeat(32), ws);
-    } finally {
-      consoleError.mockRestore();
-    }
-
-    expect(peerId).toBe("");
-    expect(ws.wasTerminated()).toBe(false);
-    expect(ws.closeArgs).toEqual([
-      { code: 1011, reason: "Could not initialize WebSocket identity" },
-    ]);
-    expect(ws.sent).toHaveLength(1);
-    const frame = errorFrame(ws.sent[0]!);
-    expect(frame.type).toBe("error");
-    expect(frame.fromAction).toBe("requestPeerId");
-  });
-
-  test("a valid key is bound to its derived id and never closed", async () => {
-    const ws = socket();
-
-    const peerId = await handleConnection(PUBLIC_KEY, ws);
-
-    expect(peerId).toBe(provisionalPeerId(PUBLIC_KEY));
-    expect(ws.data.peerId).toBe(peerId);
-    expect(ws.wasTerminated()).toBe(false);
-    expect(ws.closeArgs).toEqual([]);
-  });
+test("the opening challenge discloses no identity and binds only a nonce", () => {
+  const ws = socket();
+  handleConnection(ws);
+  expect(ws.data.peerId).toBe("");
+  expect(ws.data.publicKey).toBe("");
+  expect(ws.sent.map((raw) => JSON.parse(raw))).toEqual([
+    {
+      type: "authChallenge",
+      challenge: expect.stringMatching(/^[0-9a-f]{64}$/),
+      protocolVersion: 5,
+    },
+  ]);
+  expect(ws.closeArgs).toEqual([]);
 });

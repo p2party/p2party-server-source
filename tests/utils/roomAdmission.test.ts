@@ -1,6 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
 import { createHandleRoom } from "../../src/utils/handleRoom";
-import { deriveRoomIdentifier } from "../../src/utils/roomIdentifier";
 import {
   AdmissionController,
   admissionAddress,
@@ -9,7 +8,7 @@ import {
 import type { P2PartyWSClient } from "../../src/wsServer";
 
 const roomId = "00000000-0000-4000-8000-000000000099";
-const roomUrl = "ac".repeat(32);
+const roomLocator = "ac".repeat(64);
 const requestId = "00000000-0000-4000-8000-000000000098";
 
 const fixture = (
@@ -96,7 +95,9 @@ test("concurrent joins cannot exceed the room-member cap on the supported worker
   expect(
     await loggedErrors(() =>
       Promise.all(
-        f.sockets.map((ws) => f.handle(ws.data.peerId, ws, roomUrl, requestId)),
+        f.sockets.map((ws) =>
+          f.handle(ws.data.peerId, ws, roomLocator, requestId),
+        ),
       ),
     ),
   ).toEqual(["Room member capacity reached"]);
@@ -112,7 +113,7 @@ test("per-identity cap refuses a new membership but preserves an existing member
       full.handle(
         full.sockets[0]!.data.peerId,
         full.sockets[0]!,
-        roomUrl,
+        roomLocator,
         requestId,
       ),
     ),
@@ -129,7 +130,7 @@ test("per-identity cap refuses a new membership but preserves an existing member
       existing.handle(
         existing.sockets[0]!.data.peerId,
         existing.sockets[0]!,
-        roomUrl,
+        roomLocator,
         requestId,
       ),
     ),
@@ -147,11 +148,8 @@ test("new memberships are charged to the requesting socket's source key", async 
   const joined = new Map<string, number>();
   const socket = (suffix: string, remote: string) => {
     const publicKey = suffix.repeat(32);
-    const lease = guard.reserve(
-      admissionAddress(remote, null, false)!,
-      publicKey,
-    )!;
-    expect(lease.authenticate()).toBe(true);
+    const lease = guard.reserve(admissionAddress(remote, null, false)!)!;
+    expect(lease.authenticate(publicKey)).toBe(true);
     const ws = {
       data: {
         peerId: `00000000-0000-4000-8000-0000000000${suffix}`,
@@ -213,11 +211,11 @@ test("new memberships are charged to the requesting socket's source key", async 
         await handle(
           ws.data.peerId,
           ws,
-          room.toString(16).padStart(64, "0"),
+          room.toString(16).padStart(128, "0"),
           requestId,
         );
       }
-      await handle(victim.data.peerId, victim, "ff".repeat(32), requestId);
+      await handle(victim.data.peerId, victim, "ff".repeat(64), requestId);
     }),
   ).toEqual(["Room membership capacity reached"]);
   const attackerFrames = frames.filter(({ peer }) => peer !== "b1");
@@ -238,11 +236,8 @@ test("a refused join to a full room spends no membership budget", async () => {
     () => 100000,
   );
   const publicKey = "e1".repeat(32);
-  const lease = guard.reserve(
-    admissionAddress("198.51.100.9", null, false)!,
-    publicKey,
-  )!;
-  expect(lease.authenticate()).toBe(true);
+  const lease = guard.reserve(admissionAddress("198.51.100.9", null, false)!)!;
+  expect(lease.authenticate(publicKey)).toBe(true);
   const frames: Record<string, unknown>[] = [];
   const ws = {
     data: {
@@ -265,7 +260,7 @@ test("a refused join to a full room spends no membership budget", async () => {
     },
   } as unknown as P2PartyWSClient;
   const clients = new Map([[ws.data.peerId, ws]]);
-  const fullRoomUrl = "f0".repeat(32);
+  const fullRoomLocator = "f0".repeat(64);
   const joins: string[] = [];
   const handle = createHandleRoom(
     {
@@ -282,7 +277,7 @@ test("a refused join to a full room spends no membership budget", async () => {
           id: roomId,
           _count: {
             peers:
-              where.identifier === deriveRoomIdentifier(fullRoomUrl)
+              where.identifier === fullRoomLocator
                 ? admissionLimits.peersPerRoom
                 : 0,
           },
@@ -302,8 +297,8 @@ test("a refused join to a full room spends no membership budget", async () => {
 
   expect(
     await loggedErrors(async () => {
-      await handle(ws.data.peerId, ws, fullRoomUrl, requestId);
-      await handle(ws.data.peerId, ws, roomUrl, requestId);
+      await handle(ws.data.peerId, ws, fullRoomLocator, requestId);
+      await handle(ws.data.peerId, ws, roomLocator, requestId);
     }),
   ).toEqual(["Room member capacity reached"]);
   expect(frames.map(({ type }) => type)).toEqual(["error", "roomId"]);

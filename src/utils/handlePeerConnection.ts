@@ -4,7 +4,7 @@ import findRoomPeers from "./findRoomPeers";
 
 import { wsClients } from "../wsServer";
 import { sendToPeer } from "../pubsub";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
 import { isCurrentVerifiedSocket, wireSocketGeneration } from "./socketAuth";
 
 import type { P2PartyWSClient } from "../wsServer";
@@ -62,7 +62,7 @@ const handlePeerConnectionWithClient = async (
       // wireSocketGeneration's doc comment.
       fromPeerSocketGeneration: wireSocketGeneration(ws.data),
       labels: msg.labels,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: SIGNALING_PROTOCOL_VERSION,
     } as WebSocketMessagePeerConnectionResponse);
 
     // Resolve after every await. A target that was current before the peer

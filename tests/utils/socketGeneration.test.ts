@@ -60,7 +60,7 @@ afterEach(() => {
 describe("per-socket generation", () => {
   test("verification preserves the challenge id as the socket generation", () => {
     const state = emptyState();
-    createFreshSocketChallenge(state, PEER_A_ID, PEER_A_KEY);
+    createFreshSocketChallenge(state);
     expect(state.socketGeneration).toBe("");
     const challengeId = consumeSocketChallenge(state);
     expect(challengeId).toMatch(UUID_V4);
@@ -71,8 +71,8 @@ describe("per-socket generation", () => {
   test("a second socket for the same identity gets a different generation", () => {
     const first = emptyState();
     const second = emptyState();
-    createFreshSocketChallenge(first, PEER_A_ID, PEER_A_KEY);
-    createFreshSocketChallenge(second, PEER_A_ID, PEER_A_KEY);
+    createFreshSocketChallenge(first);
+    createFreshSocketChallenge(second);
     consumeSocketChallenge(first);
     consumeSocketChallenge(second);
     expect(second.socketGeneration).not.toBe(first.socketGeneration);
@@ -81,9 +81,9 @@ describe("per-socket generation", () => {
 
   test("a fresh challenge on the same socket clears the old generation", () => {
     const state = emptyState();
-    createFreshSocketChallenge(state, PEER_A_ID, PEER_A_KEY);
+    createFreshSocketChallenge(state);
     consumeSocketChallenge(state);
-    createFreshSocketChallenge(state, PEER_A_ID, PEER_A_KEY);
+    createFreshSocketChallenge(state);
     expect(state.socketGeneration).toBe("");
   });
 
@@ -126,7 +126,7 @@ describe("per-socket generation", () => {
       peers: { id: string; publicKey: string; socketGeneration?: string }[];
       protocolVersion: number;
     };
-    expect(frame.protocolVersion).toBe(4);
+    expect(frame.protocolVersion).toBe(5);
     expect(frame.peers[0]!.socketGeneration).toBe(
       "11111111-1111-4111-8111-111111111111",
     );
@@ -169,7 +169,7 @@ describe("per-socket generation", () => {
         fromPeerId: PEER_A_ID,
         toPeerId: PEER_B_ID,
         labels: ["main"],
-        protocolVersion: 4,
+        protocolVersion: 5,
       } as never,
     );
 
@@ -235,7 +235,7 @@ describe("per-socket generation", () => {
         fromPeerId: PEER_A_ID,
         toPeerId: PEER_B_ID,
         labels: ["main"],
-        protocolVersion: 4,
+        protocolVersion: 5,
       } as never,
     );
 
@@ -348,7 +348,7 @@ describe("per-socket generation", () => {
         fromPeerId: PEER_A_ID,
         toPeerId: PEER_B_ID,
         labels: ["main"],
-        protocolVersion: 4,
+        protocolVersion: 5,
       } as never,
     );
 
@@ -367,7 +367,8 @@ describe("per-socket generation", () => {
   });
 
   test("the protocol version is not bumped by the new field", async () => {
-    const { PROTOCOL_VERSION } = await import("../../src/utils/protocolV4");
-    expect(PROTOCOL_VERSION).toBe(4);
+    const { SIGNALING_PROTOCOL_VERSION } =
+      await import("../../src/utils/signalingProtocol");
+    expect(SIGNALING_PROTOCOL_VERSION).toBe(5);
   });
 });

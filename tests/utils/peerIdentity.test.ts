@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
-import handleConnection from "../../src/utils/handleConnection";
 import {
   createPersistVerifiedIdentity,
   provisionalPeerId,
@@ -203,16 +202,11 @@ const outcome = (attempt: Promise<unknown>) =>
   );
 
 describe("proof-gated durable identity", () => {
-  test("repeated unproved connections get one id derived from the key alone", async () => {
-    // No database is involved before the proof (see preAuthUniformity), so
-    // the id survives a new process.
-    const ids = await Promise.all(
-      Array.from({ length: 12 }, () => handleConnection(key, socket())),
-    );
-    expect(new Set(ids).size).toBe(1);
-    expect(ids[0]).toBe(provisionalPeerId(key));
-    expect(isUUID(ids[0], 4)).toBe(true);
-    expect(provisionalPeerId("cd".repeat(32))).not.toBe(ids[0]);
+  test("the derived peer id is stable across processes and identifies its key", () => {
+    const id = provisionalPeerId(key);
+    expect(provisionalPeerId(key)).toBe(id);
+    expect(isUUID(id, 4)).toBe(true);
+    expect(provisionalPeerId("cd".repeat(32))).not.toBe(id);
   });
 
   test("invalid proof or closed socket cannot start a persistence transaction", async () => {
@@ -366,9 +360,8 @@ describe("proof-gated durable identity", () => {
     const lease = () => {
       const granted = guard.reserve(
         admissionAddress("203.0.113.7", null, false)!,
-        key,
       )!;
-      expect(granted.authenticate()).toBe(true);
+      expect(granted.authenticate(key)).toBe(true);
       return granted;
     };
     const table = peerTable([]);
@@ -413,11 +406,8 @@ describe("proof-gated durable identity", () => {
       () => NOW,
     );
     const lease = (address: string) => {
-      const granted = guard.reserve(
-        admissionAddress(address, null, false)!,
-        key,
-      )!;
-      expect(granted.authenticate()).toBe(true);
+      const granted = guard.reserve(admissionAddress(address, null, false)!)!;
+      expect(granted.authenticate(key)).toBe(true);
       return granted;
     };
     const table = peerTable([]);
@@ -479,11 +469,8 @@ describe("proof-gated durable identity", () => {
       () => NOW,
     );
     const attempt = (remote: string, publicKey: string) => {
-      const lease = guard.reserve(
-        admissionAddress(remote, null, false)!,
-        publicKey,
-      )!;
-      expect(lease.authenticate()).toBe(true);
+      const lease = guard.reserve(admissionAddress(remote, null, false)!)!;
+      expect(lease.authenticate(publicKey)).toBe(true);
       return outcome(persist(provedSocket(publicKey, lease)));
     };
     const fromOneSlash64: string[] = [];

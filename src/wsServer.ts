@@ -1,4 +1,4 @@
-import { isUUID } from "./utils/formats";
+import { requireSignalingHost } from "./utils/loginProof";
 import {
   admission,
   admissionAddress,
@@ -8,7 +8,6 @@ import {
 
 import handleConnection from "./utils/handleConnection";
 import handleMessage from "./utils/handleMessage";
-import handleInterval from "./utils/handleInterval";
 import {
   closeSocketMessageQueue,
   type SocketMessage,
@@ -17,7 +16,11 @@ import { handleSocketMessageIngress } from "./utils/socketMessageIngress";
 import { isCurrentVerifiedSocket } from "./utils/socketAuth";
 import { retireClosedSocketAndAnnounce } from "./utils/handlePeers";
 import { SERVER_ID } from "./pubsub";
-import { PROTOCOL_VERSION } from "./utils/protocolV4";
+import {
+  PROTOCOL_VERSION_MISMATCH_CLOSE_CODE,
+  PROTOCOL_VERSION_MISMATCH_REASON,
+  SIGNALING_PROTOCOL_VERSION,
+} from "./utils/signalingProtocol";
 import { SERVER_VERSION } from "./version";
 
 import type { Server, ServerWebSocket } from "bun";
@@ -26,6 +29,7 @@ import type { SocketAuthState } from "./utils/socketAuth";
 export type P2PartyWSMsg = SocketMessage;
 
 export interface P2PartyWSData extends SocketAuthState {
+  legacyUpgrade?: boolean;
   isAlive: boolean;
   pingInterval?: Timer;
   pongTimeout?: Timer;
@@ -56,24 +60,26 @@ export class P2PartyWS {
    * @param port - The port number to listen on
    * @param events - An object containing event handlers
    */
-  constructor(port: number, events: P2PartyWSEvents) {
+  constructor(
+    port: number,
+    events: P2PartyWSEvents,
+    signalingHost = requireSignalingHost(process.env.SIGNALING_HOST),
+  ) {
     this.server = Bun.serve({
       websocket: {
-        open: async (ws: P2PartyWSClient) => {
+        open: (ws: P2PartyWSClient) => {
+          if (ws.data.legacyUpgrade) {
+            ws.close(
+              PROTOCOL_VERSION_MISMATCH_CLOSE_CODE,
+              PROTOCOL_VERSION_MISMATCH_REASON,
+            );
+            return;
+          }
           ws.data.authenticationTimeout = setTimeout(() => {
             if (!isCurrentVerifiedSocket(wsClients, ws))
               ws.close(1013, "Authentication timed out");
           }, admissionLimits.authenticationTimeoutMs);
-          const { publicKey } = ws.data;
-
-          const peerId = await handleConnection(publicKey, ws);
-
-          if (isUUID(peerId)) {
-            if (ws.readyState !== 1) return;
-            ws.data.isAlive = true;
-            // Start pinging the client at regular intervals
-            ws.data.pingInterval = await handleInterval(ws);
-          }
+          handleConnection(ws);
         },
 
         message: (ws: P2PartyWSClient, message: P2PartyWSMsg) =>
@@ -111,7 +117,7 @@ export class P2PartyWS {
       },
 
       fetch(req: Request, server: Server<P2PartyWSData>) {
-        const url = new URL(req.url, `http://${req.headers.get("host")}`);
+        const url = new URL(req.url);
 
         if (req.headers.get("upgrade") !== "websocket") {
           // Everything else here needs an authenticated socket, which means a
@@ -127,7 +133,7 @@ export class P2PartyWS {
             return Response.json(
               {
                 status: "ok",
-                protocolVersion: PROTOCOL_VERSION,
+                protocolVersion: SIGNALING_PROTOCOL_VERSION,
                 version: SERVER_VERSION,
                 serverId: SERVER_ID,
               },
@@ -138,22 +144,12 @@ export class P2PartyWS {
           return new Response("Upgrade required", { status: 426 });
         }
 
-        if (!url.searchParams.has("publickey")) {
-          return new Response("Forbidden", { status: 403 });
-        }
-
-        const p = url.searchParams.get("publickey");
-
-        if (!p || !/^[0-9a-f]{64}$/.test(p)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-
         const address = admissionAddress(
           server.requestIP(req)?.address,
           req.headers.get("x-real-ip"),
           process.env.TRUST_LOCAL_PROXY === "true",
         );
-        const lease = address ? admission.reserve(address, p) : undefined;
+        const lease = address ? admission.reserve(address) : undefined;
         if (!lease)
           return new Response("Signaling admission limit reached", {
             status: 429,
@@ -163,7 +159,8 @@ export class P2PartyWS {
         if (
           server.upgrade(req, {
             data: {
-              publicKey: p,
+              publicKey: "",
+              legacyUpgrade: url.searchParams.has("publickey"),
               admission: lease,
               peerId: "",
               challengeNonce: "",
@@ -187,7 +184,7 @@ export class P2PartyWS {
       ws: P2PartyWSClient,
       message: P2PartyWSMsg,
     ) {
-      return handleMessage(ws, message, events);
+      return handleMessage(ws, message, events, signalingHost);
     }
   }
   /** Publishes a message to all connected clients */

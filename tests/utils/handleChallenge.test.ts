@@ -1,13 +1,14 @@
+import { generateKeyPairSync, sign } from "node:crypto";
+import { provisionalPeerId } from "../../src/utils/peerIdentity";
 import { describe, expect, spyOn, test } from "bun:test";
 
 import handleChallenge from "../../src/utils/handleChallenge";
 import { createFreshSocketChallenge } from "../../src/utils/socketAuth";
-import { PROTOCOL_VERSION } from "../../src/utils/protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "../../src/utils/signalingProtocol";
 
 import type { P2PartyWSClient, P2PartyWSData } from "../../src/wsServer";
 
-const PEER_ID = "00000000-0000-4000-8000-000000000001";
-const OTHER_PEER_ID = "00000000-0000-4000-8000-000000000003";
+const KEY = "ab".repeat(32);
 const CHALLENGE_ID = "00000000-0000-4000-8000-000000000002";
 
 const fakeSocket = () => {
@@ -56,13 +57,7 @@ describe("WebSocket-bound challenge verification", () => {
     const previousTurnUrls = process.env.COTURN_URLS;
     process.env.COTURN_SECRET = "s".repeat(32);
     process.env.COTURN_URLS = "turns:turn.example.com:443?transport=tcp";
-    createFreshSocketChallenge(
-      socket.ws.data,
-      PEER_ID,
-      publicKey,
-      challenge,
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(socket.ws.data, challenge, CHALLENGE_ID);
     let verifiedBytes:
       | {
           message: Uint8Array;
@@ -73,11 +68,12 @@ describe("WebSocket-bound challenge verification", () => {
 
     try {
       const authenticated = await handleChallenge(
-        PEER_ID,
+        KEY,
         socket.ws,
         challenge,
         signature,
         {
+          signalingHost: "example.org",
           verifySignature: async (message, sig, pk) => {
             verifiedBytes = { message, signature: sig, publicKey: pk };
             return true;
@@ -88,9 +84,17 @@ describe("WebSocket-bound challenge verification", () => {
       expect(authenticated).toEqual({
         type: "challenge",
         challengeId: CHALLENGE_ID,
-        protocolVersion: PROTOCOL_VERSION,
+        peerId: provisionalPeerId(KEY),
+        protocolVersion: SIGNALING_PROTOCOL_VERSION,
       });
-      expect(verifiedBytes?.message).toEqual(new Uint8Array(32).fill(0xcd));
+      expect(verifiedBytes?.message).toEqual(
+        new Uint8Array(
+          Buffer.concat([
+            Buffer.from("p2party-signaling-auth-v2\0example.org\0"),
+            Buffer.alloc(32, 0xcd),
+          ]),
+        ),
+      );
       expect(verifiedBytes?.signature).toEqual(new Uint8Array(64).fill(0xef));
       expect(verifiedBytes?.publicKey).toEqual(new Uint8Array(32).fill(0xab));
       expect(socket.ws.data.isVerified).toBe(true);
@@ -112,24 +116,19 @@ describe("WebSocket-bound challenge verification", () => {
     }
   });
 
-  test("a proof for another socket identity is rejected before signature verification", async () => {
+  test("a proof for another nonce is rejected before signature verification", async () => {
     const socket = fakeSocket();
     const challenge = "cd".repeat(32);
-    createFreshSocketChallenge(
-      socket.ws.data,
-      PEER_ID,
-      "ab".repeat(32),
-      challenge,
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(socket.ws.data, challenge, CHALLENGE_ID);
     let verifierCalled = false;
 
     const authenticated = await handleChallenge(
-      OTHER_PEER_ID,
+      KEY,
       socket.ws,
-      challenge,
+      "cc".repeat(32),
       "ef".repeat(64),
       {
+        signalingHost: "example.org",
         verifySignature: async () => {
           verifierCalled = true;
           return true;
@@ -153,20 +152,15 @@ describe("WebSocket-bound challenge verification", () => {
   test("a signature that fails verification closes permanently with 1008, after the error frame is delivered", async () => {
     const socket = fakeSocket();
     const challenge = "cd".repeat(32);
-    createFreshSocketChallenge(
-      socket.ws.data,
-      PEER_ID,
-      "ab".repeat(32),
-      challenge,
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(socket.ws.data, challenge, CHALLENGE_ID);
 
     const authenticated = await handleChallenge(
-      PEER_ID,
+      KEY,
       socket.ws,
       challenge,
       "ef".repeat(64),
       {
+        signalingHost: "example.org",
         verifySignature: async () => false,
       },
     );
@@ -199,24 +193,19 @@ describe("WebSocket-bound challenge verification", () => {
   test("a malformed signature encoding closes without a permanent code", async () => {
     const socket = fakeSocket();
     const challenge = "cd".repeat(32);
-    createFreshSocketChallenge(
-      socket.ws.data,
-      PEER_ID,
-      "ab".repeat(32),
-      challenge,
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(socket.ws.data, challenge, CHALLENGE_ID);
     let verifierCalled = false;
 
     // Uppercase hex is syntactically 128 characters but fails handleChallenge's
     // own canonical-lowercase-hex check -- an encoding bug a corrected client
     // could fix, not proof the key is wrong.
     const authenticated = await handleChallenge(
-      PEER_ID,
+      KEY,
       socket.ws,
       challenge,
       "EF".repeat(64),
       {
+        signalingHost: "example.org",
         verifySignature: async () => {
           verifierCalled = true;
           return true;
@@ -233,23 +222,18 @@ describe("WebSocket-bound challenge verification", () => {
   test("an exception from the verification library itself closes without a permanent code", async () => {
     const socket = fakeSocket();
     const challenge = "cd".repeat(32);
-    createFreshSocketChallenge(
-      socket.ws.data,
-      PEER_ID,
-      "ab".repeat(32),
-      challenge,
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(socket.ws.data, challenge, CHALLENGE_ID);
 
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
     let authenticated: Awaited<ReturnType<typeof handleChallenge>>;
     try {
       authenticated = await handleChallenge(
-        PEER_ID,
+        KEY,
         socket.ws,
         challenge,
         "ef".repeat(64),
         {
+          signalingHost: "example.org",
           verifySignature: async () => {
             throw new Error("verifier crashed");
           },
@@ -270,17 +254,12 @@ describe("WebSocket-bound challenge verification", () => {
   test("a verification-library exception's text never reaches the client", async () => {
     const socket = fakeSocket();
     const challenge = "cd".repeat(32);
-    createFreshSocketChallenge(
-      socket.ws.data,
-      PEER_ID,
-      "ab".repeat(32),
-      challenge,
-      CHALLENGE_ID,
-    );
+    createFreshSocketChallenge(socket.ws.data, challenge, CHALLENGE_ID);
 
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
     try {
-      await handleChallenge(PEER_ID, socket.ws, challenge, "ef".repeat(64), {
+      await handleChallenge(KEY, socket.ws, challenge, "ef".repeat(64), {
+        signalingHost: "example.org",
         verifySignature: async () => {
           throw new Error("libsodium: sodium_init failed at 0x7ffd");
         },
@@ -306,3 +285,37 @@ describe("WebSocket-bound challenge verification", () => {
     expect(socket.closeArgs).toEqual([{ code: undefined, reason: undefined }]);
   });
 });
+
+test.each(["raw nonce", "another host"])(
+  "server refuses a proof signed for %s",
+  async (variant) => {
+    const socket = fakeSocket();
+    const challenge = createFreshSocketChallenge(socket.ws.data).challenge;
+    const bytes = Buffer.from(challenge, "hex");
+    const signed =
+      variant === "raw nonce"
+        ? bytes
+        : Buffer.concat([
+            Buffer.from("p2party-signaling-auth-v2\0elsewhere.example\0"),
+            bytes,
+          ]);
+    const keys = generateKeyPairSync("ed25519");
+    const publicKey = Buffer.from(
+      keys.publicKey.export({ format: "jwk" }).x!,
+      "base64url",
+    ).toString("hex");
+    const signature = sign(
+      null,
+      new Uint8Array(signed),
+      keys.privateKey,
+    ).toString("hex");
+    expect(
+      await handleChallenge(publicKey, socket.ws, challenge, signature, {
+        signalingHost: "signaling.example",
+      }),
+    ).toBe(false);
+    expect(socket.ws.data.peerId).toBe("");
+    expect(socket.ws.data.publicKey).toBe("");
+    expect(socket.closeArgs[0]?.code).toBe(1008);
+  },
+);

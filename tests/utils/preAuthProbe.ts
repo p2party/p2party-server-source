@@ -1,3 +1,4 @@
+import { loginProof } from "../../src/utils/loginProof";
 /**
  * Child process for preAuthUniformity.test.ts; not a test file.
  *
@@ -100,30 +101,31 @@ stored.set(atLimit, row(provisionalPeerId(atLimit)));
 const probe = Bun.serve({ port: 0, fetch: () => new Response() });
 const port = probe.port!;
 probe.stop(true);
+process.env.SIGNALING_HOST = `127.0.0.1:${port}`;
 new P2PartyWS(port, { open() {}, message() {}, close() {} });
-const url = (key: string) => `ws://127.0.0.1:${port}/ws?publickey=${key}`;
+const url = `ws://127.0.0.1:${port}/ws`;
 
 // "connected": a real login, so the key has a live claim and a current socket.
 const live = await new Promise<WebSocket>((resolve, reject) => {
-  const ws = new WebSocket(url(connected));
+  const ws = new WebSocket(url);
   ws.onmessage = (event) => {
     const frame = JSON.parse(String(event.data)) as {
       type: string;
       peerId?: string;
       challenge?: string;
     };
-    if (frame.type === "peerId")
+    if (frame.type === "authChallenge")
       ws.send(
         JSON.stringify({
           type: "challenge",
-          fromPeerId: frame.peerId,
+          publicKey: connected,
           challenge: frame.challenge,
           signature: sign(
             null,
-            new Uint8Array(Buffer.from(frame.challenge!, "hex")),
+            loginProof(`127.0.0.1:${port}`, frame.challenge!),
             loginKeys.privateKey,
           ).toString("hex"),
-          protocolVersion: 4,
+          protocolVersion: 5,
         }),
       );
     if (frame.type === "challenge") resolve(ws);
@@ -138,9 +140,7 @@ if (!liveSocket?.data.socketGeneration || !stored.get(connected)!.serverId)
 // "atLimit": every per-identity socket slot of the key taken by proved
 // sockets from other addresses.
 for (let slot = 0; slot < admissionLimits.connectionsPerIdentity; slot++)
-  if (
-    !admission.reserve(`192.0.2.${String(slot + 1)}`, atLimit)?.authenticate()
-  )
+  if (!admission.reserve(`192.0.2.${String(slot + 1)}`)?.authenticate(atLimit))
     throw new Error("could not fill the identity's admission bucket");
 
 calls.splice(0);
@@ -151,7 +151,7 @@ const observe = (key: string) =>
     queries: string[];
   }>((resolve) => {
     const frames: string[] = [];
-    const ws = new WebSocket(url(key));
+    const ws = new WebSocket(url);
     ws.onmessage = (event) => {
       const raw = String(event.data);
       frames.push(raw);
@@ -160,14 +160,14 @@ const observe = (key: string) =>
         peerId?: string;
         challenge?: string;
       };
-      if (frame.type === "peerId")
+      if (frame.type === "authChallenge")
         ws.send(
           JSON.stringify({
             type: "challenge",
-            fromPeerId: frame.peerId,
+            publicKey: key,
             challenge: frame.challenge,
             signature: "ef".repeat(64),
-            protocolVersion: 4,
+            protocolVersion: 5,
           }),
         );
     };
@@ -188,6 +188,12 @@ const observe = (key: string) =>
   });
 
 const observations: Record<string, unknown> = {};
+observations.legacyClose = await new Promise((resolve, reject) => {
+  const legacy = new WebSocket(url + "?publickey=test");
+  legacy.onmessage = () => reject(new Error("legacy upgrade received a frame"));
+  legacy.onclose = (event) =>
+    resolve({ code: event.code, reason: event.reason });
+});
 for (const [label, key] of [
   ["registered", registered],
   ["oldStyle", old],

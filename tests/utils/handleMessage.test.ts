@@ -24,7 +24,7 @@ describe("additive bounded roster discovery", () => {
     type: "peers",
     fromPeerId: PEER_ID,
     roomId: "00000000-0000-4000-8000-000000000002",
-    protocolVersion: 4,
+    protocolVersion: 5,
   };
   test("legacy and correlated snapshot requests coexist without changing the challenge", () => {
     expect(isBoundedPeersRequest(base)).toBe(true);
@@ -32,15 +32,16 @@ describe("additive bounded roster discovery", () => {
       isBoundedPeersRequest({
         ...base,
         rosterRequestId: PEER_ID,
-        excludedPeerIds: [PEER_ID],
         targetPeerIds: [PEER_ID],
       }),
     ).toBe(true);
   });
-  test("malformed ids and over-cap exclusion lists are rejected before database work", () => {
+  test("malformed ids and any exclusion list are rejected before database work", () => {
     for (const extra of [
       { rosterRequestId: "bad" },
       { rosterRequestId: 1 },
+      { excludedPeerIds: [PEER_ID] },
+      { excludedPeerIds: [] },
       { excludedPeerIds: "all" },
       { excludedPeerIds: [null] },
       { excludedPeerIds: ["bad"] },
@@ -55,7 +56,7 @@ describe("additive bounded roster discovery", () => {
   });
 });
 
-describe("protocol-v4 authentication boundary", () => {
+describe("protocol-v5 authentication boundary", () => {
   test("a versionless or downgraded challenge cannot enter the verified registry", async () => {
     let closed = false;
     const data: P2PartyWSData = {
@@ -139,7 +140,7 @@ describe("protocol-v4 authentication boundary", () => {
           fromPeerId: PEER_ID,
           challenge: data.challengeNonce,
           signature: "ef".repeat(64),
-          protocolVersion: 4,
+          protocolVersion: 5,
           challengeId: data.challengeId,
         }),
         events,
@@ -154,13 +155,13 @@ describe("protocol-v4 authentication boundary", () => {
   });
 });
 
-describe("exact protocol-v4 room request", () => {
+describe("exact protocol-v5 room request", () => {
   const base = {
     type: "room",
     fromPeerId: PEER_ID,
-    roomUrl: "ab".repeat(32),
+    roomLocator: "ab".repeat(64),
     roomRequestId: "00000000-0000-4000-8000-000000000003",
-    protocolVersion: 4,
+    protocolVersion: 5,
   };
 
   test("accepts the one closed nonce-bound shape", () => {
@@ -181,12 +182,12 @@ describe("exact protocol-v4 room request", () => {
   });
 });
 
-describe("protocol-v4 room leave wire", () => {
+describe("protocol-v5 room leave wire", () => {
   const base = {
     type: "leaveRoom",
-    protocolVersion: 4,
+    protocolVersion: 5,
     fromPeerId: PEER_ID,
-    roomUrl: "cd".repeat(32),
+    roomLocator: "cd".repeat(64),
     roomLeaveId: "00000000-0000-4000-8000-000000000003",
   };
 

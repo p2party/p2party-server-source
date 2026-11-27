@@ -1,6 +1,6 @@
 import { createTurnCredentials } from "./socketAuth";
 import { isCurrentVerifiedSocket } from "./socketAuth";
-import { deriveRoomIdentifier } from "./roomIdentifier";
+import { requireRoomLocator } from "./roomIdentifier";
 import {
   runMembershipMutation,
   runPeerRoomMutation,
@@ -14,7 +14,7 @@ import type {
   WebSocketMessageError,
   WebSocketMessageRoomIdResponse,
 } from "../utils/interfaces.js";
-import { PROTOCOL_VERSION } from "./protocolV4";
+import { SIGNALING_PROTOCOL_VERSION } from "./signalingProtocol";
 import { admission, admissionLimits } from "./admission";
 import { describeError, ServerRefusal } from "./logError";
 
@@ -36,7 +36,7 @@ const handleRoomWithClient = async (
   clients: SocketRegistry,
   fromPeerId: string,
   ws: P2PartyWSClient,
-  roomUrl: string,
+  roomLocator: string,
   roomRequestId: string,
 ) => {
   const isCurrent = () =>
@@ -49,7 +49,7 @@ const handleRoomWithClient = async (
           "Room request socket is no longer current",
         );
 
-      const identifier = deriveRoomIdentifier(roomUrl);
+      const identifier = requireRoomLocator(roomLocator);
       const peer: Peer | null = await prisma.peer.findUnique({
         where: { id: fromPeerId },
         select: {
@@ -145,9 +145,9 @@ const handleRoomWithClient = async (
           JSON.stringify({
             type: "roomId",
             roomId: room.id,
-            roomUrl,
+            roomLocator,
             roomRequestId,
-            protocolVersion: PROTOCOL_VERSION,
+            protocolVersion: SIGNALING_PROTOCOL_VERSION,
             ...(turnCredentials ? { turnCredentials } : {}),
           } satisfies WebSocketMessageRoomIdResponse),
         );
@@ -185,7 +185,7 @@ export const createHandleRoom =
   (
     fromPeerId: string,
     ws: P2PartyWSClient,
-    roomUrl: string,
+    roomLocator: string,
     roomRequestId: string,
   ) =>
     handleRoomWithClient(
@@ -193,7 +193,7 @@ export const createHandleRoom =
       clients ?? wsClients,
       fromPeerId,
       ws,
-      roomUrl,
+      roomLocator,
       roomRequestId,
     );
 

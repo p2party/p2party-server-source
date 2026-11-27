@@ -19,7 +19,10 @@ const freePort = (): number => {
   return port;
 };
 
-const start = async (databasePort: number) => {
+const start = async (
+  databasePort: number,
+  signalingHost: string | null = "test.localhost",
+) => {
   const began = performance.now();
   const child = Bun.spawn(
     [
@@ -35,6 +38,7 @@ const start = async (databasePort: number) => {
         HOME: process.env.HOME ?? "",
         DATABASE_URL: `postgresql://nobody:nothing@127.0.0.1:${String(databasePort)}/none?sslmode=disable`,
         PORT: String(freePort()),
+        ...(signalingHost === null ? {} : { SIGNALING_HOST: signalingHost }),
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -56,6 +60,17 @@ const start = async (databasePort: number) => {
 };
 
 describe("the startup bound", () => {
+  test.each([null, "wss://example.org/ws"])(
+    "an absent or malformed SIGNALING_HOST refuses startup before database access",
+    async (host) => {
+      const result = await start(freePort(), host);
+      expect(result.exitCode).toBe(1);
+      expect(result.lines.join("\n")).toContain(
+        "SIGNALING_HOST must contain the public WebSocket URL.host",
+      );
+      expect(result.lines.join("\n")).not.toContain("ECONNREFUSED");
+    },
+  );
   test("a start against a database that accepts and never answers exits within the bound", async () => {
     let accepted = 0;
     const silent = Bun.listen({

@@ -1,6 +1,6 @@
 # p2party-server
 
-The protocol-v4 signaling server for p2party WebRTC room meshes. It
+The protocol-v5 signaling server for p2party WebRTC room meshes. It
 authenticates each WebSocket with a fresh Ed25519 challenge, coordinates room
 membership, and forwards bounded WebRTC descriptions and ICE candidates only
 between authenticated peers in the same room.
@@ -35,7 +35,7 @@ instance can hand a signal to the instance that currently claims the target
 peer's socket. `LISTEN`/`NOTIFY` is the low-latency wake-up, not the durable
 authority: the row remains authoritative if a notification is missed. The same
 path carries session fencing between workers: a login on one worker closes the
-identity's older socket on another (see "Protocol-v4 authentication"). It does
+identity's older socket on another (see "Protocol-v5 authentication"). It does
 not order one identity's room mutations across workers, which supported
 multi-worker operation would also need.
 
@@ -88,18 +88,19 @@ pg_ctl -D "$PWD/.pg-test" stop
 
 ## Configuration
 
-| Variable        | Required | Meaning                                                                                                                                                                                                                                                                        |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`  | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                                                                                                                                                                                              |
-| `PORT`          | no       | WebSocket listener port; defaults to `3001`.                                                                                                                                                                                                                                   |
-| `COTURN_SECRET` | for TURN | TURN REST shared secret (minimum 32 bytes). Credentials are issued only when this and `COTURN_URLS` are both configured.                                                                                                                                                       |
-| `COTURN_URLS`   | for TURN | Comma-separated `turn:` or `turns:` relay URLs. Values are trimmed, deduplicated, limited to the first 16 unique URLs, and limited to 2,048 characters each. Credentials are issued only when this and `COTURN_SECRET` are both configured and at least one URL remains valid. |
+| Variable         | Required | Meaning                                                                                                                                                                                                                                                                        |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`   | yes      | Prisma `postgresql://` URL. A `file:` URL is rejected at startup.                                                                                                                                                                                                              |
+| `PORT`           | no       | WebSocket listener port; defaults to `3001`.                                                                                                                                                                                                                                   |
+| `SIGNALING_HOST` | yes      | Public WebSocket URL.host (including a non-default port) for login signatures. Set this to the authority clients actually use.                                                                                                                                                 |
+| `COTURN_SECRET`  | for TURN | TURN REST shared secret (minimum 32 bytes). Credentials are issued only when this and `COTURN_URLS` are both configured.                                                                                                                                                       |
+| `COTURN_URLS`    | for TURN | Comma-separated `turn:` or `turns:` relay URLs. Values are trimmed, deduplicated, limited to the first 16 unique URLs, and limited to 2,048 characters each. Credentials are issued only when this and `COTURN_SECRET` are both configured and at least one URL remains valid. |
 
 There is no built-in TURN secret and no development authentication bypass.
 
 ## Admission and database security
 
-Release 0.1.4 preserves protocol v4 and the mesh-repair behavior of 0.1.3.
+This build speaks signaling protocol 5.
 Unproved sockets do no database work and cannot create durable peer records:
 the peer id a socket is bound to is derived from its public key alone, so the
 answer before the signature verdict is the same whether or not the key has an
@@ -227,7 +228,7 @@ curl -s https://signaling.p2party.com/health | jq
 ```json
 {
   "status": "ok",
-  "protocolVersion": 4,
+  "protocolVersion": 5,
   "version": "0.1.4",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
@@ -258,23 +259,21 @@ build is running and nothing about who is using it.
 The reference client uses `/ws`, so a local connection starts with:
 
 ```text
-ws://localhost:3001/ws?publickey=<64 lowercase hex>
+ws://localhost:3001/ws
 ```
 
-The public key is the client's Ed25519 identity public key, not a secret. The
-server currently accepts a WebSocket upgrade on any path; `/ws` is the stable
-deployment convention. A non-upgrade HTTP request receives `426`, and a missing
-or malformed `publickey` receives `403`.
+The URL carries no identity key. The server sends an `authChallenge` on open.
+The client replies with its Ed25519 public key and socket-bound proof. Admitted
+upgrades containing the former `publickey` parameter close immediately with
+code 1003 and the version refusal. Both reference Caddy loggers drop request URIs.
 
-After the server's initial `peerId` challenge, signaling is JSON. The
-`challenge` proof is the only client message accepted before authentication.
-Every message other than `pong` must use exact protocol version `4`, and every
-message must repeat the socket's bound `fromPeerId`.
+Every client frame except `pong` carries `protocolVersion: 5`.
+Authenticated requests carry the socket-bound `fromPeerId`.
 
 | Client message   | Purpose                                                                |
 | ---------------- | ---------------------------------------------------------------------- |
 | `challenge`      | Prove possession of the Ed25519 identity key for this socket.          |
-| `room`           | Create or join the room represented by a 64-hex room token.            |
+| `room`           | Create or join the room represented by a 128-hex room locator.         |
 | `leaveRoom`      | Idempotently remove this authenticated peer from one room.             |
 | `peers`          | Request introductions and optionally a correlated membership snapshot. |
 | `peerConnection` | Accept a room peer introduction.                                       |
@@ -285,11 +284,11 @@ message must repeat the socket's bound `fromPeerId`.
 
 ### Server messages
 
-The server emits these. Every one except `ping` carries `protocolVersion: 4`.
+The server emits these. Every one except `ping` and `error` carries `protocolVersion: 5`.
 
 | Server message   | Sent when                                                            |
 | ---------------- | -------------------------------------------------------------------- |
-| `peerId`         | A socket connects and receives its bound peer ID and challenge.      |
+| `authChallenge`  | A socket connects and receives its fresh nonce.                      |
 | `challenge`      | The challenge signature verified; authentication is complete.        |
 | `roomId`         | A `room` request created or joined a room.                           |
 | `roomLeft`       | The requested membership is absent after an idempotent leave.        |
@@ -318,13 +317,12 @@ The server emits these. Every one except `ping` carries `protocolVersion: 4`.
 Membership snapshots are opt-in. Requests without `rosterRequestId` retain
 the earlier introduction-and-acceptance flow.
 
-1. **`peerId`** (server → client), immediately on open: the socket's peer id and
-   a fresh 32-byte challenge nonce.
-2. **`challenge`** (client → server): the Ed25519 signature over that exact
-   nonce. This is the only frame accepted before authentication.
-3. **`challenge`** (server → client): `challengeId` and nothing else. The socket
-   is now the current verified socket for its peer id.
-4. **`room`** (client → server) with a 64-hex room token and a UUIDv4
+1. **`authChallenge`** (server → client) carries a fresh 32-byte nonce.
+2. **`challenge`** (client → server) carries the identity public key and the
+   signature over the host-bound login message below.
+3. **`challenge`** (server → client) returns the proved peer id and challenge id
+   after the routing claim commits.
+4. **`room`** (client → server) with a 128-hex room locator and a UUIDv4
    `roomRequestId`; **`roomId`** (server → client) echoes both and carries the
    room's server-side UUID, plus `turnCredentials` when TURN is configured.
 5. **`peers`** (client → server) with that room UUID. If it includes a UUIDv4
@@ -367,7 +365,7 @@ to anyone:
   "roomId": "<joined room UUID>",
   "rosterRequestId": "<fresh UUIDv4>",
   "targetPeerIds": [],
-  "protocolVersion": 4
+  "protocolVersion": 5
 }
 ```
 
@@ -378,13 +376,10 @@ when this process holds its current verified socket with the matching public
 key. The server sends the snapshot immediately after its room lookup and
 ownership check, before awaiting introduction routing.
 
-`targetPeerIds` and `excludedPeerIds` are optional UUID arrays, each limited to
-64 entries. They filter introductions only; neither changes snapshot contents.
-An omitted target list selects all other room members; an empty list selects
-none. Otherwise only listed room members receive introductions, and exclusions
-always win. IDs outside the room receive nothing. A client can therefore repair
-specific missing edges while excluding peers whose PIN or policy failure awaits
-an explicit retry, without causing every healthy room edge to dial again.
+`targetPeerIds` is an optional UUID array with at most 64 entries. Omit it to
+introduce the requester to every other room member, or send an empty array to
+request only the snapshot. Clients keep PIN and policy failures locally.
+Targeting introductions does not change the returned membership snapshot.
 
 The requester must still own the exact current verified socket and remain a
 member in the room lookup. Ownership is rechecked after database awaits and
@@ -406,7 +401,7 @@ offline, in one frame per room:
   "peerId": "<the departing member's peer UUID>",
   "reason": "left",
   "socketGeneration": "<UUIDv4 of the socket that left or closed>",
-  "protocolVersion": 4
+  "protocolVersion": 5
 }
 ```
 
@@ -553,11 +548,11 @@ connecting.
 ### Enforced bounds
 
 Enforced bounds live in
-[`src/utils/protocolV4.ts`](src/utils/protocolV4.ts): 524,288 characters per
+[`src/utils/signalingProtocol.ts`](src/utils/signalingProtocol.ts): 524,288 characters per
 signaling message, 262,144 characters in the SDP string, 4,096 characters in
 the ICE candidate string, 256 characters each in `sdpMid` and
 `usernameFragment`, and at most 64 DataChannel labels of 193 characters each.
-Peer requests additionally limit each target/exclusion list to 64 UUIDs and
+Peer requests additionally limit the target list to 64 UUIDs and
 require UUIDv4 when the optional `rosterRequestId` is present.
 Malformed, downgraded, cross-room, or cross-identity signaling fails closed.
 
@@ -570,8 +565,8 @@ are:
 
 | Code   | Reason sent                                                            | Meaning                                                                                                                                                                            | Client retries |
 | ------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| `1003` | `Unsupported signaling protocol version; this server speaks version 4` | The frame declares another `protocolVersion`, or none (only `pong` carries none)                                                                                                   | no             |
-| `1003` | `Malformed protocol-v4 <message>`                                      | The frame breaks the exact protocol-v4 shape for its `type`                                                                                                                        | no             |
+| `1003` | `Unsupported signaling protocol version; this server speaks version 5` | The frame declares another `protocolVersion`, or none (only `pong` carries none)                                                                                                   | no             |
+| `1003` | `Malformed protocol-v5 <message>`                                      | The frame breaks the exact protocol-v5 shape for its `type`                                                                                                                        | no             |
 | `1008` | `Challenge response signature cannot be verified`                      | The signature does not verify for the socket's key                                                                                                                                 | no             |
 | `1008` | `Replaced by a newer session for this identity`                        | A newer socket of the same identity committed its authentication                                                                                                                   | no             |
 | `1008` | `Peer identity does not match this socket`                             | A proved socket's identity row no longer matches its key                                                                                                                           | no             |
@@ -582,17 +577,17 @@ are:
 The SDK's reconnect ladder stops on 1003, 1008 and 1010 from the server and
 retries every other close. The constants are in
 [`src/utils/socketAuth.ts`](src/utils/socketAuth.ts) and, for the version
-mismatch, beside `PROTOCOL_VERSION` in
-[`src/utils/protocolV4.ts`](src/utils/protocolV4.ts).
+mismatch, beside `SIGNALING_PROTOCOL_VERSION` in
+[`src/utils/signalingProtocol.ts`](src/utils/signalingProtocol.ts).
 
 ### Room correlation and TURN credentials
 
 Every `room` request carries a mandatory UUIDv4 `roomRequestId`. The
-corresponding `roomId` response repeats the exact `roomUrl` and
+corresponding `roomId` response repeats the exact `roomLocator` and
 `roomRequestId`, so clients can reject unsolicited or stale responses. A
 missing or malformed request ID is rejected; there is no alternate legacy
 shape or server-generated fallback. This nonce provides response correlation,
-not room privacy: the server still sees the room token and membership
+not room privacy: the server still sees the locator and membership
 described in the privacy boundary below.
 
 When TURN is configured, the `roomId` response includes:
@@ -635,62 +630,57 @@ normalization, `turnCredentials` is omitted from the `roomId` response entirely
 and clients stay STUN-only. The server never issues a credential without a
 relay endpoint to use it against.
 
-A protocol-v4 room leave is an exact-shape request with `type` equal to
-`"leaveRoom"`, the socket-bound `fromPeerId`, the same 64-hex `roomUrl` used
+A protocol-v5 room leave is an exact-shape request with `type` equal to
+`"leaveRoom"`, the socket-bound `fromPeerId`, the same 128-hex `roomLocator` used
 to join, a fresh UUIDv4
-`roomLeaveId`, and `protocolVersion: 4`. The server removes the authenticated
-peer's membership before returning the same `roomUrl` and `roomLeaveId` in an
+`roomLeaveId`, and `protocolVersion: 5`. The server removes the authenticated
+peer's membership before returning the same `roomLocator` and `roomLeaveId` in an
 exact `roomLeft` acknowledgement. This works even before the client has
 received a server-assigned `roomId`. Leaving a room that is already absent or
 does not exist returns the same acknowledgement, so the operation is
 retry-safe and does not expose room existence.
 
-## Protocol-v4 authentication
+## Protocol-v5 authentication
 
-Every WebSocket receives a new, socket-local nonce, and the peer id derived
-from its public key, before anything is read from the database:
+The server sends a fresh 32-byte nonce on each admitted socket.
 
 ```json
 {
-  "type": "peerId",
-  "peerId": "<uuid>",
+  "type": "authChallenge",
   "challenge": "<64 lowercase hex>",
-  "protocolVersion": 4,
-  "message": "..."
+  "protocolVersion": 5
 }
 ```
 
-The client signs that exact nonce with its Ed25519 identity key and replies:
+The client signs the UTF-8 bytes of `p2party-signaling-auth-v2`, one zero byte,
+the UTF-8 bytes of its lowercased WebSocket URL.host (including any non-default
+port), one zero byte, then the 32 raw nonce bytes. The server verifies the
+Ed25519 signature for its configured `SIGNALING_HOST`.
 
 ```json
 {
   "type": "challenge",
-  "fromPeerId": "<same uuid>",
+  "publicKey": "<64 lowercase hex>",
   "challenge": "<same 64 lowercase hex>",
   "signature": "<128 lowercase hex>",
-  "protocolVersion": 4
+  "protocolVersion": 5
 }
 ```
 
-After successful proof verification, the server charges the identity's socket
-admission, commits the identity row and its cross-instance routing claim, and
-only then registers the socket as the identity's current one, closing any
-older socket for the same identity. Then it returns:
+After proof, the server derives the peer id, charges the identity's socket
+budget, commits the routing claim and registers the socket. It replies with
 
 ```json
 {
   "type": "challenge",
+  "peerId": "<derived uuid>",
   "challengeId": "<fresh uuid>",
-  "protocolVersion": 4
+  "protocolVersion": 5
 }
 ```
 
-This challenge-success object always has exactly those three fields. TURN
-configuration does not alter authentication. When both `COTURN_SECRET` and
-`COTURN_URLS` are configured, short-lived credentials arrive later in the
-`roomId` response as a nested `turnCredentials` object containing `urls`,
-`username`, `credential`, and `expiresAtUnixSeconds`. Historical challenge
-signatures are not accepted as reconnect credentials.
+The heartbeat starts on verified sockets. TURN credentials are issued in the
+room response when a relay is configured.
 
 When the same identity authenticates twice on one server process, the new
 socket deauthorizes and closes its predecessor with `1008` and the reason
@@ -698,8 +688,7 @@ socket deauthorizes and closes its predecessor with `1008` and the reason
 identity row and routing claim have committed. Until then the predecessor
 keeps working, and if the new socket fails at any step (signature, admission,
 identity row and claim, or its own close) the predecessor is not touched and
-the new socket closes bare, so its client may retry. While its commit is in
-flight a proved socket's `pong` keeps it alive, but it may send nothing else.
+the new socket closes bare, so its client may retry. The heartbeat begins after the new socket receives its success frame.
 If two new sockets of one identity commit around the same time, exactly one
 becomes current and the other closes with the same `1008`. Usually that is the
 one that began activating later. But when their commits conflict, the earlier
@@ -754,42 +743,18 @@ bypasses that FIFO; malformed, unproved, or replaced-socket pongs do not.
 
 ## Client compatibility
 
-This build speaks protocol version 4 only, in the exact shapes above. There is
+This build speaks protocol version 5 only, in the exact shapes above. There is
 no negotiation and no fallback for an older or newer client. A frame carrying
 any other `protocolVersion`, or none, closes the socket with code
-`1003` and the reason `Unsupported signaling protocol version; this server speaks version 4`,
+`1003` and the reason `Unsupported signaling protocol version; this server speaks version 5`,
 before the frame's identity is checked, so a client of another version learns
 that is the cause whatever else it sends. The reason names only the server's
 version. A `room`/`leaveRoom` request whose key set is not exactly the one
-documented closes the socket with `1003` and a `Malformed protocol-v4` reason.
+documented closes the socket with `1003` and a `Malformed protocol-v5` reason.
 
-Protocol v4 itself shipped in `p2party-js` 0.13.0, but the correlated room wire
-this server requires — `roomRequestId`, `roomLeaveId`, and TURN credentials with
-an absolute expiry — shipped in `p2party-js` 0.14.4, whose changelog names
-`p2party-server` 0.1.1 as the matching server. A v4 client older than 0.14.4
-sends a `room` request with no `roomRequestId`, fails the exact-shape check in
-`handleMessage.ts`, and has its socket closed. So: `p2party-js` 0.14.4 or newer.
-
-Server 0.1.2 added optional per-socket generations to introductions. SDK 0.14.8
-uses them to distinguish a replacement tab from the previous transport for
-the same peer identity; earlier clients ignore the fields. Deploy both builds
-to obtain that recovery behavior. SDK 0.14.8 can still use a 0.1.1 server, but
-the server cannot identify a replacement socket and the client's bounded
-watchdog does not guarantee convergence in that case.
-
-Server 0.1.3 adds opt-in correlated membership snapshots and bounded
-target/exclusion lists for introductions. Existing SDK 0.14.4–0.14.8 clients
-keep their legacy flow: without `rosterRequestId` they receive acceptance deltas
-and no unsolicited snapshot; `rosterKind: "delta"` is additive metadata.
-SDK 0.14.9 requires server 0.1.3 for its membership-driven mesh repair and
-targeted redial behavior. Older servers do not provide this contract; matching
-protocol version 4 alone does not establish support for these repair features.
-
-This release issues TURN usernames of the form `<expiry>:<tag>` (see "Room
-correlation and TURN credentials"). `p2party-js` 0.14.10 and earlier accept
-only `<expiry>:<their own public key>` and reject every `roomId` response that
-carries TURN credentials, so while TURN is configured they cannot join a room
-on this server. They need a client release that accepts the tag.
+Deploy this server before the matching SDK. The previous server returns HTTP
+403 for a keyless upgrade, which browsers expose as an abnormal closure.
+The v5 server returns the explicit version refusal to earlier clients.
 
 ## What the server stores
 
@@ -810,8 +775,9 @@ of them except `Challenge`.
   retained to keep ids stable.
 - **`Room`** — one row per room, keyed by `identifier`, the SHA-512 of the
   64-hex room token ([`src/utils/roomIdentifier.ts`](src/utils/roomIdentifier.ts)).
-  The token itself is not stored, though the operator sees it on the wire when a
-  client joins. Empty room records not updated for 24 hours are removed in batches of at
+  The client hashes the lowercase capability hex string as UTF-8 and sends
+  its 128-hex digest as `roomLocator`. Existing rows keep the same identifier.
+  A frame carrying `roomUrl` is refused. Empty room records not updated for 24 hours are removed in batches of at
   most 1,000 per minute, rechecking emptiness at deletion. Occupied rooms and
   offline membership are retained.
 - **`Peer`↔`Room` membership** — added by a `room` request, removed only by a
@@ -984,7 +950,7 @@ and [bandwidth implementation notes](https://github.com/coturn/coturn/wiki/diff2
 
 ## Privacy boundary
 
-The server sees each client's Ed25519 identity public key, the room token a
+The server sees each client's Ed25519 identity public key, the room locator a
 client joins with, which peer ids share a room, the WebRTC descriptions and ICE
 candidates it relays — which carry IP addresses — and the timing of all of it.
 

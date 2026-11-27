@@ -59,9 +59,8 @@ const budgeted = (budget: number) => {
   return (key: string) => {
     const lease = guard.reserve(
       admissionAddress(`198.51.100.${String(++address)}`, null, false)!,
-      key,
     )!;
-    expect(lease.authenticate()).toBe(true);
+    expect(lease.authenticate(key)).toBe(true);
     return lease;
   };
 };
