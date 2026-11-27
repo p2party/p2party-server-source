@@ -83,9 +83,11 @@ fingerprint
 no-cli
 no-software-attribute
 no-multicast-peers
+{% if coturn_legacy_directives | default(true) %}
 no-loopback-peers
 no-tlsv1
 no-tlsv1_1
+{% endif %}
 # Refuse RFC 6062 TCP relay allocations. Browsers use TURN-over-TCP/TLS for the
 # client-to-server leg only and never request a TCP allocation, so this costs
 # nothing for WebRTC — and it lets the cloud firewall hold outbound TCP to the

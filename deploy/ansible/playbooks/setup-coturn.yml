@@ -63,6 +63,12 @@
         state: present
         update_cache: yes
 
+    - name: Identify directives supported by the currently installed package
+      command:
+        argv: [dpkg-query, -W, "-f=${Version}", coturn]
+      register: coturn_config_package
+      changed_when: false
+
     # A command-line flag in the unit or in /etc/default/coturn overrides
     # turnserver.conf: -l/--log-file or --syslog would restore a log of
     # usernames and client addresses, and -n or a different -c would skip the
@@ -181,6 +187,8 @@
     - name: Validate and install the coturn configuration
       block:
         - name: Render the candidate coturn configuration
+          vars:
+            coturn_legacy_directives: "{{ coturn_config_package.stdout.split('-')[0] is version('4.19.2', '<') }}"
           template:
             src: "{{ playbook_dir }}/../templates/turnserver.conf.j2"
             dest: /etc/turnserver.conf.p2party-candidate
@@ -256,6 +264,15 @@
         name: certbot.timer
         enabled: true
         state: started
+
+    - name: Apply the validated TURN configuration before upgrading the daemon
+      meta: flush_handlers
+
+    - name: Prepare upstream coturn
+      import_tasks: "{{ playbook_dir }}/../tasks/prepare-upstream-coturn.yml"
+
+    - name: Activate upstream coturn
+      import_tasks: "{{ playbook_dir }}/../tasks/activate-upstream-coturn.yml"
 
     - name: Coturn setup complete
       debug:

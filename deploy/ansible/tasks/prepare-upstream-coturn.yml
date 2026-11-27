@@ -1,0 +1,35 @@
+---
+- name: Require the distribution used by the coturn package
+  assert:
+    that: ansible_facts.distribution_release == 'noble'
+
+- name: Install chroot tooling without starting services
+  apt:
+    name: [mmdebstrap, ubuntu-keyring, ca-certificates, curl]
+    state: present
+    policy_rc_d: 101
+    lock_timeout: 120
+
+- name: Create the coturn build script directory
+  file:
+    path: /usr/local/libexec/p2party
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the upstream package builder
+  copy:
+    src: "{{ playbook_dir }}/../../coturn/build-deb.sh"
+    dest: /usr/local/libexec/p2party/build-coturn-deb
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Build and test the upstream package while the existing service runs
+  command:
+    argv:
+      - /usr/local/libexec/p2party/build-coturn-deb
+      - /var/cache/p2party-coturn
+  register: coturn_build
+  changed_when: "'dpkg-buildpackage:' in coturn_build.stdout or 'dpkg-buildpackage:' in coturn_build.stderr"

@@ -1,0 +1,160 @@
+---
+- name: Select the installed host architecture
+  command: dpkg --print-architecture
+  register: coturn_arch
+  changed_when: false
+
+- name: Identify the verified native package
+  set_fact:
+    coturn_new_version: 4.19.2-1p2party1~noble1
+    coturn_cache: /var/cache/p2party-coturn
+
+- name: Compute the package filename
+  set_fact:
+    coturn_deb: "coturn_{{ coturn_new_version }}_{{ coturn_arch.stdout }}.deb"
+
+- name: Verify the cached native package digest
+  command:
+    argv: [sha256sum, --check, --strict, "{{ coturn_deb }}.sha256"]
+    chdir: "{{ coturn_cache }}"
+  changed_when: false
+
+- name: Read the installed coturn version
+  command:
+    argv: [dpkg-query, -W, "-f=${Version}", coturn]
+  register: old_coturn
+  changed_when: false
+
+- name: Check the release metadata before touching the active service
+  shell: |
+    set -eu
+    test "$(dpkg-deb -f "$DEB" Package)" = coturn
+    test "$(dpkg-deb -f "$DEB" Version)" = "$VERSION"
+    test "$(dpkg-deb -f "$DEB" Architecture)" = "$ARCH"
+    systemctl is-active --quiet coturn
+  environment:
+    DEB: "{{ coturn_cache }}/{{ coturn_deb }}"
+    VERSION: "{{ coturn_new_version }}"
+    ARCH: "{{ coturn_arch.stdout }}"
+  changed_when: false
+
+- name: Preserve the previous release before changing coturn
+  when: old_coturn.stdout != coturn_new_version
+  block:
+    - name: Identify the currently installed rollback package
+      set_fact:
+        coturn_previous_deb: "coturn_{{ old_coturn.stdout }}_{{ coturn_arch.stdout }}.deb"
+
+    - name: Download the installed version through the authenticated Ubuntu archive
+      command:
+        argv: [apt-get, download, "coturn={{ old_coturn.stdout }}"]
+        chdir: "{{ coturn_cache }}"
+        creates: "{{ coturn_cache }}/{{ coturn_previous_deb }}"
+
+    - name: Verify the previous package is usable
+      command:
+        argv:
+          [
+            dpkg-deb,
+            -f,
+            "{{ coturn_cache }}/{{ coturn_previous_deb }}",
+            Version,
+          ]
+      register: rollback_version
+      changed_when: false
+      failed_when: rollback_version.stdout != old_coturn.stdout or rollback_version.rc != 0
+
+    - name: Record the effective configuration ownership and permissions
+      stat:
+        path: /etc/turnserver.conf
+        get_checksum: false
+      register: coturn_previous_config
+
+    - name: Allocate private recovery space
+      tempfile:
+        state: directory
+        path: /var/backups
+        prefix: p2party-before-coturn-
+
+      register: coturn_recovery
+
+    - name: Snapshot the protected effective configuration
+      copy:
+        remote_src: true
+        src: /etc/turnserver.conf
+        dest: "{{ coturn_recovery.path }}/turnserver.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+- name: Switch the coturn package and check its listeners
+  block:
+    - name: Install the complete native package, keeping the current daemon running
+      apt:
+        deb: "{{ coturn_cache }}/{{ coturn_deb }}"
+        dpkg_options: force-confold
+        policy_rc_d: 101
+        lock_timeout: 120
+      when: old_coturn.stdout != coturn_new_version
+
+    - name: Remove retired directives that are now secure defaults
+      replace:
+        path: /etc/turnserver.conf
+        regexp: '(?m)^[ \t]*(?:no-loopback-peers|no-tlsv1|no-tlsv1_1)[ \t]*(?:=[ \t]*(?:true|yes|on|1)[ \t]*)?(?:#[^\n]*)?(?:\n|$)'
+        replace: ""
+      no_log: true
+      register: coturn_directives
+
+    - name: Apply the selected daemon
+      systemd:
+        name: coturn
+        daemon_reload: true
+        state: restarted
+      when: old_coturn.stdout != coturn_new_version or coturn_directives.changed
+
+    - name: Verify running executable, TLS handshake and STUN binding
+      shell: |
+        set -euo pipefail
+        pid=$(systemctl show coturn -p MainPID --value)
+        test "$pid" -gt 0
+        cmp --silent "/proc/$pid/exe" /usr/bin/turnserver
+        test "$(runuser -u turnserver -- /usr/bin/turnserver --version)" = 4.19.2
+        timeout 8 openssl s_client -brief -connect 127.0.0.1:443 </dev/null 2>&1 | grep -E 'Protocol version: TLSv1\.[23]'
+        timeout 12 turnutils_stunclient -p 3478 127.0.0.1 2>&1 | grep -F 'UDP reflexive addr'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: coturn_health
+      retries: 4
+      delay: 2
+      until: coturn_health.rc == 0
+  rescue:
+    - name: Recover the previous release when this run attempted an upgrade
+      when: old_coturn.stdout != coturn_new_version
+      block:
+        - name: Restore the previous native package
+          apt:
+            deb: "{{ coturn_cache }}/{{ coturn_previous_deb }}"
+            allow_downgrade: true
+            dpkg_options: force-confold
+            policy_rc_d: 101
+
+        - name: Restore the previous TURN configuration
+          copy:
+            remote_src: true
+            src: "{{ coturn_recovery.path }}/turnserver.conf"
+            dest: /etc/turnserver.conf
+            owner: "{{ coturn_previous_config.stat.uid }}"
+            group: "{{ coturn_previous_config.stat.gid }}"
+            mode: "{{ coturn_previous_config.stat.mode }}"
+          no_log: true
+
+        - name: Restart the restored TURN service
+          systemd:
+            name: coturn
+            state: restarted
+            daemon_reload: true
+    - name: Report the failed TURN upgrade
+      fail:
+        msg: "coturn activation or its health checks failed. Check systemctl status coturn before continuing."

@@ -1,0 +1,15 @@
+---
+- name: Check the deployment controller
+  import_playbook: local-preflight.yml
+
+- name: Upgrade the active TURN service to upstream coturn
+  hosts: turn_production
+  become: true
+  serial: 1
+  tasks:
+    - name: Prepare the pinned native package
+      import_tasks: "{{ playbook_dir }}/../tasks/prepare-upstream-coturn.yml"
+      tags: [prepare]
+    - name: Activate and verify the new release
+      import_tasks: "{{ playbook_dir }}/../tasks/activate-upstream-coturn.yml"
+      tags: [activate]
