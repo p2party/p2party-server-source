@@ -1,0 +1,34 @@
+# Native transfer validator
+
+The signaling process can expose a JSON-RPC 2.0 transfer validator backed by PostgreSQL. Each accepted transfer spends one existing unit, retains its weight, creates a unit under a fresh owner commitment, and appends its signed native bytes at the next height. The same database orders submissions across signaling workers. This stage has local committed heights. Consensus, staking, finality and minting are outside the protocol implemented here.
+
+## Start a node
+
+Build `demos-ledger-verify` from the `libdemos` ledger source at `3c1a3620f470368e919b0606e283ccbb1e46cfba` with CMake, OpenSSL 3.5+ and libsodium. Supply a genesis JSON file with `version: 1`, a 32-byte `chainId`, `rpcChainId` between 1 and `Number.MAX_SAFE_INTEGER`, explicit `spendSuites` and `receiveSuites` arrays, and a `units` array. Every genesis entry supplies `id`, `weight`, `suite`, and `commitment`. IDs and commitments are 64-byte lowercase `0x`-prefixed hex strings. Weights are canonical hex quantities and must be powers of two through `0x8000000000000000`. Suite 1 is ML-DSA-65 and suite 2 is SLH-DSA-SHA2-192s. Each ID and owner commitment is unique. The node accepts up to 4,096 genesis entries and a 1 MiB genesis file. The operator supplies all allocations, policies and identifiers.
+
+Export `LEDGER_ENABLED=true`, `LEDGER_CHAIN_ID`, `LEDGER_GENESIS_FILE` and `LEDGER_VERIFIER`. Both filesystem paths must be absolute. Use `SIGNALING_BIND_HOST=127.0.0.1` for a local-only listener. The signaling process retains its ordinary `DATABASE_URL`, `SIGNALING_HOST` and migration requirements. A disabled process returns HTTP 404 on `/rpc` and creates no ledger schema. When first enabled it creates `p2party_ledger` in that database under a transaction. At startup every enabled worker compares the supplied chain, policy and allocations to the stored genesis digest. A different genesis refuses startup. `--check-config` validates the file and verifier executable before host cutover.
+
+The PostgreSQL role needs permission to create and use this schema. Include the ledger schema in backups. The database is trusted storage. The transfer log provides ordered signed records, with no cryptographic inclusion or consistency proof in this stage.
+
+## RPC
+
+Send `POST /rpc` with `Content-Type: application/json`, positional `params` and `jsonrpc: "2.0"`. Heights and weights are canonical hex quantities. IDs, commitments and wire bytes use lowercase `0x`-prefixed hex. An unknown lookup returns `null`.
+
+| Method                      | Params                              | Result                                                                                                                                                  |
+| --------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `demos_chainId`             | `[]`                                | 32-byte ledger ID signed into each transfer                                                                                                             |
+| `eth_chainId`               | `[]`                                | Separately configured numeric provider chain ID as a hex quantity                                                                                       |
+| `demos_getHead`             | `[]`                                | `{chainId,height}`; genesis is height `0x0`                                                                                                             |
+| `demos_getUnit`             | `[id]`                              | `{id,weight,suite,commitment,createdHeight,spentHeight}`; `spentHeight` is `null` for a live unit                                                       |
+| `demos_listUnspent`         | `[suite,commitment,limit,afterId?]` | Units in ascending ID order after an exclusive cursor; limit is an integer from 1 to 64. Fresh commitment rules allow at most one match per commitment. |
+| `demos_sendRawTransfer`     | `[wire]`                            | The 64-byte native move ID after the database commits                                                                                                   |
+| `demos_getTransfer`         | `[moveId]`                          | `{id,height,inputId,outputId,wire}`                                                                                                                     |
+| `demos_getTransferByHeight` | `[height]`                          | The same receipt by log position                                                                                                                        |
+
+A native verifier checks the signed chain ID, expiry at the candidate height, denomination, opening, both suite policies and signature. A transaction advances the expected head, marks the source spent, inserts the recipient under its unique commitment, and appends the receipt. If another worker wins, the loser reloads the head and validates against the new height. Submitting exactly the same signed bytes again returns the original move ID, including concurrent retries and retries after restart. A different signed transfer that spends the same input is rejected. A native move ID is SHA-512 of the byte length of `move/id`, the ASCII tag `move/id`, and all signed wire bytes, as defined by the codec.
+
+The enabled route permits anonymous cross-origin JSON requests and answers browser preflights for `POST` with `Content-Type`. Credentials and authorization headers are outside this public signing protocol. Requests are limited to 68 KiB, eight sequential calls per batch, eight simultaneous requests per worker and a five-second body-read deadline. The native verifier accepts exactly the 5,505-byte or 16,516-byte format and is given three seconds per invocation. Conflicting spends, invalid transfers or reused commitments return `-32010`. Contended submissions may return `-32005` and can be retried. A worker at its request limit returns HTTP 429. EVM transactions, account balances, and EVM execution are separate from the native unit protocol.
+
+## Integration tests
+
+Build `libdemos` with `cmake -S ledger -B build/ledger -DBUILD_TESTING=ON`, then `cmake --build build/ledger` and `ctest --test-dir build/ledger`. For the signaling tests, set `P2PARTY_TEST_LEDGER_VERIFIER` and `P2PARTY_TEST_LEDGER_FIXTURE` to the absolute paths of `demos-ledger-verify` and `demos-ledger-fixture`, and use the repository's isolated `P2PARTY_TEST_POSTGRES_URL`. Run `bun run check`. The fixture generates ephemeral signing keys and exports only synthetic authorized transfers and public commitments.

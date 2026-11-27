@@ -1,3 +1,6 @@
+import { ledgerConfig } from "./ledger/config";
+import { LedgerStore } from "./ledger/store";
+import { ledgerRpc } from "./ledger/rpc";
 import { requireSignalingHost } from "./utils/loginProof";
 import { P2PartyWS } from "./wsServer";
 import { startupDatabaseCheck } from "./db/schemaCheck";
@@ -26,6 +29,7 @@ if (
   throw new Error("PORT must be an integer between 1 and 65535");
 const signalingHost = requireSignalingHost(process.env.SIGNALING_HOST);
 assertSecureTurnSecret(process.env.COTURN_SECRET);
+const configuredLedger = ledgerConfig(process.env);
 
 // The service manager loads the staged EnvironmentFile and runs this exact
 // binary as the worker. Module initialization also validates the database
@@ -70,16 +74,20 @@ if (startup.rekeyed)
 // a peer that connects before this process can be reached by the others is a
 // peer whose signals they silently drop. initPubSub throws rather than starting
 // degraded, because the degraded mode is invisible at runtime.
+const ledger = configuredLedger
+  ? new LedgerStore(configuredLedger, process.env.DATABASE_URL!)
+  : undefined;
+if (ledger) await ledger.initialize();
 await initPubSub();
 const roomRetention = startRoomRetention();
 
-new P2PartyWS(port, events, signalingHost);
+new P2PartyWS(port, events, signalingHost, ledger && ledgerRpc(ledger));
 
 // Release this instance's peer claims and routing rows on the way out, so a
 // reconnecting peer is not routed to a process that no longer exists.
 const shutdown = (signal: NodeJS.Signals) => {
   clearInterval(roomRetention);
-  void shutdownPubSub()
+  void Promise.all([shutdownPubSub(), ledger?.close()])
     .catch((error: unknown) => {
       console.error("p2party: shutdown failed", describeError(error));
     })

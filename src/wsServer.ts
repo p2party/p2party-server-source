@@ -64,8 +64,10 @@ export class P2PartyWS {
     port: number,
     events: P2PartyWSEvents,
     signalingHost = requireSignalingHost(process.env.SIGNALING_HOST),
+    ledgerHandler?: (request: Request) => Promise<Response>,
   ) {
     this.server = Bun.serve({
+      ...(ledgerHandler && { maxRequestBodySize: 68 * 1024 }),
       websocket: {
         open: (ws: P2PartyWSClient) => {
           if (ws.data.legacyUpgrade) {
@@ -119,6 +121,11 @@ export class P2PartyWS {
       fetch(req: Request, server: Server<P2PartyWSData>) {
         const url = new URL(req.url);
 
+        if (url.pathname === "/rpc") {
+          return ledgerHandler
+            ? ledgerHandler(req)
+            : new Response(null, { status: 404 });
+        }
         if (req.headers.get("upgrade") !== "websocket") {
           // Everything else here needs an authenticated socket, which means a
           // deploy could not be verified without a valid Ed25519 key. Report
@@ -178,6 +185,7 @@ export class P2PartyWS {
         return new Response("Upgrade failed", { status: 500 });
       },
       port,
+      hostname: process.env.SIGNALING_BIND_HOST,
     });
 
     function handleMessageWithEvents(

@@ -59,6 +59,10 @@ Git work tree. Prettier itself reads only the top-level `.gitignore`, so given
 `.` it would also read, and `format` would rewrite, the ignored Terraform state,
 Ansible vault and inventory under `deploy/` (`tests/formatScripts.test.ts`).
 
+### Optional native ledger validator
+
+An explicitly configured signaling worker can validate signed native transfers and persist an ordered PostgreSQL log. The RPC endpoint is disabled by default. [Validator configuration, methods and tests](src/ledger/README.md)
+
 ### Testing against PostgreSQL
 
 The tests in `tests/db/*.throwaway.test.ts` need a real PostgreSQL: the
