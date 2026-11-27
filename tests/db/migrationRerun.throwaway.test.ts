@@ -78,6 +78,7 @@ describeWithThrowawayPostgres("re-running a migration after a failure", () => {
       "20261126120000_pending_signal_created_at_index",
       "20261127000000_rekey_peers_to_derived_ids",
       "20261127000100_routing_claim_owner",
+      "20261127180000_index_identity_authentication",
     ]);
     for (const migration of added) {
       const before = migrationNames.slice(0, migrationNames.indexOf(migration));

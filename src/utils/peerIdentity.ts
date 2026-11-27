@@ -9,10 +9,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** A memberless identity younger than this is never pruned for capacity. */
 const IDENTITY_PRUNE_MIN_AGE_MS = DAY_MS;
 /**
- * At most this many identities are pruned per admission. "Near the cap" means
- * within one batch of it, so a single prune can restore the headroom.
+ * Each prune query is bounded. Memberless pruning begins one batch before
+ * the ceiling; pruning occupied identities begins only at the ceiling.
  */
 const IDENTITY_PRUNE_BATCH = 1000;
+const MINIMUM_OFFLINE_MS = 10 * 60 * 1000;
+const MEMBER_EVICTION_HEADROOM = 8;
 
 /**
  * The peer id of an identity public key, derived from the key alone: every
@@ -102,21 +104,23 @@ export const createPersistVerifiedIdentity =
     if (socketGeneration.length === 0)
       throw new Error("Socket has no generation to claim with");
     const at = now();
-    // Offline identities in no room, created over a day ago. Any last-seen
-    // time qualifies, however old, except one inside the activation deadline:
-    // that row is persisted but its socket has not claimed it yet.
-    const prunable = {
-      createdAt: { lt: new Date(at - IDENTITY_PRUNE_MIN_AGE_MS) },
-      updatedAt: {
-        lt: new Date(at - admissionLimits.authenticationTimeoutMs),
-      },
+    // Routing-claim release refreshes updatedAt. Even a memberless identity
+    // gets a reconnect window before it can be removed for capacity.
+    const offline = {
       serverId: null,
+      updatedAt: { lt: new Date(at - MINIMUM_OFFLINE_MS) },
+    };
+    const prunable = {
+      ...offline,
+      createdAt: { lt: new Date(at - IDENTITY_PRUNE_MIN_AGE_MS) },
       rooms: { none: {} },
     };
     let charged = false;
+    let pruned = 0;
     const attempt = () =>
       prisma.$transaction(
-        async (transaction): Promise<IdentityCommit> => {
+        async (transaction): Promise<IdentityCommit | null> => {
+          pruned = 0; // Report only rows removed by the committed attempt.
           // The claim this commit replaces, read in the transaction that
           // replaces it.
           const existing = await transaction.peer.findUnique({
@@ -129,15 +133,12 @@ export const createPersistVerifiedIdentity =
                 throw new Error("Identity admission capacity reached");
               charged = true;
             }
-            // A hard cap on every Peer row, whatever its age: nothing else
-            // deletes identities, so rows past any retention window still
-            // count.
+            // Enforce the hard cap in the serializable creation transaction.
             let identities = await transaction.peer.count();
             if (identities >= maxIdentities - IDENTITY_PRUNE_BATCH) {
               // Least recently seen first: rows past the retention window go
               // before any recent one ("updatedAt" is bumped on
-              // authentication, claim and release). Rolled back with the
-              // transaction if the cap still refuses.
+              // authentication, claim and release).
               const stale = await transaction.peer.findMany({
                 where: prunable,
                 select: { id: true },
@@ -151,11 +152,31 @@ export const createPersistVerifiedIdentity =
                     id: { in: stale.map(({ id }) => id) },
                   },
                 });
+                pruned += count;
                 identities -= count;
               }
             }
-            if (identities >= maxIdentities)
-              throw new Error("Identity admission capacity reached");
+            if (identities >= maxIdentities) {
+              const oldest = await transaction.peer.findMany({
+                where: offline,
+                select: { id: true },
+                orderBy: [{ lastPing: "asc" }, { id: "asc" }],
+                take: Math.min(
+                  IDENTITY_PRUNE_BATCH,
+                  identities - maxIdentities + 1 + MEMBER_EVICTION_HEADROOM,
+                ),
+              });
+              if (oldest.length) {
+                const { count } = await transaction.peer.deleteMany({
+                  where: { ...offline, id: { in: oldest.map(({ id }) => id) } },
+                });
+                identities -= count;
+                pruned += count;
+              }
+            }
+            // A lowered ceiling may require several bounded passes. Commit
+            // the removals even when this request still cannot claim a slot.
+            if (identities >= maxIdentities) return null;
           }
           if (!ws.data.isVerified || ws.readyState !== 1)
             throw new Error("Authentication socket closed");
@@ -184,13 +205,18 @@ export const createPersistVerifiedIdentity =
       );
 
     try {
-      let commit: IdentityCommit;
+      let commit: IdentityCommit | null;
       try {
         commit = await attempt();
       } catch (error) {
         if (!isWriteConflict(error)) throw error;
         commit = await attempt();
       }
+      if (pruned > 0)
+        console.warn("p2party: identities pruned for admission", {
+          count: pruned,
+        });
+      if (!commit) throw new Error("Identity admission capacity reached");
       if (charged && !commit.created) refundCreation(ws);
       return commit;
     } catch (error) {

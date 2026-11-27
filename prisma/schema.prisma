@@ -42,6 +42,8 @@ model Peer {
   rooms      Room[]      @relation("PeerRooms")
 
   @@index([serverId])
+  // lastPing holds the epoch milliseconds of the last authenticated login.
+  @@index([lastPing, id])
 }
 
 model Room {

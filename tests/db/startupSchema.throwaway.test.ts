@@ -165,7 +165,7 @@ describeWithThrowawayPostgres("the schema the server starts on", () => {
     const holder = new pg.Client({ connectionString: database.url });
     await holder.connect();
     await holder.query("BEGIN");
-    await holder.query(`LOCK TABLE "Peer" IN ROW SHARE MODE`);
+    await holder.query(`LOCK TABLE "Peer" IN ROW EXCLUSIVE MODE`);
     const migrating = prismaMigrate(database.url, migrationNames);
     let waiting: number | undefined;
     for (let attempt = 0; attempt < 600 && waiting === undefined; attempt++) {

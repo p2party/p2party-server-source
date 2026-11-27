@@ -36,6 +36,7 @@ export const admissionLimits = Object.freeze({
   newIdentitiesPerMinute: integer("NEW_IDENTITIES_PER_MINUTE", 120, 10000),
   newMembershipsPerMinute: integer("NEW_MEMBERSHIPS_PER_MINUTE", 600, 100000),
   persistentIdentities: integer("MAX_PERSISTENT_IDENTITIES", 100000, 10000000),
+  membershipTtlDays: integer("MEMBERSHIP_TTL_DAYS", 90, 36500),
   roomsPerIdentity: integer("MAX_ROOMS_PER_IDENTITY", 64, 1000),
   peersPerRoom: integer("MAX_PEERS_PER_ROOM", 128, 10000),
   authenticationTimeoutMs: integer("AUTHENTICATION_TIMEOUT_MS", 15000, 60000),

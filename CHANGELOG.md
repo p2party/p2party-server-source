@@ -4,10 +4,16 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 and 0.2.1
+`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 through 0.2.2
 speak signaling protocol 5.
 
 ## [Unreleased]
+
+## [0.2.2] — 2026-11-27
+
+- Expire offline signaling identities and their room memberships after 90 days without an authenticated login. Operators can set `MEMBERSHIP_TTL_DAYS`. The cleanup runs on startup and every minute and preserves online identities.
+- When the identity table fills, admit a newcomer by reclaiming the oldest eligible offline identities. A live claim and a ten-minute reconnect window protect existing sessions. Admission and pruning run in one serializable transaction.
+- Add the PostgreSQL index used to find identities by last authentication. Protocol 5 and the public testnet RPC remain compatible. [Signaling limits](README.md#protocol-v5-authentication)
 
 ## [0.2.1] — 2026-11-27
 

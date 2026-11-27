@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
 
+import { pruneExpiredMemberships } from "../../src/utils/roomRetention";
 import { releasePeer } from "../../src/pubsub";
 import {
   AdmissionController,
@@ -72,6 +73,104 @@ afterEach(async () => {
 });
 
 describeWithThrowawayPostgres("routing claims against PostgreSQL", () => {
+  test("two concurrent creations at one below the cap admit exactly one", async () => {
+    database = await freshDatabase();
+    const { prisma } = database;
+    const persist = createPersistVerifiedIdentity(prisma, () => true, 2);
+    const connect = () =>
+      persist(provedSocket(randomBytes(32).toString("hex")));
+    await connect();
+    const results = await Promise.allSettled([connect(), connect()]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
+      1,
+    );
+    const refused = results.find(({ status }) => status === "rejected");
+    expect(refused?.status === "rejected" && String(refused.reason)).toContain(
+      "capacity",
+    );
+    expect(await prisma.peer.count()).toBe(2);
+  }, 60_000);
+
+  test("concurrent retention removes expired memberships and memberless identities, preserving recent and online peers", async () => {
+    database = await freshDatabase();
+    const { prisma } = database;
+    const now = Date.now();
+    const old = BigInt(now - 91 * 86400000);
+    const create = (lastPing: bigint, serverId: string | null = null) =>
+      prisma.peer.create({
+        data: {
+          publicKey: randomBytes(32).toString("hex"),
+          createdAt: new Date(Number(lastPing)),
+          lastPing,
+          serverId,
+        },
+      });
+    const [member, empty, recent, online] = await Promise.all([
+      create(old),
+      create(old),
+      create(BigInt(now)),
+      create(old, WORKER_1),
+    ]);
+    const room = await prisma.room.create({
+      data: {
+        identifier: randomBytes(64).toString("hex"),
+        peers: { connect: [member, recent, online].map(({ id }) => ({ id })) },
+      },
+    });
+    const counts = await Promise.all([
+      pruneExpiredMemberships(prisma, now),
+      pruneExpiredMemberships(prisma, now),
+    ]);
+    expect(counts[0]! + counts[1]!).toBe(2);
+    expect(
+      await prisma.peer.count({ where: { id: { in: [member.id, empty.id] } } }),
+    ).toBe(0);
+    const members = await prisma.peer.findMany({
+      where: { rooms: { some: { id: room.id } } },
+      select: { id: true },
+    });
+    expect(members.map(({ id }) => id).sort()).toEqual(
+      [recent.id, online.id].sort(),
+    );
+  }, 60_000);
+
+  test("cap pressure reclaims the least recently authenticated offline members and preserves online or just-disconnected identities", async () => {
+    database = await freshDatabase();
+    const { prisma } = database;
+    const now = Date.now();
+    const room = await prisma.room.create({
+      data: { identifier: randomBytes(64).toString("hex") },
+    });
+    const ids: string[] = [];
+    for (let i = 0; i < 13; i++) {
+      const peer = await prisma.peer.create({
+        data: {
+          publicKey: randomBytes(32).toString("hex"),
+          lastPing: BigInt(now - (100 - i) * 86400000),
+          updatedAt: new Date(i === 1 ? now : now - 86400000),
+          serverId: i === 0 ? WORKER_2 : null,
+          rooms: { connect: { id: room.id } },
+        },
+      });
+      ids.push(peer.id);
+    }
+    const persist = createPersistVerifiedIdentity(
+      prisma,
+      () => true,
+      ids.length,
+      () => now,
+    );
+    expect(
+      await persist(provedSocket(randomBytes(32).toString("hex"))),
+    ).toMatchObject({ created: true });
+    const members = await prisma.peer.findMany({
+      where: { rooms: { some: { id: room.id } } },
+    });
+    expect(members.map(({ id }) => id).sort()).toEqual(
+      [ids[0]!, ids[1]!, ids[11]!, ids[12]!].sort(),
+    );
+  }, 60_000);
+
   test("a late release from an old socket does not clear the new socket's claim", async () => {
     database = await freshDatabase();
     const db = database;

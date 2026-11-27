@@ -13,7 +13,7 @@ end-to-end encryption and per-message DataChannels live in
 
 On November 27, 2026, two browsers on the public site exchanged a message and verified every byte of a 32 KiB file over a direct connection, then repeated the check with TURN forced. Signaling uses protocol 5. The fleet ran Ubuntu 24.04.5 with kernel 6.8.0-151, Caddy 2.11.9, coturn 4.19.2 and PostgreSQL 19.0. [P2Party app](https://p2party.com) · [Signaling health](https://signaling.p2party.com/health) · [Deployment guide](deploy/README.md)
 
-Release 0.2.1 runs the live validator in the signaling process. P2Party Testnet 1 started with 128 valueless units and one operator ordering signed transfers. A grant at height 1 funded the same unit that ethers transferred with ML-DSA-65 at height 2 and viem transferred with SLH-DSA-SHA2-192s at height 3. Check the network identity and current height at `GET /rpc/health`. Wallets can query balances with ethers or viem, generate a fresh receive commitment and submit native post-quantum transfers. [Testnet health](https://signaling.p2party.com/rpc/health) · [Public testnet guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) · [Request a test unit](https://github.com/p2party/p2party-js/issues/new) · [Wallet package](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) · [RPC methods](src/ledger/README.md)
+Release 0.2.1 introduced the live validator in the signaling process. Release 0.2.2 adds expiry for offline signaling memberships. P2Party Testnet 1 started with 128 valueless units and one operator ordering signed transfers. A grant at height 1 funded the same unit that ethers transferred with ML-DSA-65 at height 2 and viem transferred with SLH-DSA-SHA2-192s at height 3. Check the network identity and current height at `GET /rpc/health`. Wallets can query balances with ethers or viem, generate a fresh receive commitment and submit native post-quantum transfers. [Testnet health](https://signaling.p2party.com/rpc/health) · [Public testnet guide](https://github.com/p2party/p2party-js/blob/master/docs/testnet-1.md) · [Request a test unit](https://github.com/p2party/p2party-js/issues/new) · [Wallet package](https://p2party.com/downloads/testnet-1/p2party-ledger-client-0.1.0-testnet.0.tgz) · [RPC methods](src/ledger/README.md)
 
 For the trust assumptions, deployment evidence and work needed for independent validators, see the [roadmap](ROADMAP.md). The validator uses the [libdemos transfer codec](https://github.com/ondemos/libdemos/tree/243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0/ledger).
 
@@ -176,9 +176,19 @@ does not scan the peer population.
 A new proved identity requires a database count of all peer rows. Within 1,000
 rows of `MAX_PERSISTENT_IDENTITIES`, the same transaction first deletes up to
 1,000 identities that are offline, belong to no room and were created more than
-24 hours ago, least recently seen first, and refuses the new identity only if
-the cap is still reached. These are resource limits, not proof of unique humans
-or a complete Sybil defense.
+24 hours ago, least recently seen first. If the cap remains full, admission
+can also remove the oldest offline identities in order of last authentication,
+including their room memberships. Each such pass frees the required space
+plus at most eight spare slots. A live socket claim protects the identity;
+an identity disconnected less than ten minutes ago is also protected. A
+returning identity can authenticate with its same key and rejoin its rooms.
+Capacity pruning logs the count only.
+
+Offline identities and all their memberships expire after `MEMBERSHIP_TTL_DAYS`
+days since their last successful authentication (default 90). Cleanup runs at
+startup and every minute, up to 1,000 identities per pass. Removing an identity
+also removes its obsolete authentication challenges. Messages and files live
+on clients; the ledger has independent identities and storage.
 
 `TRUST_LOCAL_PROXY=true` accepts Caddy's overwritten `X-Real-IP` only when the
 TCP peer is loopback. It is enabled by the reference deployment and disabled
@@ -531,8 +541,8 @@ and a frame sent straight to a socket on its own process overtaking queued
 ones, remain: `socketGeneration` makes one harmless when the two frames name
 different sockets, not when they name the same one.
 
-The membership row survives a disconnect — only an explicit `leaveRoom`
-removes one — so an offline member remains listed in snapshots.
+The membership row survives a disconnect. An offline member remains listed until
+an explicit leave, expiry, or capacity eviction.
 
 ### Heartbeat and timeouts
 
@@ -779,17 +789,15 @@ of them except `Challenge`.
   public key. Rows a server before 0.1.4 stored with random ids are re-keyed to
   the derived id once, by a migration, at the upgrade (see "Admission and
   database security"); a row whose key is not 64 lowercase hex characters,
-  which no client can present, is deleted there. Verified identity rows are
-  retained to keep ids stable.
+  which no client can present, is deleted there. Verified identities can authenticate again with the same derived ID after expiry.
 - **`Room`** — one row per room, keyed by `identifier`, the SHA-512 of the
   64-hex room token ([`src/utils/roomIdentifier.ts`](src/utils/roomIdentifier.ts)).
   The client hashes the lowercase capability hex string as UTF-8 and sends
   its 128-hex digest as `roomLocator`. Existing rows keep the same identifier.
   A frame carrying `roomUrl` is refused. Empty room records not updated for 24 hours are removed in batches of at
-  most 1,000 per minute, rechecking emptiness at deletion. Occupied rooms and
-  offline membership are retained.
-- **`Peer`↔`Room` membership** — added by a `room` request, removed only by a
-  `leaveRoom` request. A socket close clears `Peer.serverId` and nothing else,
+  most 1,000 per minute, rechecking emptiness at deletion. Offline memberships have the authentication TTL described above.
+- **`Peer`↔`Room` membership** — added by a `room` request, removed by a
+  `leaveRoom` request or deletion of its expired or evicted identity. A socket close clears `Peer.serverId` and nothing else,
   so membership outlives the connection.
 - **`PendingSignal`** — a serialized frame written only when the target peer's
   socket belongs to another instance, or (kind `evict`) the generation of a

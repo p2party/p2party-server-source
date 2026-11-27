@@ -95,10 +95,12 @@ const peerTable = (rows: PeerRow[]) => {
       rows.filter((row) => matches(row, query?.where)).length,
     findMany: async (query: {
       where: Record<string, unknown>;
-      orderBy: { updatedAt: "asc" };
+      orderBy: { updatedAt: "asc" } | [{ lastPing: "asc" }, { id: "asc" }];
       take: number;
     }) => {
-      expect(query.orderBy).toEqual({ updatedAt: "asc" });
+      if (Array.isArray(query.orderBy))
+        expect(query.orderBy).toEqual([{ lastPing: "asc" }, { id: "asc" }]);
+      else expect(query.orderBy).toEqual({ updatedAt: "asc" });
       return rows
         .filter((row) => matches(row, query.where))
         .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
@@ -515,11 +517,13 @@ describe("proof-gated durable identity", () => {
       "activating",
       provisionalPeerId("01".repeat(32)),
     ]);
-    // Nothing left to prune: the cap refuses and the transaction rolls back.
+    // With only members or young rows left, pressure can reclaim eligible offline rows.
     expect(await outcome(persist(provedSocket("02".repeat(32))))).toBe(
-      "Identity admission capacity reached",
+      "persisted",
     );
-    expect(rows).toHaveLength(5);
+    expect(rows.map(({ id }) => id)).toContain("online");
+    expect(rows.map(({ id }) => id)).toContain("activating");
+    expect(rows.map(({ id }) => id)).not.toContain("member");
   });
 
   test("total identity rows never exceed the hard cap", async () => {
@@ -528,11 +532,11 @@ describe("proof-gated durable identity", () => {
 
     // Rows that cannot be pruned still count: the cap refuses, it never grows.
     const full = peerTable([
-      existingRow("member", longAgo + DAY, longAgo, { rooms: 1 }),
+      existingRow("member", longAgo + DAY, 0, { rooms: 1 }),
       existingRow("stale-claim", longAgo + DAY, longAgo, {
         serverId: "server",
       }),
-      existingRow("also-member", longAgo + DAY, longAgo, { rooms: 2 }),
+      existingRow("also-member", longAgo + DAY, 0, { rooms: 2 }),
     ]);
     const persistFull = createPersistVerifiedIdentity(
       full.database,
@@ -581,6 +585,32 @@ describe("proof-gated durable identity", () => {
       provisionalPeerId("09".repeat(32)),
     ]);
     expect(mixed.rows.length).toBeLessThanOrEqual(cap);
+  });
+
+  test("bounded passes make progress when a reduced cap initially has no free slot", async () => {
+    const { database, rows } = peerTable([
+      ...Array.from({ length: 1002 }, (_, i) =>
+        existingRow("old-" + String(i), 3 * DAY, 2 * DAY, { rooms: 1 }),
+      ),
+      existingRow("reconnecting", 3 * DAY, 60_000),
+    ]);
+    const persist = createPersistVerifiedIdentity(
+      database,
+      () => true,
+      2,
+      () => NOW,
+    );
+    expect(await outcome(persist(provedSocket("04".repeat(32))))).toBe(
+      "Identity admission capacity reached",
+    );
+    expect(rows).toHaveLength(3);
+    expect(await outcome(persist(provedSocket("04".repeat(32))))).toBe(
+      "persisted",
+    );
+    expect(rows.map(({ id }) => id)).toEqual([
+      "reconnecting",
+      provisionalPeerId("04".repeat(32)),
+    ]);
   });
 
   test("identities far below the cap are never pruned", async () => {
