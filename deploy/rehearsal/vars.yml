@@ -6,7 +6,7 @@
 # through vars_files, which outrank every inventory variable, so only extra
 # vars can replace a value from them.
 #
-# Only the public names are replaced. With the production names, Caddy would
+# Public names and the checksum-verified Bun archive source are replaced. With the production names, Caddy would
 # ask a public CA for signaling.p2party.com, deploy.yml would read
 # https://signaling.p2party.com/health from the VM, and certbot would be asked
 # for turn and stun names. A *.localhost name gets a certificate from Caddy's
@@ -23,3 +23,8 @@ domains:
   signaling: signaling.rehearsal.localhost
   turn: turn.rehearsal.localhost
   stun: stun.rehearsal.localhost
+
+# An isolated HTTP server inside the guest serves only the pinned Bun archive.
+bun_release_base_url: http://127.0.0.1:18641
+# The host uses Rosetta for the x64 release ELF and hashes its executable mapping.
+rehearsal_allow_rosetta_hash: true

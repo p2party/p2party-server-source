@@ -43,6 +43,11 @@ done
 printf 'host Bun (%s): %s\n' /home/p2party/.bun/bin/bun \
   "$(sudo -u p2party timeout 30 /home/p2party/.bun/bin/bun --version 2>&1 | head -1)"
 
+for managed_bun in /opt/p2party-bun/*/bin/bun; do
+  [ -x "$managed_bun" ] || continue
+  printf 'migration Bun (%s): %s\n' "$managed_bun" "$(sudo -u p2party "$managed_bun" --version)"
+done
+
 section "deploy markers"
 for marker in /var/lib/p2party-migration-failed /var/log/p2party-migration-failure.log; do
   if [ -e "$marker" ]; then

@@ -1040,6 +1040,7 @@ ensure_baseline() {
     mode_baseline
   fi
   snapshot_restore baseline
+  stage_bun_archive
   guest_install_helpers
   # cloud-init runs its per-instance modules again on every Lima start (a new
   # instance id), apt's source list included; the multiarch restriction of
@@ -1047,18 +1048,18 @@ ensure_baseline() {
   guest_cmd "$GUEST_LIB/standins.sh amd64-sources" >/dev/null
 }
 
-# The README's step before a deploy: check the host's Bun and, if it is not
-# the pin, install the pinned release. The README's command downloads it from
-# GitHub inside the host; the rehearsal copies the same release in (README,
-# "What stands in for what").
-host_bun_to_pin() {
-  local found
-  found="$(guest_cmd "sudo -u p2party /home/p2party/.bun/bin/bun --version" 2>&1 | tail -1)"
-  res ""
-  res "Before deploying, deploy/README.md says to check the host's Bun: \`sudo -u p2party /home/p2party/.bun/bin/bun --version\` printed \`$found\`; the pin is $PIN."
-  if [ "$found" != "$PIN" ]; then
-    guest_bun "$PIN"
+# The production playbook downloads and verifies the official architecture
+# zip. Keep the bytes, URL layout and checksum check intact on a local mirror.
+stage_bun_archive() {
+  local name="bun-linux-aarch64.zip" base="/run/p2party-rehearsal-bun" directory
+  directory="$base/bun-v$PIN"
+  guest_cmd "install -d -m 0755 '$directory'"
+  guest_copy "$TOOLS/bun-linux-aarch64-$PIN/$name" "/tmp/$name"
+  guest_cmd "install -m 0644 '/tmp/$name' '$directory/$name' && rm -f '/tmp/$name'"
+  if ! guest_cmd "systemctl is-active --quiet p2party-rehearsal-bun-mirror"; then
+    guest_cmd "systemd-run --quiet --collect --property=DynamicUser=yes --unit=p2party-rehearsal-bun-mirror /usr/bin/python3 -m http.server 18641 --bind 127.0.0.1 --directory '$base'"
   fi
+  guest_cmd "curl --noproxy '*' -fsSI --retry 4 --retry-connrefused 'http://127.0.0.1:18641/bun-v$PIN/$name' >/dev/null"
 }
 
 mode_upgrade() {
@@ -1071,7 +1072,6 @@ mode_upgrade() {
   res "The README's paragraph on the deploy order:"
   res ""
   readme_quote "$tree" "prepares the release while the old one keeps serving" >>"$RESULT"
-  host_bun_to_pin
 
   res ""
   res "## 1. From a plain \`git archive\` of the commit (no git metadata)"
@@ -1093,7 +1093,7 @@ mode_upgrade() {
     res_block "The build record the deploy wrote (\`deploy/ansible/builds/p2party_linux_x64.build.json\`):" \
       "$WORK/tmp/build-record-${COMMIT_SHA:0:12}.json"
   fi
-  guest_cmd "set -x; uname -m; ls /proc/sys/fs/binfmt_misc/ | grep -i rosetta; head -c 20 /home/p2party/server/p2party-server | od -A n -t x1 | head -1; ls /home/p2party/server/migration-tooling/node_modules/@typescript/; grep -m1 '\"version\"' /home/p2party/server/migration-tooling/node_modules/prisma/package.json; caddy version; psql --version; sudo -u p2party /home/p2party/.bun/bin/bun --version" \
+  guest_cmd "set -x; uname -m; ls /proc/sys/fs/binfmt_misc/ | grep -i rosetta; head -c 20 /home/p2party/server/p2party-server | od -A n -t x1 | head -1; ls /var/lib/p2party-migration-tooling/node_modules/@typescript/; grep -m1 '\"version\"' /var/lib/p2party-migration-tooling/node_modules/prisma/package.json; caddy version; psql --version; /opt/p2party-bun/$PIN/bin/bun --version" \
     >"$WORK/tmp/first-exercised.txt" 2>&1 || true
   res_block "The items of deploy/README.md \"First exercised at the release deploy\" as they ran here (architecture, Rosetta, the binary's ELF header, TypeScript's native package in the tooling, Prisma, Caddy, PostgreSQL, the host's Bun):" \
     "$WORK/tmp/first-exercised.txt"
@@ -1167,31 +1167,17 @@ deploy_with_blocked_migration() {
     die "the deploy did not retain the migration marker and lock timeout diagnostic"
 }
 
-# The README's recovery commands (deploy/README.md, "A failed or interrupted
-# migration", step 3), as written: on the signaling host, as p2party, from
-# ~p2party/server, with DATABASE_URL exported as the play builds it. The URL
-# reaches the guest in a root-only file and is never printed.
+# Use the installed release's CLI and the credentials the failed deployment
+# left in its root-only migration.env. Neither the password nor DATABASE_URL
+# is copied to the control machine or exposed in command arguments.
 readme_prisma() {
-  local password url_file="$WORK/tmp/db-url" out="$WORK/tmp/readme-prisma.txt" rc=0
-  password="$(sed -n 's/^vault_postgres_password: "\(.*\)"$/\1/p' "$SECRETS/vault.plain.yml")"
-  (
-    umask 077
-    printf 'postgresql://p2party:%s@10.231.0.2:5432/p2party?schema=public&sslmode=verify-full&sslrootcert=/etc/p2party/postgres-ca.crt' \
-      "$password" >"$url_file"
-  )
-  guest_copy "$url_file" /tmp/rehearsal-db-url
-  rm -f "$url_file"
-  cat >"$WORK/tmp/readme-prisma.sh" <<'EOF'
-chown p2party:p2party /tmp/rehearsal-db-url
-chmod 0600 /tmp/rehearsal-db-url
-sudo -u p2party -H bash -c 'cd ~/server && export DATABASE_URL="$(cat /tmp/rehearsal-db-url)" && ~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js "$@"' readme "$@"
-rc=$?
-rm -f /tmp/rehearsal-db-url
-exit $rc
-EOF
-  guest_copy "$WORK/tmp/readme-prisma.sh" /tmp/readme-prisma.sh
-  guest_cmd "bash /tmp/readme-prisma.sh $*" >"$out" 2>&1 || rc=$?
-  res_block "As the README says: \`~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js $*\` (exit $rc):" "$out"
+  local out="$WORK/tmp/readme-prisma.txt" rc=0
+  guest_cmd "systemd-run --quiet --wait --pipe --collect --uid=p2party --gid=p2party \
+    --property=EnvironmentFile=/var/lib/p2party-release-staging/migration.env \
+    --property=WorkingDirectory=/home/p2party/server --property=RuntimeMaxSec=300s \
+    --property=TimeoutStopSec=10s --property=KillMode=control-group \
+    -- /opt/p2party-bun/$PIN/bin/bun --no-env-file /var/lib/p2party-migration-tooling/node_modules/prisma/build/index.js $*" >"$out" 2>&1 || rc=$?
+  res_block "The installed Prisma CLI ran \`$*\` in the migration environment (exit $rc):" "$out"
   return "$rc"
 }
 
@@ -1255,40 +1241,47 @@ mode_scenario_1() {
   local other="$WORK/other-bun" found rc=0
   scenario_start 11-scenario-1-operator-bun "Scenario 1: a Bun other than the pinned one on the operator's PATH" \
     "$README_BUN_CHECKS" "$README_DEPLOY_ORDER"
-  host_bun_to_pin
   mkdir -p "$other"
   ln -sfn "${REHEARSAL_OTHER_BUN:-/opt/homebrew/bin/bun}" "$other/bun"
   found="$("$other/bun" --version 2>&1 || true)"
   res "- The operator's PATH starts with a Bun $found (\`${REHEARSAL_OTHER_BUN:-/opt/homebrew/bin/bun}\`); the pin is $PIN."
   fingerprint_before
   PLAY_BUN_DIR="$other" play_recorded "deploy.yml with that Bun first on PATH" "$LOGS/s1-deploy.log" "$scenario_tree" deploy.yml || rc=$?
+  [ "$rc" -ne 0 ] || die "operator preflight accepted Bun $found (expected $PIN)"
   fingerprint_compare "refused by the local pre-flight"
+  record_host_health 0.1.4 4
   record_state "after the refused run (0.1.4 should still be serving)"
   res ""
   res "### The README's next step: the pinned Bun first on PATH, then the deploy again"
   rc=0
   play_recorded "deploy.yml with Bun $PIN first on PATH" "$LOGS/s1-second-run.log" "$scenario_tree" deploy.yml || rc=$?
   record_state "after the second run"
+  [ "$rc" -eq 0 ] || die "deploy failed with the correct operator Bun"
+  record_candidate_health "$scenario_tree"
 }
 
-# (2) Another Bun on the host: the baseline's host Bun is 0.1.4's 1.3.14.
+# The archive downloaded for the new root-owned Bun must pass its signed
+# digest before host cutover. Restore the archive and deploy the same revision.
 mode_scenario_2() {
-  local found rc=0
-  scenario_start 12-scenario-2-host-bun "Scenario 2: another Bun on the signaling host" \
-    "$README_BUN_CHECKS" "^To install the pinned Bun on the signaling host" "$README_DEPLOY_ORDER"
-  found="$(guest_cmd "sudo -u p2party /home/p2party/.bun/bin/bun --version" 2>&1 | tail -1)"
-  res "- The host's Bun is $found (left as release 0.1.4 had it); the pin is $PIN. The README's pre-deploy check is skipped on purpose."
-  fingerprint_before
-  play_recorded "deploy.yml" "$LOGS/s2-deploy.log" "$scenario_tree" deploy.yml || rc=$?
-  fingerprint_compare "refused by the host's Bun check"
-  record_state "after the refused run (0.1.4 should still be serving)"
-  res ""
-  res "### The README's next step: install the pinned Bun on the host, then the deploy again"
-  res "The printed command downloads the release zip from GitHub inside the host, which the rehearsal VM may not do; the same release is copied in instead (checksum-verified on the operator's side, tools.sha256)."
-  guest_bun "$PIN"
+  local rc=0 worker_before worker_after
+  scenario_start 12-scenario-2-host-bun "Scenario 2: a wrong host Bun archive" "$README_BUN_CHECKS" "$README_DEPLOY_ORDER"
+  worker_before="$(guest_cmd 'systemctl show -p InvocationID --value p2party-signaling-3001.service')"
+  [ -n "$worker_before" ] || die "could not identify the baseline worker"
+  guest_cmd "printf 'incorrect rehearsal archive' > '/run/p2party-rehearsal-bun/bun-v$PIN/bun-linux-aarch64.zip'"
+  play_recorded "deploy.yml with the wrong archive" "$LOGS/s2-deploy.log" "$scenario_tree" deploy.yml || rc=$?
+  [ "$rc" -ne 0 ] || die "deploy accepted a Bun archive with the wrong digest"
+  grep -Ei 'checksum|digest' "$LOGS/s2-deploy.log" >/dev/null || die "deploy did not identify the archive digest failure"
+  worker_after="$(guest_cmd 'systemctl show -p InvocationID --value p2party-signaling-3001.service')"
+  [ "$worker_before" = "$worker_after" ] || die "the checksum failure interrupted the running worker"
+  guest_cmd "test ! -e /var/lib/p2party-migration-failed" || die "checksum failure reached cutover"
+  record_state "after rejecting the archive"
+  record_host_health 0.1.4 4
+  stage_bun_archive
   rc=0
-  play_recorded "deploy.yml, second run" "$LOGS/s2-second-run.log" "$scenario_tree" deploy.yml || rc=$?
+  play_recorded "deploy.yml with the verified archive" "$LOGS/s2-second-run.log" "$scenario_tree" deploy.yml || rc=$?
   record_state "after the second run"
+  [ "$rc" -eq 0 ] || die "deploy failed with the correct Bun archive"
+  record_candidate_health "$scenario_tree"
 }
 
 # (3) A migration that fails before the re-key: an open transaction holds a
@@ -1296,7 +1289,6 @@ mode_scenario_2() {
 mode_scenario_3() {
   scenario_start 05-scenario-3-migration-fails-before-rekey "Scenario 3: a migration that fails before the re-key" \
     "$README_MIGRATION_FAILED" "$README_RECOVERY_STEPS" "$README_MARKER" "$README_SCHEMA_CHECK"
-  host_bun_to_pin
   lock_holder_start 'LOCK TABLE "PendingSignal" IN ROW EXCLUSIVE MODE;'
   deploy_with_blocked_migration "$LOGS/s3-deploy.log" "$scenario_tree" '%CREATE INDEX%'
   lock_holder_end
@@ -1316,7 +1308,6 @@ mode_scenario_4() {
   local rc=0 out="$WORK/tmp/s4-initial-setup.log"
   scenario_start 06-scenario-4-migration-fails-after-rekey "Scenario 4: a migration that fails after the re-key" \
     "$README_MIGRATION_FAILED" "$README_RECOVERY_STEPS" "$README_MARKER" "$README_SCHEMA_CHECK"
-  host_bun_to_pin
   lock_holder_start 'SELECT count(*) FROM "Peer";'
   deploy_with_blocked_migration "$LOGS/s4-deploy.log" "$scenario_tree" '%ALTER TABLE%'
   lock_holder_end
@@ -1340,7 +1331,6 @@ mode_scenario_5() {
   local rc=0 previous_invocation current_invocation
   scenario_start 07-scenario-5-binary-will-not-start "Scenario 5: reject a bad staged environment before cutover" \
     "$README_DEPLOY_ORDER" "$README_SCHEMA_CHECK" "COTURN_SECRET"
-  host_bun_to_pin
   res "- The deploy renders COTURN_SECRET from \`vault_coturn_auth_secret\`, given here as an extra variable of 21 bytes (\`too-short-turn-secret\`); the server refuses one under 32 bytes."
   previous_invocation="$(guest_cmd "systemctl show -p InvocationID --value p2party-signaling-3001.service")"
   [ -n "$previous_invocation" ] || die "could not identify the running baseline worker"
@@ -1370,7 +1360,6 @@ mode_scenario_6() {
   ensure_baseline
   result_open 09-scenario-6-second-run-after-success "Scenario 6: a second run after a success"
   scenario_tree="$(prepare_tree "$COMMIT_SHA")"
-  host_bun_to_pin
   rc=0
   play_recorded "deploy.yml, the first run (the upgrade)" "$LOGS/s6-first-run.log" "$scenario_tree" deploy.yml || rc=$?
   [ "$rc" -eq 0 ] || die "the first deploy of scenario 6 failed (exit $rc)"
@@ -1388,7 +1377,9 @@ mode_scenario_6() {
   after="$(guest_cmd "systemctl show -p MainPID -p ActiveEnterTimestamp p2party-signaling-3001" | tr '\n' ' ')"
   res "- After: the worker's $after"
   record_state "after the second run"
-  record_rows "after the second run" || true
+  [ "$rc" -eq 0 ] || die "redeploying the candidate failed"
+  record_candidate_health "$scenario_tree"
+  record_rows "after the second run" || die "seeded rows failed validation after redeploy"
 }
 
 # (8) --skip-build with an artefact that is not this commit's build:
@@ -1400,12 +1391,11 @@ mode_scenario_8() {
   local rc=0 builds tree014 other_sha other_tree record
   scenario_start 08-scenario-8-skip-build "Scenario 8: --skip-build with an artefact built from another commit" \
     "$README_BUN_CHECKS" "$README_DEPLOY_ORDER"
-  host_bun_to_pin
   builds="$scenario_tree/deploy/ansible/builds"
   tree014="$(prepare_tree "$BASELINE_REV")"
   record="$WORK/tmp/build-record-${COMMIT_SHA:0:12}.json"
   if [ ! -f "$record" ]; then
-    res "- No build record of this commit's own build is saved yet; building it once (\`bun run build:linux\` as deploy.yml's build step runs it, then the same record fields)."
+    die "run upgrade before scenario-8 to save the candidate build record"
   fi
 
   res ""
@@ -1417,7 +1407,9 @@ mode_scenario_8() {
   fingerprint_before
   play_recorded "deploy.yml -e skip_build=true" "$LOGS/s8a-deploy.log" "$scenario_tree" deploy.yml -e skip_build=true || rc=$?
   fingerprint_compare "with no build record"
+  [ "$rc" -ne 0 ] || die "deploy accepted a binary without its build record"
   record_state "after 8a"
+  record_host_health 0.1.4 4
 
   res ""
   res "### b. The same binary beside a build record whose SHA-256 is another binary's"
@@ -1429,7 +1421,9 @@ mode_scenario_8() {
     fingerprint_before
     play_recorded "deploy.yml -e skip_build=true" "$LOGS/s8b-deploy.log" "$scenario_tree" deploy.yml -e skip_build=true || rc=$?
     fingerprint_compare "with a record of another binary"
+    [ "$rc" -ne 0 ] || die "deploy accepted a mismatched binary and build record"
     record_state "after 8b"
+    record_host_health 0.1.4 4
   else
     res "- Not run: no saved build record of this commit (run the upgrade mode first)."
   fi
@@ -1439,7 +1433,9 @@ mode_scenario_8() {
   rm -f "$builds/p2party_linux_x64" "$builds/p2party_linux_x64.build.json"
   rc=0
   play_recorded "deploy.yml, second run (builds)" "$LOGS/s8-second-run.log" "$scenario_tree" deploy.yml || rc=$?
+  [ "$rc" -eq 0 ] || die "deploy failed after rebuilding its own release"
   record_state "after the second run"
+  record_candidate_health "$scenario_tree"
 
   res ""
   res "### c. The binary and build record of a deploy of another commit"
@@ -1448,15 +1444,19 @@ mode_scenario_8() {
     res "- Not run: the other commit is the commit under test."
   else
     other_tree="$(prepare_tree "$other_sha")"
-    res "- First, \`${other_sha:0:12}\` ($(git -C "$repo" log -1 --format=%s "$other_sha")) deployed normally, which builds its binary and writes its record:"
-    rc=0
-    play_recorded "deploy.yml at ${other_sha:0:12}" "$LOGS/s8c-other-deploy.log" "$other_tree" deploy.yml || rc=$?
-    cp "$other_tree/deploy/ansible/builds/p2party_linux_x64" "$other_tree/deploy/ansible/builds/p2party_linux_x64.build.json" "$builds/"
-    res "- Then its binary and record copied into this commit's tree:"
+    ansible_in "$other_tree" bun run build:linux >"$LOGS/s8c-other-build.log" 2>&1 || die "could not build the comparison commit"
+    cp "$other_tree/deploy/ansible/builds/p2party_linux_x64" "$builds/p2party_linux_x64"
+    bun -e 'const [file, commit, bun] = process.argv.slice(1);
+      const sha256 = new Bun.CryptoHasher("sha256").update(await Bun.file(file).arrayBuffer()).digest("hex");
+      console.log(JSON.stringify({artefact: "p2party_linux_x64", sha256, bun, commit, dirty: false}));' \
+      "$builds/p2party_linux_x64" "$other_sha" "$PIN" >"$builds/p2party_linux_x64.build.json"
+    res "- The comparison release was built locally from \`${other_sha:0:12}\`. Its record matches that binary's SHA-256 and names its own source revision."
     res_block "" "$builds/p2party_linux_x64.build.json"
     rc=0
     play_recorded "deploy.yml -e skip_build=true at ${COMMIT_SHA:0:12}" "$LOGS/s8c-deploy.log" "$scenario_tree" deploy.yml -e skip_build=true || rc=$?
+    [ "$rc" -ne 0 ] || die "deploy accepted a matching binary and record from another commit"
     record_state "after 8c"
+    record_candidate_health "$scenario_tree"
     rm -f "$builds/p2party_linux_x64" "$builds/p2party_linux_x64.build.json"
     rm -rf "$other_tree" "$other_tree.ready"
   fi
@@ -1476,7 +1476,7 @@ mode_fresh() {
   tree="$(prepare_tree "$COMMIT_SHA")"
   apply_signaling_cloud_init "$tree"
   apply_standins
-  guest_bun "$PIN"
+  stage_bun_archive
   standin coturn-certificate "$TURN_NAME" "$STUN_NAME"
   res ""
   res "## site.yml"

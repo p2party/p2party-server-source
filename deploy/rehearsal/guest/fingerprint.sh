@@ -18,8 +18,8 @@ for file in \
   /etc/systemd/journald.conf.d/p2party-retention.conf /etc/caddy/Caddyfile \
   /etc/caddy/Caddyfile.p2party-candidate /etc/systemd/system/p2party-signaling*.service \
   /home/p2party/server/p2party-server /home/p2party/server/prisma.config.ts \
-  /home/p2party/server/prisma/schema.prisma /home/p2party/server/migration-tooling/package.json \
-  /home/p2party/server/migration-tooling/bun.lock /home/p2party/server/migration-tooling/bun.lockb \
+  /home/p2party/server/prisma/schema.prisma /var/lib/p2party-migration-tooling/package.json \
+  /var/lib/p2party-migration-tooling/bun.lock /var/lib/p2party-migration-tooling/bun.lockb \
   /var/lib/p2party-migration-failed /var/log/p2party-migration-failure.log; do
   if [ -e "$file" ]; then
     printf '%s  mtime %s  %s\n' "$(sha256sum "$file" | cut -c1-16)" "$(stat -c %Y "$file")" "$file"
@@ -34,7 +34,7 @@ for file in /home/p2party/server/.env /etc/postgresql/p2party-tls/ca.key /etc/po
     printf 'absent            %s\n' "$file"
   fi
 done
-for dir in /var/lib/p2party-release-staging /home/p2party/server/migration-tooling/node_modules /home/p2party/server/prisma/migrations; do
+for dir in /var/lib/p2party-release-staging /var/lib/p2party-migration-tooling/node_modules /home/p2party/server/prisma/migrations; do
   if [ -d "$dir" ]; then
     printf 'directory  mtime %s  %s entries  %s\n' "$(stat -c %Y "$dir")" "$(find "$dir" -mindepth 1 -maxdepth 1 | wc -l)" "$dir"
   else

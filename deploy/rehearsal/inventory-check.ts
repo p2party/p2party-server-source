@@ -223,7 +223,11 @@ function controlledNames(
   ]);
 }
 
-export const EXTRA_VARS_TOP_LEVEL = ["domains"];
+export const EXTRA_VARS_TOP_LEVEL = [
+  "domains",
+  "bun_release_base_url",
+  "rehearsal_allow_rosetta_hash",
+];
 
 export function checkExtraVars(
   varsText: string,
@@ -244,11 +248,27 @@ export function checkExtraVars(
       `vars.yml sets ${name}; extra vars outrank every inventory value`,
     );
   }
+  if (!("bun_release_base_url" in parsed))
+    problems.push("vars.yml: the guest loopback Bun archive mirror is missing");
   for (const [key, value] of Object.entries(parsed)) {
     if (!EXTRA_VARS_TOP_LEVEL.includes(key)) {
       problems.push(
         `vars.yml sets ${key}; it may set only ${EXTRA_VARS_TOP_LEVEL.join(", ")}`,
       );
+      continue;
+    }
+    if (key === "rehearsal_allow_rosetta_hash") {
+      if (value !== true)
+        problems.push(
+          "vars.yml: the Rosetta executable mapping check requires a boolean true",
+        );
+      continue;
+    }
+    if (key === "bun_release_base_url") {
+      if (value !== "http://127.0.0.1:18641")
+        problems.push(
+          "vars.yml: the Bun archive mirror must be the guest loopback on port 18641",
+        );
       continue;
     }
     if (!isRecord(value)) {

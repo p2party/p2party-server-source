@@ -690,6 +690,33 @@ describe("release rehearsal contract", () => {
     RUN_TEST_TIMEOUT_MS,
   );
 
+  test("only the guest loopback Bun archive mirror is accepted", () => {
+    const mirror = "http://127.0.0.1:18641";
+    expect(checkExtraVars(trackedVars(), connectionVariables)).toEqual([]);
+    expect(
+      checkExtraVars(
+        trackedVars().replace("rosetta_hash: true", 'rosetta_hash: "true"'),
+        connectionVariables,
+      ),
+    ).toContain(
+      "vars.yml: the Rosetta executable mapping check requires a boolean true",
+    );
+    for (const other of [
+      "https://example.invalid",
+      "http://127.0.0.1:22",
+      "http://127.0.0.1:18641@example.invalid",
+    ]) {
+      expect(
+        checkExtraVars(
+          trackedVars().replace(mirror, other),
+          connectionVariables,
+        ),
+      ).toContain(
+        "vars.yml: the Bun archive mirror must be the guest loopback on port 18641",
+      );
+    }
+  });
+
   test(
     "run.sh refuses an ansible.cfg whose ssh_args could redirect the connection",
     () => {
