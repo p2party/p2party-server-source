@@ -1,7 +1,7 @@
 # ============================================================================
 # P2Party PostgreSQL Installation Playbook
 # ============================================================================
-# Installs PostgreSQL 17 and creates the database/user.
+# Provisions a PostgreSQL 19 database host. Existing older clusters require the explicit major-upgrade procedure.
 #
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/install-postgres.yml \
@@ -21,52 +21,10 @@
     - "{{ playbook_dir }}/../group_vars/all/vault.yml"
 
   tasks:
-    - name: Check if PostgreSQL is already installed
-      command: which psql
-      register: psql_check
-      changed_when: false
-      failed_when: false
-
-    - name: Install PostgreSQL if not present
-      when: psql_check.rc != 0
-      block:
-        - name: Install prerequisites
-          apt:
-            name:
-              - gnupg2
-              - curl
-              - ca-certificates
-              - lsb-release
-            state: present
-            update_cache: yes
-
-        - name: Add PostgreSQL GPG key
-          shell: |
-            curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-          args:
-            creates: /usr/share/keyrings/postgresql.gpg
-
-        - name: Add PostgreSQL repository
-          copy:
-            content: |
-              deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt {{ ansible_facts['distribution_release'] }}-pgdg main
-            dest: /etc/apt/sources.list.d/pgdg.list
-            mode: "0644"
-
-        - name: Update apt cache
-          apt:
-            update_cache: yes
-
-        - name: Install PostgreSQL 17
-          apt:
-            name: postgresql-17
-            state: present
-
-    - name: Ensure PostgreSQL is started
-      systemd:
-        name: postgresql
-        state: started
-        enabled: yes
+    - name: Install the supported PostgreSQL version from its signed Ubuntu repository
+      ansible.builtin.script: "../files/install-postgresql.sh provision {{ ports.postgres | int }}"
+      register: postgres_install
+      changed_when: "'P2PARTY PostgreSQL provisioned' in postgres_install.stdout"
 
 - name: Configure PostgreSQL
   hosts: databases_production
@@ -76,14 +34,9 @@
     - "{{ playbook_dir }}/../group_vars/all/vault.yml"
 
   tasks:
-    - name: Get PostgreSQL version directory
-      shell: ls -1 /etc/postgresql/ | sort -rn | head -1
-      register: pg_version
-      changed_when: false
-
     - name: Configure PostgreSQL to listen on all interfaces
       lineinfile:
-        path: "/etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf"
+        path: "/etc/postgresql/19/main/postgresql.conf"
         regexp: "^#?listen_addresses\\s*="
         # Bind to loopback and the private interface only. Even with the
         # cloud firewall attached, listening on the public IP means any
@@ -94,7 +47,7 @@
 
     - name: Configure PostgreSQL performance settings
       blockinfile:
-        path: "/etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf"
+        path: "/etc/postgresql/19/main/postgresql.conf"
         marker: "# {mark} P2PARTY PERFORMANCE SETTINGS"
         block: |
           shared_buffers = 1GB
@@ -106,7 +59,7 @@
 
     - name: Configure pg_hba.conf for private network access
       blockinfile:
-        path: "/etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf"
+        path: "/etc/postgresql/19/main/pg_hba.conf"
         marker: "# {mark} P2PARTY PRIVATE NETWORK ACCESS"
         block: |
           hostnossl all all {{ network.range }} reject
@@ -116,7 +69,7 @@
   handlers:
     - name: Restart PostgreSQL
       systemd:
-        name: postgresql
+        name: postgresql@19-main
         state: restarted
 
 - name: Create Database and User
@@ -130,12 +83,14 @@
   tasks:
     - name: Create database user
       community.postgresql.postgresql_user:
+        login_port: "{{ ports.postgres }}"
         name: "{{ vault_postgres_user }}"
         password: "{{ vault_postgres_password }}"
         state: present
 
     - name: Create database
       community.postgresql.postgresql_db:
+        login_port: "{{ ports.postgres }}"
         name: "{{ vault_postgres_db_name }}"
         owner: "{{ vault_postgres_user }}"
         state: present

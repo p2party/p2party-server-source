@@ -468,6 +468,39 @@ describe("production deployment contract", () => {
     expect(postgresTls).toContain('src: "{{ database_tls_dir }}/ca.crt"');
     expect(postgresTls).not.toContain('src: "{{ database_tls_dir }}/ca.key"');
   });
+  test("new hosts use the same verified PGDG installer as an explicit major upgrade", () => {
+    const installer = readAnsible("files/install-postgresql.sh");
+    const upgrade = readAnsible("files/upgrade-postgresql.sh");
+    const maintenance = readAnsible("playbooks/upgrade-postgres.yml");
+    const terraform = readFileSync(
+      join(repoRoot, "deploy/terraform/p2party_postgres.tf"),
+      "utf8",
+    );
+    expect(terraform).toContain("/ansible/files/install-postgresql.sh");
+    expect(installPostgres).toContain(
+      "../files/install-postgresql.sh provision",
+    );
+    expect(installer).toContain("major=19");
+    expect(installer).toContain("https://apt.postgresql.org/pub/repos/apt");
+    expect(installer).toContain("B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8");
+    expect(installer.indexOf("Existing PostgreSQL data")).toBeLessThan(
+      installer.indexOf("apt-get install"),
+    );
+    expect(upgrade).toContain(
+      "pg_upgradecluster --method=upgrade --start -v 19 17 main",
+    );
+    expect(upgrade).not.toMatch(/--(link|swap)|pg_dropcluster/);
+    expect(upgrade.indexOf("no_clients\ninstall -d")).toBeLessThan(
+      upgrade.indexOf("pg_upgradecluster --method=upgrade"),
+    );
+    expect(upgrade).toContain(
+      'diff -u "$state/old.identity" "$state/rolled-back.identity"',
+    );
+    expect(upgrade).toContain(
+      'cmp -s "$state/old.identity" "$state/pre-rollback.identity"',
+    );
+    expect(maintenance).toContain("PGSSLMODE: verify-full");
+  });
   test("single-worker production is explicit and multi-worker is opt-in", () => {
     expect(productionVars).toContain("signaling_ports: [3001]");
     expect(deploy).toContain("| default([app_port])");
@@ -1609,6 +1642,7 @@ describe("toolchain pins", () => {
       "playbooks/setup-coturn.yml",
       "playbooks/setup-wireguard.yml",
       "playbooks/site.yml",
+      "playbooks/upgrade-postgres.yml",
     ]);
     for (const file of playbooks) {
       const [first] = Bun.YAML.parse(readAnsible(file)) as {

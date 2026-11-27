@@ -24,6 +24,10 @@ package_update: true
 package_upgrade: true
 
 write_files:
+  - path: /root/install-postgresql.sh
+    permissions: '0700'
+    content: |
+      ${postgresql_install_script}
   - path: /root/setup-postgres.sh
     permissions: '0755'
     content: |
@@ -32,13 +36,10 @@ write_files:
       
       DB_SUBNET="${db_subnet}"
       
-      curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-      echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
-      apt-get update
-      apt-get install -y postgresql-17
-      
-      PG_CONF="/etc/postgresql/17/main/postgresql.conf"
-      PG_HBA="/etc/postgresql/17/main/pg_hba.conf"
+      /root/install-postgresql.sh provision
+
+      PG_CONF="/etc/postgresql/19/main/postgresql.conf"
+      PG_HBA="/etc/postgresql/19/main/pg_hba.conf"
       
       sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" $PG_CONF
       
@@ -59,7 +60,7 @@ write_files:
       hostssl all all $DB_SUBNET scram-sha-256
       HBAEOF
       
-      systemctl restart postgresql@17-main
+      systemctl restart postgresql@19-main
       
       echo "PostgreSQL installed - run Ansible playbook to create databases"
 
