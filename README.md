@@ -17,6 +17,8 @@ Release 0.2.1 introduced the live validator in the signaling process. Release 0.
 
 For the trust assumptions, deployment evidence and work needed for independent validators, see the [roadmap](ROADMAP.md). The validator uses the [libdemos transfer codec](https://github.com/p2party/libdemos/tree/fc8db3f038a8f7200dd5b0b188cc5eeee9473459/ledger).
 
+Release 0.2.4 uses `@ondemos/core` 0.2.11 for the Ed25519 challenge that proves a peer holds its signaling key. `bun install --frozen-lockfile` fetches the binding from GitHub Releases and checks its SHA-512. [Binding release](https://github.com/p2party/libdemos-ts/releases/tag/v0.2.11)
+
 ## Requirements
 
 - Bun 1.4.5 or newer

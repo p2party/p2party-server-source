@@ -72,7 +72,7 @@ app:
 # deploy/ansible/builds/, beside the playbook that ships it, with its build
 # record next to it.
 repo_path: "{{ playbook_dir }}/../../.."
-build_command: "bun run build:linux"
+build_command: "bun install --frozen-lockfile && bun run build:linux"
 signaling_restart_seconds: 5
 binary_name: deploy/ansible/builds/p2party_linux_x64
 

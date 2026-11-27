@@ -108,7 +108,8 @@ this order, and compares the staged binary afterwards:
    host of the run, so a `--limit` that leaves `localhost` out does not skip
    it. It runs with `--skip-build` too.
 2. **The binary's build record**, `deploy.yml`'s second play, also on this
-   machine only. The build (skipped with `--skip-build`) writes a record beside
+   machine only. The build installs dependencies from the frozen lockfile before
+   compiling so an older local installation cannot enter the binary. It then writes a record beside
    the binary, `builds/p2party_linux_x64.build.json`: the Bun that built it
    (the pre-flight has just required the pin), the commit, whether the tree
    had changes (`dirty`), and the binary's SHA-256. Every deploy then requires
@@ -125,8 +126,8 @@ this order, and compares the staged binary afterwards:
    for the host architecture. Preparation checks its SHA-256 against the table
    below and runs the installed binary as the worker to verify its version.
    The package installer has a separate unprivileged account and cache. It
-   downloads the frozen dependencies from the npm registry and Prisma's engine
-   from `binaries.prisma.sh`. It has no database environment or credentials.
+   downloads dependencies from the npm registry, the pinned `@ondemos/core` tarball
+   from GitHub Releases, and Prisma's engine from `binaries.prisma.sh`. It has no database environment or credentials.
 
 Then, in the deploy play's prepare block, after the binary is staged and before
 any worker is stopped, the staged file's SHA-256 (read with `stat`, symlinks not

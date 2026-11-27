@@ -1392,6 +1392,11 @@ describe("toolchain pins", () => {
         .map(() => i),
     );
     expect(builds).toEqual([1]);
+    expect(
+      Bun.YAML.parse(readAnsible("group_vars/all/vars.yml")),
+    ).toMatchObject({
+      build_command: "bun install --frozen-lockfile && bun run build:linux",
+    });
   });
 
   test("the pre-flight runs under a limit that excludes localhost", () => {

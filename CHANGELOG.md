@@ -4,10 +4,14 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 through 0.2.3
+`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 through 0.2.4
 speak signaling protocol 5.
 
 ## [Unreleased]
+
+## [0.2.4] — 2026-11-27
+
+- Verify signaling-v5 login signatures with `@ondemos/core` 0.2.11. The frozen Bun lockfile pins the Linux-built release archive by SHA-512. [Binding release](https://github.com/p2party/libdemos-ts/releases/tag/v0.2.11)
 
 ## [0.2.3]
 

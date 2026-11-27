@@ -1,6 +1,6 @@
 {
   "name": "p2party-server",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Protocol-v5 signaling server for p2party WebRTC room meshes",
   "private": true,
   "license": "Apache-2.0",
@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",
-    "@ondemos/core": "0.2.7",
+    "@ondemos/core": "https://github.com/p2party/libdemos-ts/releases/download/v0.2.11/ondemos-core-0.2.11.tgz",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
     "pg": "^8.23.1"

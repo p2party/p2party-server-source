@@ -6,7 +6,7 @@
       "name": "p2party-server",
       "dependencies": {
         "@noble/hashes": "2.4.0",
-        "@ondemos/core": "0.2.7",
+        "@ondemos/core": "https://github.com/p2party/libdemos-ts/releases/download/v0.2.11/ondemos-core-0.2.11.tgz",
         "@prisma/adapter-pg": "7.10.1",
         "@prisma/client": "7.10.1",
         "pg": "^8.23.1",
@@ -32,7 +32,7 @@
 
     "@noble/hashes": ["@noble/hashes@2.4.0", "", {}, "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA=="],
 
-    "@ondemos/core": ["@ondemos/core@0.2.7", "", {}, "sha512-8InwLB0ZfQiIGy6Y3Q/neaBnysm19tnHgM4+WSdx46OlR8pSdFnKVKMP1heb3Bpv2/kv9Ua44UHXf9EhKPLkbA=="],
+    "@ondemos/core": ["@ondemos/core@https://github.com/p2party/libdemos-ts/releases/download/v0.2.11/ondemos-core-0.2.11.tgz", {}, "sha512-r1BYUl65U49XfAViQVZyH+Q9bM8O+pBr1R9AccnoxlOD6Zh7n6bsQsEIgWMXl5xOSSv3rML3PAOYx7dFTk27fg=="],
 
     "@prisma/adapter-pg": ["@prisma/adapter-pg@7.10.1", "", { "dependencies": { "@prisma/driver-adapter-utils": "7.10.1", "@types/pg": "^8.16.0", "pg": "^8.16.3", "postgres-array": "3.0.4" } }, "sha512-EP9ruPYHjKP80WZlb5qVaEXKgZjJieBFjAxcBtQnDAHD6+16UN4keVmBh6L/RUpuDQT2FQRbvKNgq5d4Ix+IkQ=="],
 
