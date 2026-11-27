@@ -103,11 +103,22 @@ export class LedgerStore {
       this.checkIdentity(rows[0]);
     });
   }
-  async initialize() {
+  async initialize(role: "writer" | "replica" = "writer") {
     const cfg = this.config;
     await this.transaction(async (c) => {
       await c.query("SELECT pg_advisory_xact_lock(1684368751, 1818584935)");
+      const {
+        rows: [identity],
+      } = await c.query(
+        "SELECT to_regnamespace('p2party_ledger') IS NOT NULL AS initialized, to_regclass('p2party_ledger.replica') IS NOT NULL AS replica",
+      );
+      if (identity.initialized && identity.replica !== (role === "replica"))
+        throw new Error(
+          "Ledger database role differs from the requested node role",
+        );
       await c.query(schema);
+      if (role === "replica" && !identity.initialized)
+        await c.query("CREATE TABLE p2party_ledger.replica ()");
       const existing = await c.query<{
         chain_id: Buffer;
         genesis_hash: Buffer;
@@ -246,7 +257,15 @@ export class LedgerStore {
         }
       : null;
   }
-  async submit(wire: Buffer) {
+  async submit(
+    wire: Buffer,
+    expected?: {
+      height: bigint;
+      id: Buffer;
+      inputId: Buffer;
+      outputId: Buffer;
+    },
+  ) {
     // This unauthenticated field is only a lookup hint. The native verifier
     // authenticates the complete wire against the independently loaded unit.
     const inputId = wire.subarray(34, 98);
@@ -265,7 +284,19 @@ export class LedgerStore {
       const height = BigInt(input.height) + 1n;
       if (height > (1n << 63n) - 1n)
         throw new RpcError(-32011, "Ledger height exhausted");
+      if (
+        expected &&
+        (expected.height !== height || !inputId.equals(expected.inputId))
+      )
+        throw new Error(
+          "Peer receipt disagrees with the local input or height",
+        );
       const out = await validateTransfer(this.config, height, input, wire);
+      if (
+        expected &&
+        (!out.id.equals(expected.id) || !out.outputId.equals(expected.outputId))
+      )
+        throw new Error("Peer receipt disagrees with native verification");
       try {
         const committed = await this.transaction(async (c) => {
           const head = await c.query(

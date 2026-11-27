@@ -38,3 +38,19 @@ The 20-byte Ethereum read handle is the last 20 bytes of Keccak-256 of the one-b
 ## Integration tests
 
 Build `libdemos` with `cmake -S ledger -B build/ledger -DBUILD_TESTING=ON`, then `cmake --build build/ledger` and `ctest --test-dir build/ledger`. For the signaling tests, set `P2PARTY_TEST_LEDGER_VERIFIER` and `P2PARTY_TEST_LEDGER_FIXTURE` to the absolute paths of `demos-ledger-verify` and `demos-ledger-fixture`, and use the repository's isolated `P2PARTY_TEST_POSTGRES_URL`. Run `bun run check`. The fixture generates ephemeral signing keys and exports only synthetic authorized transfers and public commitments.
+
+## Replay a local peer into a second database
+
+Start a local proposer using this branch and the genesis and verifier settings above. Create an empty, separate PostgreSQL database for the replica. In the replica process, set `LEDGER_ENABLED`, `LEDGER_CHAIN_ID`, `LEDGER_GENESIS_FILE`, and `LEDGER_VERIFIER` independently. Use your own verified copy of the genesis and native verifier. The replica needs no spending key.
+
+```sh
+export LEDGER_REPLICA_DATABASE_URL='postgresql://localhost:55432/ledger_replica?sslmode=disable'
+bun run ledger:verify-peer http://127.0.0.1:3001/rpc
+bun run ledger:verify-peer http://127.0.0.1:3001/rpc 0x2 --serve
+```
+
+The first command verifies the advertised head. A peer above 10,000 transfers requires an explicit target height. The second command verifies through height two, prints the checkpoint, and serves the replica’s stored ledger through a read-only RPC at the printed loopback URL. The read API shows the latest locally accepted height even if you request a checkpoint at an earlier height. Run the first command again against the same replica database to catch up. A restart rechecks the accepted prefix. An interrupted synchronization preserves verified transfers and can be retried. Writer and replica databases have separate roles.
+
+Compare checkpoints at the same height. The initial digest is SHA-512 of the UTF-8 domain `p2party/replay/v1`, a zero byte and the 32-byte canonical genesis hash returned by `demos_getGenesisHash`. This genesis hash covers the decoded chain ID, RPC chain ID, suite policy and sorted units. The downloadable file has a separate byte-level checksum. Each subsequent digest is SHA-512 of the preceding 64-byte digest, the height as eight big-endian bytes, and the 64-byte transfer ID. The replica recomputes each new transfer ID, signature, input spend and output from its own database and native verifier before committing it.
+
+A matching checkpoint establishes agreement on that prefix. The proposer still selects transaction order and can withhold transfers. The loopback comparison has no operator signatures, quorum or fork-choice rule. A conflicting prefix stops synchronization for operator review.

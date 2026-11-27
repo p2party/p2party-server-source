@@ -54,6 +54,9 @@ function argumentsOf(params: unknown, min: number, max = min): unknown[] {
 }
 async function call(store: LedgerStore, method: string, params: unknown) {
   switch (method) {
+    case "demos_getGenesisHash":
+      argumentsOf(params, 0);
+      return "0x" + store.config.genesisHash;
     case "demos_chainId":
       argumentsOf(params, 0);
       return store.config.chainId;
@@ -107,7 +110,7 @@ const failure = (id: unknown, code: number, message: string) => ({
   id,
   error: { code, message },
 });
-async function reply(store: LedgerStore, req: unknown) {
+async function reply(store: LedgerStore, req: unknown, readOnly: boolean) {
   if (req === null || typeof req !== "object" || Array.isArray(req))
     return failure(null, -32600, "Invalid request");
   const { jsonrpc, id, method, params } = req as Record<string, unknown>;
@@ -122,6 +125,8 @@ async function reply(store: LedgerStore, req: unknown) {
   )
     return failure(null, -32600, "Invalid request");
   try {
+    if (readOnly && method === "demos_sendRawTransfer")
+      throw new RpcError(-32601, "Read-only replica");
     const result = await call(store, method, params);
     return id === undefined ? undefined : { jsonrpc: "2.0", id, result };
   } catch (e) {
@@ -131,7 +136,7 @@ async function reply(store: LedgerStore, req: unknown) {
       : failure(id, -32603, "Internal error");
   }
 }
-export function ledgerRpc(store: LedgerStore) {
+export function ledgerRpc(store: LedgerStore, { readOnly = false } = {}) {
   let inFlight = 0;
   const dispatch = async (request: Request): Promise<Response> => {
     if (new URL(request.url).pathname === "/rpc/health") {
@@ -216,14 +221,14 @@ export function ledgerRpc(store: LedgerStore) {
           return json(failure(null, -32600, "Invalid request"));
         const results = [];
         for (const item of input) {
-          const r = await reply(store, item);
+          const r = await reply(store, item, readOnly);
           if (r !== undefined) results.push(r);
         }
         return results.length
           ? json(results)
           : new Response(null, { status: 204, headers: responseHeaders });
       }
-      const result = await reply(store, input);
+      const result = await reply(store, input, readOnly);
       return result === undefined
         ? new Response(null, { status: 204, headers: responseHeaders })
         : json(result);
