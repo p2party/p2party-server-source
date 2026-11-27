@@ -50,11 +50,11 @@ statement within its own bound of 60 seconds (normally a no-op); a re-key that
 runs past it is cancelled, changes nothing, and ends the start with the same
 kind of line. `Restart=always` then only repeats the refusal.
 
-Deploy the protocol-5 server before clients that use its keyless WebSocket
-upgrade. The signaling environment sets `SIGNALING_HOST` to the public
+Deploy server 0.2.0-rc.0 before SDK 0.15.0-rc.0. Verify that every direct
+worker and the public `/health` endpoint report `version: "0.2.0-rc.0"` and
+`protocolVersion: 5` before updating clients. The signaling environment sets `SIGNALING_HOST` to the public
 WebSocket authority from `domains.signaling`. Clients include this authority
-in the login signature. Both the direct and public health checks require
-`protocolVersion` 5.
+in the login signature.
 
 ## Which Bun, and where it is checked
 
@@ -330,12 +330,12 @@ Two mitigations were considered and not built:
   head-of-line blocking and connectivity cost, and an adversary with several
   identities would still not be bounded.
 
-## Upgrading to 0.1.5
+## Upgrading to 0.2.0-rc.0
 
 `deploy.yml` stops every 0.1.4 worker before it migrates, so no 0.1.4 worker
 serves after the identity re-key. Where workers are run by other means, do the
-same: stop every 0.1.4 worker before migrating and before the first 0.1.5 worker
-starts, and run all workers under one database role. A 0.1.5 worker counts
+same: stop every 0.1.4 worker before migrating and before the first 0.2.0-rc.0 worker
+starts, and run all workers under one database role. A 0.2.0-rc.0 worker counts
 another as live only through its named PostgreSQL session, which 0.1.4 does not
 open, so it would clear a running 0.1.4 worker's routing claims.
 

@@ -1,6 +1,6 @@
 {
   "name": "p2party-server",
-  "version": "0.1.4",
+  "version": "0.2.0-rc.0",
   "description": "Protocol-v5 signaling server for p2party WebRTC room meshes",
   "private": true,
   "license": "Apache-2.0",

@@ -229,7 +229,7 @@ curl -s https://signaling.p2party.com/health | jq
 {
   "status": "ok",
   "protocolVersion": 5,
-  "version": "0.1.4",
+  "version": "0.2.0-rc.0",
   "serverId": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"
 }
 ```
@@ -752,7 +752,7 @@ that is the cause whatever else it sends. The reason names only the server's
 version. A `room`/`leaveRoom` request whose key set is not exactly the one
 documented closes the socket with `1003` and a `Malformed protocol-v5` reason.
 
-Deploy this server before the matching SDK. The previous server returns HTTP
+Deploy server 0.2.0-rc.0 before SDK 0.15.0-rc.0. The previous server returns HTTP
 403 for a keyless upgrade, which browsers expose as an abnormal closure.
 The v5 server returns the explicit version refusal to earlier clients.
 

@@ -4,10 +4,19 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. 0.1.4
-speaks protocol version 4 and nothing else.
+`protocolVersion` on the wire is versioned separately from this package. The 0.2.0-rc.0 candidate
+speaks signaling protocol 5.
 
 ## [Unreleased]
+
+## [0.2.0-rc.0]
+
+- Breaking signaling upgrade. Deploy the server before SDK 0.15.0-rc.0.
+  Check each worker and public `/health` for version `0.2.0-rc.0` and protocol 5.
+- Clients send the identity key in their first WebSocket frame, sign the
+  host-bound login challenge, and send the room locator with joins and leaves.
+  Set `SIGNALING_HOST` to the authority in the public WebSocket URL.
+  Prior signaling clients receive close code 1003.
 
 ## [0.1.4] — 2026-09-09
 
