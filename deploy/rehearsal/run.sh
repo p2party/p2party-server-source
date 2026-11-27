@@ -896,11 +896,24 @@ record_rows() {
 record_host_health() {
   local ca="$WORK/tmp/caddy-local-ca.crt" out="$WORK/tmp/host-health.txt"
   guest_cmd "cat /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt" >"$ca" 2>/dev/null || true
-  curl -s -m 10 --cacert "$ca" --resolve "$SIGNALING_NAME:$SIGNALING_HOST_PORT:127.0.0.1" \
+  curl -fsS --retry 4 --retry-connrefused -m 10 --cacert "$ca" --resolve "$SIGNALING_NAME:$SIGNALING_HOST_PORT:127.0.0.1" \
     "https://$SIGNALING_NAME:$SIGNALING_HOST_PORT/health" >"$out" 2>&1 || echo "(no answer: curl exit $?)" >>"$out"
   echo >>"$out"
   res_block "From the host, https://$SIGNALING_NAME:$SIGNALING_HOST_PORT/health (127.0.0.1, the guest's Caddy CA):" "$out"
+  bun -e 'const [file, version, protocol] = process.argv.slice(1);
+    const body = await Bun.file(file).json();
+    if (body.status !== "ok" || body.version !== version || body.protocolVersion !== Number(protocol))
+      throw Error("unexpected signaling health response");' "$out" "$1" "$2" ||
+    die "the loopback Caddy endpoint did not serve the expected release $1 and protocol $2"
 }
+
+record_candidate_health() {
+  local tree="$1" version protocol
+  version="$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).version)' "$tree/package.json")"
+  protocol="$(bun -e 'console.log((await import(process.argv[1])).SIGNALING_PROTOCOL_VERSION)' "$tree/src/utils/signalingProtocol.ts")"
+  record_host_health "$version" "$protocol"
+}
+
 
 
 # ---------------------------------------------------------------------------
@@ -1009,7 +1022,7 @@ mode_baseline() {
   PLAY_BUN_DIR="$TOOLS/bun-$(tree_bun_pin "$tree014")" \
     play_recorded "deploy.yml at $BASELINE_REV (builds 0.1.4)" "$LOGS/014-deploy.log" "$tree014" deploy.yml || rc=$?
   [ "$rc" -eq 0 ] || die "release 0.1.4's deploy.yml failed"
-  record_host_health
+  record_host_health 0.1.4 4
   bun "$SCRIPT_DIR/seed.ts" sql >"$WORK/tmp/seed.sql"
   guest_copy "$WORK/tmp/seed.sql" /tmp/seed.sql
   guest_cmd "sudo -u postgres psql -X -q -v ON_ERROR_STOP=1 -d p2party -f /tmp/seed.sql && rm -f /tmp/seed.sql" >"$WORK/tmp/seed.txt" 2>&1 ||
@@ -1072,8 +1085,9 @@ mode_upgrade() {
   rc=0
   play_recorded "deploy.yml" "$LOGS/upgrade-deploy.log" "$tree" deploy.yml || rc=$?
   record_state "after the upgrade"
-  record_rows "after the upgrade" || true
-  record_host_health
+  [ "$rc" -eq 0 ] || die "the upgrade's deploy.yml failed (exit $rc)"
+  record_rows "after the upgrade" || die "seeded rows failed validation after the upgrade"
+  record_candidate_health "$tree"
   if [ -f "$tree/deploy/ansible/builds/p2party_linux_x64.build.json" ]; then
     cp "$tree/deploy/ansible/builds/p2party_linux_x64.build.json" "$WORK/tmp/build-record-${COMMIT_SHA:0:12}.json"
     res_block "The build record the deploy wrote (\`deploy/ansible/builds/p2party_linux_x64.build.json\`):" \
@@ -1085,7 +1099,6 @@ mode_upgrade() {
     "$WORK/tmp/first-exercised.txt"
   record_host after-upgrade
   result_close
-  [ "$rc" -eq 0 ] || die "the upgrade's deploy.yml failed (exit $rc)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1115,7 +1128,7 @@ lock_holder_end() {
 # matches the LIKE pattern $1 to wait on a lock; prints its pid.
 wait_for_lock_wait() {
   local pattern="$1" deadline=$((SECONDS + $2)) pid
-  while [ "$SECONDS" -lt "$deadline" ]; do
+  while [ "$SECONDS" -lt "$deadline" ] && kill -0 "$3" 2>/dev/null; do
     watch_check
     pid="$(guest_sql "SELECT pid FROM pg_stat_activity WHERE usename = 'p2party' AND wait_event_type = 'Lock' AND query ILIKE '$pattern' LIMIT 1;" | tr -d '[:space:]')"
     if [ -n "$pid" ]; then
@@ -1130,26 +1143,28 @@ backend_line() {
   guest_sql "SELECT 'backend ' || pid || ': state ' || state || ', wait ' || coalesce(wait_event_type || '/' || wait_event, 'none') || ', statement running for ' || date_trunc('second', now() - query_start) || ': ' || left(regexp_replace(query, '\s+', ' ', 'g'), 80) FROM pg_stat_activity WHERE pid = $1;"
 }
 
-# A blocked migration, observed and then ended: deploy.yml runs in the
-# background; once its migration waits on the holder's lock, the wait is
-# observed for $3 seconds (longer than any 60-second bound), then the waiting
-# backend is terminated, which fails the migration.
+# Keep the blocking transaction open until the deploy fails by itself. A
+# successful recovery must not depend on someone killing the waiting backend.
 deploy_with_blocked_migration() {
-  local logfile="$1" tree="$2" observe="$3" pattern="$4" play_pid pid rc=0
-  shift 4
-  run_play_start "$logfile" "$tree" deploy.yml "$@"
+  local logfile="$1" tree="$2" pattern="$3" play_pid pid start rc=0
+  run_play_start "$logfile" "$tree" deploy.yml
   play_pid="$LAST_PID"
-  if pid="$(wait_for_lock_wait "$pattern" 900)"; then
-    res "- The migration's statement waits on the lock: $(backend_line "$pid")"
-    sleep "$observe"
-    res "- ${observe} s later it still waits (nothing in the migration path sets a statement or lock timeout): $(backend_line "$pid")"
-    res "- Terminated the waiting backend: $(guest_sql "SELECT pg_terminate_backend($pid);")"
-  else
-    res "- No migration statement matching \`$pattern\` waited on a lock within 900 s."
+  if ! pid="$(wait_for_lock_wait "$pattern" 900 "$play_pid")"; then
+    res_block "deploy.yml before the expected migration lock was observed:" "$logfile"
+    die "the rehearsal did not observe the expected migration lock wait"
   fi
+  start=$SECONDS
+  res "- The migration is waiting on the held lock: $(backend_line "$pid")"
+  while [ "$(guest_sql "SELECT count(*) FROM pg_stat_activity WHERE pid = $pid AND wait_event_type = 'Lock' AND query ILIKE '$pattern';")" = 1 ]; do
+    [ $((SECONDS - start)) -le 30 ] || die "the migration was still waiting 30 seconds after observing the lock"
+    sleep 1
+  done
+  res "- The waiting statement left the lock wait within $((SECONDS - start)) seconds of observation with the blocking transaction still open."
   run_play_finish "$play_pid" deploy.yml || rc=$?
   res_block "deploy.yml (exit $rc):" "$logfile"
-  return "$rc"
+  [ "$rc" -ne 0 ] || die "deploy unexpectedly succeeded with the migration blocked"
+  guest_cmd "test -e /var/lib/p2party-migration-failed && grep -qi 'lock timeout' /var/log/p2party-migration-failure.log" ||
+    die "the deploy did not retain the migration marker and lock timeout diagnostic"
 }
 
 # The README's recovery commands (deploy/README.md, "A failed or interrupted
@@ -1279,19 +1294,19 @@ mode_scenario_2() {
 # (3) A migration that fails before the re-key: an open transaction holds a
 # lock that the first new migration (the PendingSignal index) needs.
 mode_scenario_3() {
-  local rc=0
   scenario_start 05-scenario-3-migration-fails-before-rekey "Scenario 3: a migration that fails before the re-key" \
     "$README_MIGRATION_FAILED" "$README_RECOVERY_STEPS" "$README_MARKER" "$README_SCHEMA_CHECK"
   host_bun_to_pin
   lock_holder_start 'LOCK TABLE "PendingSignal" IN ROW EXCLUSIVE MODE;'
-  deploy_with_blocked_migration "$LOGS/s3-deploy.log" "$scenario_tree" 75 '%CREATE INDEX%' || rc=$?
+  deploy_with_blocked_migration "$LOGS/s3-deploy.log" "$scenario_tree" '%CREATE INDEX%'
   lock_holder_end
   record_state "after the failed migration"
   record_failure_log
   res ""
   res "### The README's recovery (the cause, the lock, is gone: step 2)"
   readme_recover_and_rerun "$scenario_tree" s3 20261126120000_pending_signal_created_at_index
-  record_rows "after the recovery" || true
+  record_rows "after the recovery" || die "seeded rows failed validation after recovery"
+  record_candidate_health "$scenario_tree"
 }
 
 # (4) A migration that fails after the re-key: an open transaction that has
@@ -1303,7 +1318,7 @@ mode_scenario_4() {
     "$README_MIGRATION_FAILED" "$README_RECOVERY_STEPS" "$README_MARKER" "$README_SCHEMA_CHECK"
   host_bun_to_pin
   lock_holder_start 'SELECT count(*) FROM "Peer";'
-  deploy_with_blocked_migration "$LOGS/s4-deploy.log" "$scenario_tree" 75 '%ALTER TABLE%' || rc=$?
+  deploy_with_blocked_migration "$LOGS/s4-deploy.log" "$scenario_tree" '%ALTER TABLE%'
   lock_holder_end
   record_state "after the failed migration"
   record_rows "after the failed migration (the re-key applied, the claim-owner columns not)" || true
@@ -1316,25 +1331,35 @@ mode_scenario_4() {
   res ""
   res "### The README's recovery (the lock is gone: step 2)"
   readme_recover_and_rerun "$scenario_tree" s4 20261127000100_routing_claim_owner
-  record_rows "after the recovery" || true
+  record_rows "after the recovery" || die "seeded rows failed validation after recovery"
+  record_candidate_health "$scenario_tree"
 }
 
-# (5) A new binary that will not start: COTURN_SECRET below the server's
-# 32-byte floor in the rendered environment file.
+# (5) Staged validation must reject a short COTURN_SECRET before cutover.
 mode_scenario_5() {
-  local rc=0
-  scenario_start 07-scenario-5-binary-will-not-start "Scenario 5: a new binary that will not start (a bad value in its environment file)" \
+  local rc=0 previous_invocation current_invocation
+  scenario_start 07-scenario-5-binary-will-not-start "Scenario 5: reject a bad staged environment before cutover" \
     "$README_DEPLOY_ORDER" "$README_SCHEMA_CHECK" "COTURN_SECRET"
   host_bun_to_pin
   res "- The deploy renders COTURN_SECRET from \`vault_coturn_auth_secret\`, given here as an extra variable of 21 bytes (\`too-short-turn-secret\`); the server refuses one under 32 bytes."
+  previous_invocation="$(guest_cmd "systemctl show -p InvocationID --value p2party-signaling-3001.service")"
+  [ -n "$previous_invocation" ] || die "could not identify the running baseline worker"
   play_recorded "deploy.yml with the short secret" "$LOGS/s5-deploy.log" "$scenario_tree" deploy.yml \
     -e vault_coturn_auth_secret=too-short-turn-secret || rc=$?
-  record_state "after the failed start"
+  [ "$rc" -ne 0 ] || die "deploy accepted an invalid staged environment"
+  grep -qi 'COTURN_SECRET' "$LOGS/s5-deploy.log" || die "deploy did not identify the invalid TURN configuration"
+  current_invocation="$(guest_cmd "systemctl show -p InvocationID --value p2party-signaling-3001.service")"
+  [ "$previous_invocation" = "$current_invocation" ] || die "the old signaling worker restarted during staged validation"
+  record_state "after rejection of the bad environment"
+  guest_cmd "test ! -e /var/lib/p2party-migration-failed" || die "the invalid environment reached cutover"
+  record_host_health 0.1.4 4
   res ""
   res "### Next step: the value fixed (the vault's own secret), the deploy again"
   rc=0
   play_recorded "deploy.yml, second run" "$LOGS/s5-second-run.log" "$scenario_tree" deploy.yml || rc=$?
   record_state "after the second run"
+  [ "$rc" -eq 0 ] || die "deploy failed after correcting the environment"
+  record_candidate_health "$scenario_tree"
 }
 
 # (6) A second run after a success.
@@ -1457,6 +1482,7 @@ mode_fresh() {
   res "## site.yml"
   play_recorded "site.yml --skip-tags coturn" "$LOGS/fresh-site.log" "$tree" site.yml --skip-tags coturn || rc=$?
   record_state "after site.yml"
+  [ "$rc" -eq 0 ] || die "fresh site.yml failed (exit $rc)"
   if guest_cmd "test -s /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt" >/dev/null 2>&1; then
     standin trust-caddy-ca
   else
@@ -1467,17 +1493,28 @@ mode_fresh() {
   rc=0
   play_recorded "deploy.yml" "$LOGS/fresh-deploy.log" "$tree" deploy.yml || rc=$?
   record_state "after deploy.yml"
+  [ "$rc" -eq 0 ] || die "fresh deploy.yml failed (exit $rc)"
+  record_candidate_health "$tree"
   res ""
   res "## initial-setup.yml again, with a binary deployed"
   rc=0
   play_recorded "initial-setup.yml" "$LOGS/fresh-initial-setup.log" "$tree" initial-setup.yml || rc=$?
   record_state "after initial-setup.yml"
+  [ "$rc" -eq 0 ] || die "fresh initial-setup.yml failed (exit $rc)"
+  record_candidate_health "$tree"
   res ""
-  res "## setup-coturn.yml (Caddy already holds 443 on this VM)"
+  res "## setup-coturn.yml"
+  res "Caddy and coturn use port 443 on separate production hosts. Stop Caddy on the shared test VM while the TURN role is exercised."
+  guest_cmd "systemctl stop caddy"
   rc=0
   play_recorded "setup-coturn.yml" "$LOGS/fresh-setup-coturn.log" "$tree" setup-coturn.yml || rc=$?
   guest_cmd "systemctl is-active coturn; ss -Hltnup | grep -E ':(443|3478) ' | awk '{print \$1, \$5, \$7}' | sort -u" >"$WORK/tmp/coturn.txt" 2>&1 || true
   res_block "coturn after setup-coturn.yml (unit state; listeners on 443 and 3478):" "$WORK/tmp/coturn.txt"
+  [ "$rc" -eq 0 ] || die "fresh setup-coturn.yml failed (exit $rc)"
+  guest_cmd "systemctl is-active --quiet coturn && ss -Hltnp 'sport = :443' | grep -q turnserver && ss -Hlunp 'sport = :3478' | grep -q turnserver" ||
+    die "coturn did not start with TLS and STUN listeners"
+  guest_cmd "systemctl stop coturn && systemctl start caddy"
+  record_candidate_health "$tree"
   record_host after-fresh
 }
 

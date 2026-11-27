@@ -34,7 +34,7 @@ for file in /home/p2party/server/.env /etc/postgresql/p2party-tls/ca.key /etc/po
     printf 'absent            %s\n' "$file"
   fi
 done
-for dir in /home/p2party/server/release-staging /home/p2party/server/migration-tooling/node_modules /home/p2party/server/prisma/migrations; do
+for dir in /var/lib/p2party-release-staging /home/p2party/server/migration-tooling/node_modules /home/p2party/server/prisma/migrations; do
   if [ -d "$dir" ]; then
     printf 'directory  mtime %s  %s entries  %s\n' "$(stat -c %Y "$dir")" "$(find "$dir" -mindepth 1 -maxdepth 1 | wc -l)" "$dir"
   else

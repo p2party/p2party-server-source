@@ -31,7 +31,7 @@ done
 $found || echo "(no signaling unit files)"
 
 section "binaries"
-for binary in "$SERVER/p2party-server" "$SERVER/release-staging/p2party-server"; do
+for binary in "$SERVER/p2party-server" "/var/lib/p2party-release-staging/p2party-server"; do
   if [ -f "$binary" ]; then
     printf '%s: sha256 %s, embedded Bun %s\n' "$binary" \
       "$(sha256sum "$binary" | cut -c1-64)" \

@@ -9,7 +9,6 @@ import {
   openSync,
   readFileSync,
   rmSync,
-  statfsSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1528,10 +1527,7 @@ describe("release rehearsal contract", () => {
     expect(() => replacements("secret short")).toThrow();
   });
 
-  test.skipIf(
-    !(process.platform === "darwin" && process.arch === "arm64") ||
-      freeGiB() < 21,
-  )(
+  test.skipIf(!(process.platform === "darwin" && process.arch === "arm64"))(
     "an interrupted run leaves no process of its own and says what it left on disk",
     async () => {
       const sandbox = mkdtempSync(join(tmpdir(), "p2party-rehearsal-test-"));
@@ -1539,6 +1535,20 @@ describe("release rehearsal contract", () => {
         const { repo, copy, runSh: script } = rehearsalRepository(sandbox);
         const tools = fakeTools(sandbox);
         const { stub, calls } = writeLimactlStub(sandbox);
+        // limactl is simulated; an actual rehearsal may own both SSH and
+        // HTTPS ports and the stub creates no VM disk. Model its host probes.
+        const probes = join(sandbox, "probe-bin");
+        mkdirSync(probes);
+        writeFileSync(
+          join(probes, "lsof"),
+          '#!/bin/sh\ncase "$*" in *-iTCP:*) exit 1 ;; esac\necho "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"\n',
+          { mode: 0o755 },
+        );
+        writeFileSync(
+          join(probes, "df"),
+          '#!/bin/sh\necho "Filesystem 1024-blocks Used Available Capacity Mounted"\necho "/dev/disk 104857600 1 52428800 50% /"\n',
+          { mode: 0o755 },
+        );
         const sleep = join(sandbox, "stub-sleep");
         symlinkSync("/bin/sleep", sleep);
         const child = Bun.spawn({
@@ -1551,7 +1561,7 @@ describe("release rehearsal contract", () => {
           ],
           cwd: sandbox,
           env: {
-            PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
+            PATH: `${probes}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
             HOME: sandbox,
             TMPDIR: tmpdir(),
             LIMACTL: stub,
@@ -1774,13 +1784,6 @@ function processesUnder(sandbox: string): string[] {
   return listing
     .split("\n")
     .filter(
-      (line) =>
-        line.includes(sandbox + "/") &&
-        !line.includes("ps -axo"),
+      (line) => line.includes(sandbox + "/") && !line.includes("ps -axo"),
     );
-}
-
-function freeGiB(): number {
-  const stats = statfsSync(tmpdir());
-  return (stats.bavail * stats.bsize) / 1024 ** 3;
 }
