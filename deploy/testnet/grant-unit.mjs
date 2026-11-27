@@ -25,6 +25,15 @@ const genesis = JSON.parse(
 const entry = genesis.units.find((u) => u.id === inputId);
 if (!entry)
   throw new Error("Selected input is outside the published testnet genesis");
+function readGrantKey() {
+  const custody = JSON.parse(readFileSync(0, "utf8"));
+  if (custody.chainId !== genesis.chainId)
+    throw new Error("Wrong operator vault");
+  const selected = custody.keys.find((k) => k.id === inputId);
+  if (!selected) throw new Error("Missing key for the selected input");
+  return selected;
+}
+const selected = readGrantKey();
 const transport = await createLedgerTransport({
   url: "https://signaling.p2party.com/rpc",
   chainId: genesis.chainId,
@@ -66,11 +75,6 @@ async function receipt() {
 }
 let result = await receipt();
 if (!result) {
-  const custody = JSON.parse(readFileSync(0, "utf8"));
-  if (custody.chainId !== genesis.chainId)
-    throw new Error("Wrong operator vault");
-  const selected = custody.keys.find((k) => k.id === inputId);
-  if (!selected) throw new Error("Missing key for the selected input");
   const key = createPrivateKey({
     key: Buffer.from(selected.pkcs8, "base64"),
     format: "der",
