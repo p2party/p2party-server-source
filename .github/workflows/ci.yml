@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:5432/p2party_ci?schema=public&sslmode=disable"
+      DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:55432/p2party_ci?schema=public&sslmode=disable"
+      P2PARTY_TEST_POSTGRES_URL: "postgresql://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,16 +26,14 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Start native PostgreSQL
         run: |
-          # Keep bootstrap safe to rerun on the same runner: systemctl and ALTER
-          # USER are idempotent, and createdb is called only when the DB is absent.
-          sudo systemctl start postgresql.service
-          sudo -u postgres psql --set=ON_ERROR_STOP=1 \
-            --command="ALTER USER postgres PASSWORD 'postgres';"
-          if ! sudo -u postgres psql --tuples-only --no-align \
-            --command="SELECT 1 FROM pg_database WHERE datname = 'p2party_ci';" \
-            | grep --quiet '^1$'; then
-            sudo -u postgres createdb --owner=postgres p2party_ci
-          fi
+          set -euo pipefail
+          bin="$(pg_config --bindir)"
+          data="$RUNNER_TEMP/p2party-pg-ci"
+          "$bin/initdb" -D "$data" -U postgres --auth-local=peer --auth-host=scram-sha-256 \
+            --pwfile=<(printf '%s\n' postgres) >/dev/null
+          "$bin/pg_ctl" -D "$data" -l "$RUNNER_TEMP/p2party-pg-ci.log" \
+            -o "-h 127.0.0.1 -p 55432 -k $RUNNER_TEMP" -w start
+          PGPASSWORD=postgres "$bin/createdb" -h 127.0.0.1 -p 55432 -U postgres p2party_ci
       - name: Generate Prisma client
         run: bun run db:generate
       - name: Apply PostgreSQL migrations
@@ -43,6 +42,6 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
       - name: Test
-        run: bun test
+        run: bun run test
       - name: Check formatting
         run: bun run format:check
