@@ -71,7 +71,7 @@ in the login signature.
 
 ## Public testnet release
 
-Ledger validation is optional in 0.2.1. To enable P2Party Testnet 1, add these variables under `signaling_production.vars` in the private operational inventory used by both setup and release. Replace the two controller source paths with absolute paths to the reviewed files. Keep the same configuration for subsequent releases. [Public genesis](https://p2party.com/downloads/testnet-1/genesis.json) · [Grant procedure for operators](testnet/README.md) · [Native Linux build](https://github.com/p2party/libdemos/actions/runs/45985760486)
+Ledger validation is optional in 0.2.1. To enable P2Party Testnet 1, add these variables under `signaling_production.vars` in the private operational inventory used by both setup and release. Replace the two controller source paths with absolute paths to the reviewed files. Keep the same configuration for subsequent releases. [Public genesis](https://p2party.com/downloads/testnet-1/genesis.json) · [Grant procedure for operators](testnet/README.md) · [Native Linux build](https://github.com/p2party/libdemos/actions/runs/46044375561)
 
 ```yaml
 ledger_enabled: true
@@ -79,11 +79,13 @@ ledger_chain_id: "0x09a0ffa8e6af6aeb11d26671c6c76648965d60509cc3b7a1a4b454b6ec73
 ledger_rpc_chain_id: 1345474644
 ledger_cors_origins: ["*"]
 ledger_verifier_src: "/absolute/path/to/demos-ledger-verify"
-ledger_verifier_source_commit: "243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0"
-ledger_verifier_sha256: "f8f06cf56f5409a7c6071eaa7131f93b729431f4bbf72091e7a2bacdc306027b"
+ledger_verifier_source_commit: "fc8db3f038a8f7200dd5b0b188cc5eeee9473459"
+ledger_verifier_sha256: "80be8acb4ee84b6c0c39159fe30fce2b8c10c341e8d2a086a943642ebfb689b1"
 ledger_genesis_src: "/absolute/path/to/p2party-server/deploy/testnet/genesis.json"
 ledger_genesis_sha256: "38d42d50a5a6d5ceb43fd6f63235e542716b1df5ccff59161c5fd7810aed17c6"
 ```
+
+The native release workflow tests the shipped binary, including failure of its signature provider. The signaling CI also exercises the previous v1 helper for compatibility.
 
 The play checks the controller files, installs them beneath root-owned, content-addressed paths in `/opt/p2party-ledger`, and exercises both signature suites as the worker. The staged binary checks its environment offline. A separate read-only database preflight checks initialization permission on a new node, or the stored chain identity and table access on an existing node. Both run before workers stop. Successful startup initializes or reopens the durable `p2party_ledger` schema. Include it in database backups. The release then checks `/rpc/health` through each worker and Caddy. Disabling the option on a subsequent release closes the routes and preserves stored history. [RPC limits and configuration](../src/ledger/README.md)
 

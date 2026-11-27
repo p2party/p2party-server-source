@@ -54,6 +54,9 @@ function argumentsOf(params: unknown, min: number, max = min): unknown[] {
 }
 async function call(store: LedgerStore, method: string, params: unknown) {
   switch (method) {
+    case "demos_getGenesisHash":
+      argumentsOf(params, 0);
+      return "0x" + store.config.genesisHash;
     case "demos_chainId":
       argumentsOf(params, 0);
       return store.config.chainId;

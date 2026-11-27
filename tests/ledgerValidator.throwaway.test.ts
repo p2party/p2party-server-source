@@ -153,6 +153,18 @@ test.skipIf(!enabled)(
       ready(launch(db.url, env)),
       ready(launch(db.url, env)),
     ]);
+    const identity = await db.client.query(
+      "SELECT encode(genesis_hash, 'hex') AS hash FROM p2party_ledger.chain",
+    );
+    const genesisHash = "0x" + identity.rows[0].hash;
+    expect(await rpc(a.url, "demos_getGenesisHash")).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      result: genesisHash,
+    });
+    expect((await rpc(b.url, "demos_getGenesisHash", 0)).error.code).toBe(
+      -32602,
+    );
     expect((await rpc(a.url, "demos_chainId")).result).toBe(v.chainId);
     expect((await rpc(a.url, "eth_chainId")).result).toBe("0x1fbb");
     expect((await rpc(a.url, "demos_getHead")).result).toEqual({
@@ -304,6 +316,9 @@ test.skipIf(!enabled)(
     expect(await wrong.child.exited).not.toBe(0);
     children.delete(wrong.child);
     expect((await rpc(restarted.url, "eth_chainId")).result).toBe("0x1fbb");
+    expect((await rpc(restarted.url, "demos_getGenesisHash")).result).toBe(
+      genesisHash,
+    );
     expect(
       (await db.client.query("SELECT count(*) FROM p2party_ledger.transfers"))
         .rows[0].count,

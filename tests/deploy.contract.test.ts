@@ -148,7 +148,7 @@ describe("production deployment contract", () => {
     expect(deploy).toContain(included + "\n          " + guarded);
     expect(initialSetup).toContain(included + "\n      " + guarded);
     expect(pinned).toContain(
-      "ledger_verifier_sha256 == 'f8f06cf56f5409a7c6071eaa7131f93b729431f4bbf72091e7a2bacdc306027b'",
+      "ledger_verifier_sha256 == '80be8acb4ee84b6c0c39159fe30fce2b8c10c341e8d2a086a943642ebfb689b1'",
     );
     expect(pinned).toContain(
       "item.stat.checksum | default('') == item.item.sha",

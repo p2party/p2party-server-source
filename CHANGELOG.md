@@ -4,10 +4,16 @@ All notable changes to the p2party signaling server are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 through 0.2.2
+`protocolVersion` on the wire is versioned separately from this package. Releases 0.2.0 through 0.2.3
 speak signaling protocol 5.
 
 ## [Unreleased]
+
+## [0.2.3]
+
+- Use the Linux native verifier that reports a cryptographic provider failure as an unavailable verifier. Invalid spending evidence still returns a rejected transfer. [Native release checks](https://github.com/p2party/libdemos/actions/runs/46044375561)
+
+- Add the read-only `demos_getGenesisHash` method. Clients can compare the validator’s canonical genesis fingerprint against their pinned value before replaying receipts. [RPC reference](src/ledger/README.md)
 
 ## [0.2.2] — 2026-11-27
 
