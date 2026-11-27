@@ -4,7 +4,7 @@ The signaling process can expose a JSON-RPC 2.0 transfer validator backed by Pos
 
 ## Start a node
 
-Build `demos-ledger-verify` from the pinned public source with CMake, OpenSSL 3.5+ and libsodium. The reference Linux amd64 release checks the executable's SHA-256 digest and exercises a positive and negative vector for each signing suite. [Pinned verifier](https://github.com/ondemos/libdemos/tree/243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0/ledger) · [Release configuration](../../deploy/README.md#public-testnet-release)
+Build `demos-ledger-verify` from the pinned public source with CMake, OpenSSL 3.5+ and libsodium. The reference Linux amd64 release checks the executable's SHA-256 digest and exercises a positive and negative vector for each signing suite. [Pinned verifier](https://github.com/p2party/libdemos/tree/243a5dbbf4cb95507bb1104a47ad46ad3ed1e7a0/ledger) · [Release configuration](../../deploy/README.md#public-testnet-release)
 
 Supply a genesis JSON file with `version: 1`, a 32-byte `chainId`, `rpcChainId` between 1 and `Number.MAX_SAFE_INTEGER`, explicit `spendSuites` and `receiveSuites` arrays, and a `units` array. Every genesis entry supplies `id`, `weight`, `suite`, and `commitment`. IDs and commitments are 64-byte lowercase `0x`-prefixed hex strings. Weights are canonical hex quantities and must be powers of two through `0x8000000000000000`. Suite 1 is ML-DSA-65 and suite 2 is SLH-DSA-SHA2-192s. Each ID and owner commitment is unique. The node accepts up to 4,096 genesis entries and a 1 MiB genesis file. The operator supplies all allocations, policies and identifiers. [Public testnet genesis](https://p2party.com/downloads/testnet-1/genesis.json)
 

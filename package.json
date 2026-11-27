@@ -6,12 +6,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/p2party/p2party-server.git"
+    "url": "https://github.com/p2party/p2party-server-source.git"
   },
   "bugs": {
-    "url": "https://github.com/p2party/p2party-server/issues"
+    "url": "https://github.com/p2party/p2party-server-source/issues"
   },
-  "homepage": "https://github.com/p2party/p2party-server#readme",
+  "homepage": "https://github.com/p2party/p2party-server-source#readme",
   "module": "src/index.ts",
   "type": "module",
   "packageManager": "bun@1.4.5",

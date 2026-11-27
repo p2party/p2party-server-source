@@ -26,4 +26,4 @@ ansible-vault view --vault-password-file "$VAULT_PASSWORD_HELPER" "$TESTNET_CUST
 
 ## Roadmap
 
-Testnet 1 exercises algorithm selection, exact receipt recovery, double-spend protection and native currency access through ethers and viem. Distributed proof-of-stake ordering, independent validators, staking and recovery policies, denominations that can be split or joined, and mainnet supply decisions are future work. Testnet balances have no entitlement to future issuance. [Native verifier](https://github.com/ondemos/libdemos/tree/master/ledger)
+Testnet 1 exercises algorithm selection, exact receipt recovery, double-spend protection and native currency access through ethers and viem. Distributed proof-of-stake ordering, independent validators, staking and recovery policies, denominations that can be split or joined, and mainnet supply decisions are future work. Testnet balances have no entitlement to future issuance. [Native verifier](https://github.com/p2party/libdemos/tree/master/ledger)
