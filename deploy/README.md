@@ -5,6 +5,8 @@ coturn. Copy the tracked example inventory and vault files to their ignored
 operational paths, encrypt the vault, and configure SSH access before deploying.
 Never commit the resulting credentials, inventory, Terraform state or logs.
 
+For supported Ubuntu upgrades and controlled host reboots, see [Ubuntu package maintenance](ansible/fleet-maintenance.md).
+
 Run a release from a Git checkout of the server repository:
 
 ```bash
@@ -150,11 +152,15 @@ Host distribution packages keep receiving vendor security updates.
   (`caddy validate`), and a silent WebSocket through its `reverse_proxy` block
   stayed open for 75 seconds on 2.11.9; 2.11.6 introduced one-minute stall
   timeouts. Since 2.11.6 Caddy also answers 431 to request headers over 16 KiB.
-- **coturn** (TURN host): the Ubuntu package, installed at first boot by the
-  Terraform cloud-init (`templates/coturn_cloud_init.yaml.tpl`, `packages`, with
-  `package_upgrade: true`), which `playbooks/setup-coturn.yml` then only
-  requires to be present. The latest upstream release is 4.19.2; installing it
-  would mean installing from upstream instead of the distribution.
+- **coturn** starts with Ubuntu's package at first boot. The setup playbook builds
+  upstream 4.19.2 as a native Noble package. The builder verifies the pinned
+  upstream source and Ubuntu packaging hashes, compiles in a temporary chroot
+  and runs the upstream protocol tests while the relay continues serving.
+  On existing hosts, run `playbooks/upgrade-coturn.yml` with the production
+  inventory and vault. Use `--tags prepare` to build and `--tags activate`
+  to install the package. Activation saves the previous package and protected
+  configuration, restarts coturn, checks its executable, TLS and STUN, and
+  restores the previous installation if a check fails.
 - **PostgreSQL** (database host): `postgresql-17` from the PostgreSQL apt
   repository, in `playbooks/install-postgres.yml` and the Terraform cloud-init.
   PostgreSQL 19 is the newest major; moving to it needs a `pg_upgrade` of the
