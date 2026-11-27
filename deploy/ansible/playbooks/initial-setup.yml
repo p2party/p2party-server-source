@@ -353,13 +353,13 @@
 
               {{ signaling_failure.stdout | default('no output captured') }}
 
-    - name: Deployment complete
+    - name: Report signaling host setup
       debug:
         msg: |
-          Signaling server deployed (commit: {{ git_commit.stdout }})!
+          Signaling host configured.
           - Services: p2party-signaling-[{{ signaling_instance_ports | join(', ') }}]
           - Ports: {{ signaling_instance_ports | join(', ') }}
-          - URL: https://signaling.p2party.com
+          - URL: https://{{ domains.signaling }}
 
   handlers:
     - name: Reload systemd

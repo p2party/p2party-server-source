@@ -221,22 +221,38 @@ statement boundary). The two migrations released in 0.1.4 are unchanged.
    `logs` column in `"_prisma_migrations"`.
 2. Fix the cause: a lock another session held, the database unreachable, a full
    disk.
-3. On the signaling host, as `p2party`, from `~p2party/server`, with
-   `DATABASE_URL` exported as the play builds it, ask Prisma which migration
-   failed, and if it names one, mark it rolled back by its exact name:
+3. Once the deploy and its migration have stopped, inspect the migration
+   history on the PostgreSQL host. Open the application's database using
+   the configured port and database name (shown here with the example values):
 
    ```bash
-   ~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js migrate status
+   sudo -u postgres psql -X -p 5432 -d p2party
+   ```
+
+   ```sql
+   SELECT migration_name FROM public._prisma_migrations
+   WHERE finished_at IS NULL AND rolled_back_at IS NULL ORDER BY started_at;
+   ```
+
+   `migrate status` can show later pending migrations and omit the failed
+   one. A successful query returning zero rows means there is no unfinished
+   migration to resolve. If the history table is absent, confirm the target
+   database and that the first migration never started. A connection or
+   permission error must be corrected before deciding.
+
+   For each unfinished migration added in this release, use its exact name
+   on the signaling host, as `p2party`, from `~p2party/server`, with
+   `DATABASE_URL` exported as the play builds it:
+
+   ```bash
    ~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js \
      migrate resolve --rolled-back <migration name>
    ```
 
-   For this release's migrations that is always safe: the next deploy runs the
-   whole migration again. If `migrate status` names no failed migration (the
-   database was unreachable before a migration started), there is nothing to
-   resolve. Use `migrate resolve --applied <migration name>` instead only when
-   you have checked that every statement of the migration took effect and you
-   do not want it run again; never for one whose effect is partial or unknown.
+   The next deploy runs that migration again. For a failed migration from
+   0.1.4, check and reconcile any partial effects before retrying. Use
+   `migrate resolve --applied <migration name>` only after verifying that
+   every statement took effect.
 
 4. Run `./deploy/deploy.sh` again. It applies the migration and only then
    installs and starts the new binary.

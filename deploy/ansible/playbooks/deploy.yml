@@ -205,14 +205,19 @@
          row of "_prisma_migrations" ("logs" column).
       2. Fix the cause: a lock another session held, the database
          unreachable, a full disk.
-      3. From {{ app.home }}/server as {{ app.user }}, with DATABASE_URL set
-         as this play sets it, run `migrate status`:
-         {{ app.home }}/.bun/bin/bun {{ migration_tooling }}/node_modules/prisma/build/index.js migrate status
-         If it names a failed migration, mark it rolled back with the same
-         command and `migrate resolve --rolled-back <migration name>`. Every
-         migration of this release can run again after a failure at any
-         statement. If it names none (the database was unreachable before a
-         migration started), there is nothing to resolve.
+      3. Once the deploy and its migration have stopped, open the application
+         database on the PostgreSQL host:
+         sudo -u postgres psql -X -p {{ database.port | quote }} -d {{ database.name | quote }}
+         SELECT migration_name FROM public._prisma_migrations
+         WHERE finished_at IS NULL AND rolled_back_at IS NULL ORDER BY started_at;
+         A successful query returning zero rows means there is nothing to resolve.
+         If the table is absent, confirm the database and that the first migration
+         never started. Correct any connection or permission error before proceeding.
+         For each unfinished migration added in this release, from {{ app.home }}/server
+         on the signaling host as {{ app.user }}, with DATABASE_URL as the play sets it:
+         {{ app.home }}/.bun/bin/bun {{ migration_tooling }}/node_modules/prisma/build/index.js migrate resolve --rolled-back <migration name>
+         Use the exact name from the query. For a failed migration from 0.1.4,
+         check and reconcile any partial effects before retrying.
       4. Run this playbook again. It applies the migration and only then
          installs and starts the new binary.
       Until then, do not run initial-setup.yml (it refuses to enable or start

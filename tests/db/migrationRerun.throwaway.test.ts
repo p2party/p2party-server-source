@@ -17,6 +17,10 @@ import {
 /** The migrations 0.1.4 shipped; they are pinned byte for byte elsewhere. */
 const RELEASED = ["20260224171205_init", "20260224172227_add_pubsub"];
 const added = migrationNames.filter((name) => !RELEASED.includes(name));
+const recoveryQuery = readFileSync(
+  join(repositoryRoot, "deploy", "README.md"),
+  "utf8",
+).match(/SELECT migration_name FROM public\._prisma_migrations[^;]+;/)![0];
 
 /** A migration's statements, comments dropped, split at each `;` line end. */
 const statements = (name: string) =>
@@ -103,16 +107,25 @@ describeWithThrowawayPostgres("re-running a migration after a failure", () => {
           [randomUUID(), migration],
         );
 
-        // The documented recovery.
+        // Identify the failed name as an operator would, even when later
+        // migrations have yet to run.
+        const unresolved = await database.client.query<{
+          migration_name: string;
+        }>(recoveryQuery);
+        expect(unresolved.rows, label).toEqual([{ migration_name: migration }]);
         const resolve = await prismaMigrate(database.url, migrationNames, [
           "migrate",
           "resolve",
           "--rolled-back",
-          migration,
+          unresolved.rows[0]!.migration_name,
         ]);
         expect(resolve.exitCode, `${label}: ${resolve.output}`).toBe(0);
         const redeploy = await prismaMigrate(database.url, migrationNames);
         expect(redeploy.exitCode, `${label}: ${redeploy.output}`).toBe(0);
+        expect(
+          (await database.client.query(recoveryQuery)).rows,
+          label,
+        ).toEqual([]);
         expect(await fingerprint(database.client), label).toEqual(expected);
       }
     }

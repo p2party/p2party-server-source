@@ -277,6 +277,10 @@ describe("production deployment contract", () => {
       "is not supported",
     ])
       expect(recovery, stated).toContain(stated);
+    const historyQuery =
+      /SELECT migration_name FROM public\._prisma_migrations\s+WHERE finished_at IS NULL AND rolled_back_at IS NULL ORDER BY started_at;/;
+    expect(recovery).toMatch(historyQuery);
+    expect(deployReadme).toMatch(historyQuery);
     expect(play.vars?.migration_log).toBe(
       "/var/log/p2party-migration-failure.log",
     );
