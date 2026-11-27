@@ -1615,6 +1615,8 @@ const guardOk = [
   "-o",
   "BatchMode=yes",
   "-o",
+  "NumberOfPasswordPrompts=1",
+  "-o",
   "UserKnownHostsFile=/w/secrets/known_hosts",
   "-o",
   "StrictHostKeyChecking=accept-new",

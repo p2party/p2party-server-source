@@ -68,6 +68,7 @@ check_option() {
     port) ports+=("$value") ;;
     user) users+=("$value") ;;
     forwardagent) [ "$value" = no ] || refuse "-o $option" ;;
+    numberofpasswordprompts) [ "$value" = 1 ] || refuse "-o $option" ;;
     controlmaster | controlpersist | controlpath | identitiesonly | batchmode | identityfile | \
       kbdinteractiveauthentication | preferredauthentications | passwordauthentication | \
       connecttimeout | userknownhostsfile | stricthostkeychecking | loglevel | \
