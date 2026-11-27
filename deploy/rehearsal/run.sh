@@ -1388,11 +1388,10 @@ mode_scenario_6() {
 #   c. the binary and record of a deploy of another commit, deployed with
 #      this commit's playbook.
 mode_scenario_8() {
-  local rc=0 builds tree014 other_sha other_tree record
+  local rc=0 builds other_sha other_tree record
   scenario_start 08-scenario-8-skip-build "Scenario 8: --skip-build with an artefact built from another commit" \
     "$README_BUN_CHECKS" "$README_DEPLOY_ORDER"
   builds="$scenario_tree/deploy/ansible/builds"
-  tree014="$(prepare_tree "$BASELINE_REV")"
   record="$WORK/tmp/build-record-${COMMIT_SHA:0:12}.json"
   if [ ! -f "$record" ]; then
     die "run upgrade before scenario-8 to save the candidate build record"
@@ -1401,7 +1400,7 @@ mode_scenario_8() {
   res ""
   res "### a. Release 0.1.4's binary, no build record"
   rm -f "$builds/p2party_linux_x64" "$builds/p2party_linux_x64.build.json"
-  cp "$tree014/deploy/ansible/builds/p2party_linux_x64" "$builds/p2party_linux_x64"
+  "$LIMACTL" copy "$INSTANCE:/home/p2party/server/p2party-server" "$builds/p2party_linux_x64"
   res "- \`deploy/ansible/builds/p2party_linux_x64\`: 0.1.4's binary, SHA-256 $(shasum -a 256 "$builds/p2party_linux_x64" | cut -c1-64); no \`.build.json\`."
   rc=0
   fingerprint_before
