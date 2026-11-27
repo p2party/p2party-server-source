@@ -9,6 +9,8 @@ speak signaling protocol 5.
 
 ## [Unreleased]
 
+- Move the maintained browser interface, offline HTML build and browser verification suites to the website repository. The Node.js companion, native format, importer and offline signer remain in this branch. [Browser source](https://github.com/p2party/p2party.com/tree/master/wallet) · [Testnet wallet](https://p2party.com/wallet/)
+
 - Give the portable wallet direct create, restore, receive and balance links. Its Account menu and dashboard show what a backup can spend at a stated block. The browser handoff downloads that backup revision and explains how to reopen it on another device with the separate code. [Wallet guide](clients/evm/portable-wallet/browser/README.md)
 
 - Create fresh browser wallets and one-use Testnet 1 payment requests with checked encrypted backups, public QR codes and verified native input selection. Reconnecting wallets scan paginated public receipts and distinguish live, spent and unseen requests at a specific height. [Receiving and offline catch-up](clients/evm/portable-wallet/browser/README.md#receive-a-payment-including-while-offline)

@@ -1,19 +1,10 @@
-# Take a P2Party spending wallet to another browser
+# Portable P2PARTY wallet companion
 
-Open the [Testnet 1 wallet](https://p2party.github.io/p2party-server/restore/) to create a wallet or restore one from your latest encrypted **.jwe** backup and separate **P2W1-** code. The wallet shows its balance and block height after restore. To change browsers, download the file under **Move this wallet to another browser**. The public request is the item to share with a payer. [Browser wallet and recovery guide](browser/README.md)
+Open the [Testnet 1 wallet](https://p2party.com/wallet/) to create or restore a wallet. To restore in another browser, open your latest encrypted **.jwe** file (or paste its contents) and enter the separate **P2W1-** recovery code. The wallet checks each receive commitment and shows the reported test balance and block height. [Restore a wallet](https://p2party.com/wallet/#restore) · [Create a wallet](https://p2party.com/wallet/#create)
 
+The encrypted file contains native signing keys and their original receive nonces. Anyone with both the file and the code can spend its units. Send a payer the public receive request. Save the new backup after adding another request so you can recognize its payment on another device. [Receive P2PARTY](https://p2party.com/wallet/#receive) · [Wallet help](https://p2party.com/wallet/help/)
 
-Bring **your latest encrypted wallet file and its separate recovery code**. Together they open the signing keys and the original nonce for every receive request in the file. Anyone with both can spend those units. A public balance handle is enough to look up a balance. A sender needs the suite and full receive commitment.
-
-## Open the wallet in a browser
-
-Open the standalone restore tool in its own tab. **Choose the encrypted wallet file or paste its contents, then enter your separate recovery code.** The tool opens the existing wallet inside this browser. It displays the saved receive commitments and can verify spending access or sign a native Testnet 1 payment for export. The user needs a browser with Web Crypto. No installation, server or account is required. The downloadable HTML file contains the complete app and can be used on a disconnected computer. [Standalone restore tool and checksum](browser/README.md)
-
-The restored wallet immediately shows the total reported at its included checkpoint. Its balance menu can refresh against the public validator, import a replica snapshot, or share just the amount and height with the site navbar after an explicit choice. [Balance verification and privacy](browser/README.md#balance-in-the-wallet-and-site-navigation)
-
-The optional **Remember encrypted backup** setting saves the verified ciphertext in this browser. On the next visit, enter just the recovery code. Use **Forget** to remove the saved file. By default, reselect the file each time. The code, opened signing keys, nonces and signed transfers stay out of persistent browser storage. Locking the wallet, leaving the page or reloading clears the active signer.
-
-You can also create a wallet and issue new one-time payment requests entirely in the standalone browser. The local companion provides a second way to create wallets, export checked backups and migrate multiple original receive folders. [Receive while offline and catch up later](browser/README.md#receive-a-payment-including-while-offline)
+This directory contains the native Node.js companion, legacy receive-folder converter, snapshot exporter and offline transaction signer. The browser wallet and self-contained HTML download are maintained in the website repository. [Browser wallet source](https://github.com/p2party/p2party.com/tree/master/wallet) · [Offline wallet](https://p2party.com/wallet/restore-wallet.html) · [SHA-256 checksums](https://p2party.com/wallet/SHA256SUMS)
 
 ## Start the local companion
 
@@ -25,7 +16,7 @@ npm ci
 npm start
 ```
 
-Open the exact `http://127.0.0.1:PORT/` address printed in the terminal. The random port belongs to the local signer. A second browser on this computer can open the same address. On another computer, install the companion there and open its own local address. The hosted P2Party website can check public balances. Enter recovery codes only in a verified standalone restore tool or your trusted local companion.
+Open the exact `http://127.0.0.1:PORT/` address printed in the terminal. The random port belongs to the local signer. A second browser on this computer can open the same address. On another computer, install the companion there and open its own local address. The local companion operates on your computer and can open the same backup as the browser wallet.
 
 1. Choose **Create a new wallet**, select one of the two Testnet 1 suites and download the encrypted backup. Save its machine-generated code in a separate trusted place such as a password manager. Check the file by selecting it and entering the code from your separate copy.
 2. Open a confirmed request to see its full receive commitment and public balance handle. Share the suite and full commitment with one sender. For another payment, create a fresh request, save the updated file and check it first. Each commitment receives one unit once.
@@ -52,7 +43,7 @@ A replica operator can produce the generic public JSON file using a read-only da
 psql -XAt -v ON_ERROR_STOP=1 -d verified_replica -f export-snapshot.sql > testnet1-snapshot.json
 ```
 
-A disposable PostgreSQL 18 database using the server schema reproduced all 128 published genesis units, their canonical fingerprint and height zero with this query. The checker pins the server’s canonical decoded-genesis fingerprint, verifies the 128 distinct, weight-one units required by Testnet 1, validates suite IDs, and rejects duplicate IDs or commitments. A wallet-side structural check cannot authenticate membership, freshness or the claimed head. Obtain the file directly from a trusted verified replay. The standalone browser wallet can also refresh the complete public dataset through the website's snapshot page. [Replica replay instructions](../../../src/ledger/README.md#replay-a-local-peer-into-a-second-database) · [Consistent snapshot query](export-snapshot.sql)
+A disposable PostgreSQL 18 database using the server schema reproduced all 128 published genesis units, their canonical fingerprint and height zero with this query. The checker pins the server’s canonical decoded-genesis fingerprint, verifies the 128 distinct, weight-one units required by Testnet 1, validates suite IDs, and rejects duplicate IDs or commitments. A wallet-side structural check cannot authenticate membership, freshness or the claimed head. Obtain the file directly from a trusted verified replay. The web wallet fetches the whole public history when you choose to check for payments. You can also [download a public snapshot](https://p2party.com/wallet/snapshot/) for offline import. [Replica replay instructions](../../../src/ledger/README.md#replay-a-local-peer-into-a-second-database) · [Consistent snapshot query](export-snapshot.sql)
 
 ## Bring an existing key and receive nonce
 

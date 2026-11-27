@@ -2,7 +2,7 @@
 
 This testnet package connects an ethers `BrowserProvider` or a viem `custom` transport to the validator's HTTPS `/rpc` endpoint. A balance is the integer weight of a whole native unit. The owner supplies a signature suite and a full 64-byte commitment. Each receive commitment can hold one unit once over its lifetime.
 
-To take a signing wallet to another desktop browser, restore its encrypted file and separate recovery code in the local companion. The companion also converts existing receive folders and supports signing native payments offline. [Portable wallet instructions](portable-wallet/README.md)
+To take a signing wallet to another browser, open its encrypted file with the separately saved recovery code in the [P2PARTY wallet](https://p2party.com/wallet/#restore) or the local companion. The companion also converts existing receive folders and supports signing native payments offline. [Portable wallet instructions](portable-wallet/README.md)
 
 ## Install and connect
 
@@ -130,7 +130,7 @@ Run `npm test`. To exercise both real client libraries against the full local va
 
 The integration test uses an actual PostgreSQL-backed validator, a C verifier and two independent JavaScript libraries. Ethers submits an ML-DSA-65 transfer. Viem spends that output using SLH-DSA-SHA2-192s. Both read the same current and historical balances and receipts. A fresh connection can recover the full move from its ID. The test also checks corrupted signatures, unsigned or classical transactions, reused commitments, wrong networks, absent handles and exact-byte retries.
 
-The current validator provides a committed local transfer log and one-unit transfers. The roadmap includes wallet-managed nonce and key backup, a browser post-quantum signer integration, and independently verifiable inclusion and finality. The public testnet carries no monetary value.
+The current validator provides a committed local transfer log and one-unit transfers. The browser wallet backs up signing keys and receive nonces and can sign native transfers. Independently verifiable finality remains on the roadmap. The public testnet carries no monetary value.
 
 ### Currency and signing suites
 
