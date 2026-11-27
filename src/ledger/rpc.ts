@@ -1,3 +1,4 @@
+import { hasTransferHexLength, isSuite } from "../../clients/evm/src/suites.ts";
 import {
   bytes,
   hexQuantity,
@@ -78,7 +79,7 @@ async function call(store: LedgerStore, method: string, params: unknown) {
     case "demos_listUnspent": {
       const [suite, commitment, limit, after] = argumentsOf(params, 3, 4);
       if (
-        (suite !== 1 && suite !== 2) ||
+        !isSuite(suite) ||
         typeof limit !== "number" ||
         !Number.isInteger(limit) ||
         limit < 1 ||
@@ -94,10 +95,7 @@ async function call(store: LedgerStore, method: string, params: unknown) {
     }
     case "demos_sendRawTransfer": {
       const [raw] = argumentsOf(params, 1);
-      if (
-        typeof raw !== "string" ||
-        (raw.length !== 2 + 5505 * 2 && raw.length !== 2 + 16516 * 2)
-      )
+      if (typeof raw !== "string" || !hasTransferHexLength(raw.length))
         throw invalidParams();
       return store.submit(bytes(raw, (raw.length - 2) / 2));
     }

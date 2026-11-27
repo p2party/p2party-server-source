@@ -17,9 +17,11 @@ import {
 } from "../dist/index.js";
 import { nodeSigner } from "../dist/node.js";
 
-const [bun, serverRoot] = process.argv.slice(2),
+const [bun, serverRoot, policy] = process.argv.slice(2),
   chainId = `0x${randomBytes(32).toString("hex")}`,
   rpcChainId = 8123;
+assert(["original", "expanded"].includes(policy));
+const suites = policy === "expanded" ? [1, 2, 3, 4] : [1, 2];
 function wallet(algorithm) {
   const signer = nodeSigner(generateKeyPairSync(algorithm).privateKey),
     nonce = randomBytes(32);
@@ -45,8 +47,8 @@ try {
       version: 1,
       chainId,
       rpcChainId,
-      spendSuites: [1, 2],
-      receiveSuites: [1, 2],
+      spendSuites: suites,
+      receiveSuites: suites,
       units: [{ id, weight: "0x8", ...a.owner }],
     }),
   );
@@ -211,10 +213,124 @@ try {
     createLedgerTransport({ ...opts, rpcChainId: 8124 }),
     /identity/,
   );
+  const level5Lattice = wallet("ml-dsa-87");
+  const level5Hash = wallet("slh-dsa-shake-256s");
+  assert.equal(level5Lattice.owner.suite, 3);
+  assert.equal(level5Hash.owner.suite, 4);
+  let unit = await ethers.send("demos_getUnit", [persisted.outputId]);
+
+  if (policy === "original") {
+    for (const destination of [level5Lattice, level5Hash]) {
+      const disallowed = await signTransfer(
+        {
+          chainId,
+          input: unit,
+          recipient: destination.owner,
+          expiryHeight: 0n,
+        },
+        c.signer,
+        c.nonce,
+      );
+      const { id: disallowedId } = transferIds(disallowed, chainId);
+      await assert.rejects(
+        viem.request({ method: "demos_sendRawTransfer", params: [disallowed] }),
+      );
+      assert.equal(
+        await ethers.send("demos_getTransfer", [disallowedId]),
+        null,
+      );
+    }
+    assert.equal(await ethers.getBlockNumber(), 2);
+    await bothBalances(recipient, 8n);
+  } else {
+    const moves = [
+      { from: c, to: level5Lattice, height: 3, length: 5505, client: "ethers" },
+      {
+        from: level5Lattice,
+        to: level5Hash,
+        height: 4,
+        length: 7463,
+        client: "ethers",
+      },
+      {
+        from: level5Hash,
+        to: wallet("ml-dsa-87"),
+        height: 5,
+        length: 30100,
+        client: "viem",
+      },
+    ];
+    for (const { from, to, height, length, client } of moves) {
+      const signed = await signTransfer(
+        {
+          chainId,
+          input: unit,
+          recipient: to.owner,
+          expiryHeight: BigInt(height),
+        },
+        from.signer,
+        from.nonce,
+      );
+      assert.equal((signed.length - 2) / 2, length);
+      const ids = transferIds(signed, chainId);
+      if (from.owner.suite >= 3) {
+        const corrupt =
+          signed.slice(0, -2) + (signed.endsWith("00") ? "01" : "00");
+        await assert.rejects(ethers.send("demos_sendRawTransfer", [corrupt]));
+        assert.equal(await viem.getBlockNumber(), BigInt(height - 1));
+      }
+      const sendEthers = () => ethers.send("demos_sendRawTransfer", [signed]);
+      const sendViem = () =>
+        viem.request({ method: "demos_sendRawTransfer", params: [signed] });
+      const [submit, retry] =
+        client === "ethers" ? [sendEthers, sendViem] : [sendViem, sendEthers];
+      assert.equal(await submit(), ids.id);
+      assert.equal(await retry(), ids.id);
+      const actual = await newlyConnected.send("demos_getTransfer", [ids.id]);
+      assert.deepEqual(actual, {
+        ...ids,
+        height: "0x" + height.toString(16),
+        wire: signed,
+      });
+      assert.deepEqual(
+        await viem.request({
+          method: "demos_getTransferByHeight",
+          params: [actual.height],
+        }),
+        actual,
+      );
+      const source = readHandle(from.owner),
+        destination = readHandle(to.owner);
+      assert.equal(await ethers.getBalance(source, height - 1), 8n);
+      assert.equal(
+        await viem.getBalance({
+          address: destination,
+          blockNumber: BigInt(height - 1),
+        }),
+        0n,
+      );
+      await bothBalances(source, 0n);
+      await bothBalances(destination, 8n);
+      unit = await ethers.send("demos_getUnit", [ids.outputId]);
+      assert.deepEqual(unit, {
+        id: ids.outputId,
+        weight: "0x8",
+        ...to.owner,
+        createdHeight: actual.height,
+        spentHeight: null,
+      });
+    }
+    assert.equal(await ethers.getBlockNumber(), 5);
+    assert.equal(await viem.getBlockNumber(), 5n);
+    assert.equal(
+      await viem.getBalance({ address: sender, blockNumber: 0n }),
+      8n,
+    );
+  }
   ethers.destroy();
   newlyConnected.destroy();
   console.log(
-    "Both clients verified full native IDs and receipts at heights 1 and 2, historical and current balances, ML-DSA and SLH-DSA signatures, replay and negative cases.",
+    `Both clients verified native IDs, receipts, historical balances and retries with the ${policy} signature policy.`,
   );
 } finally {
   if (worker && worker.exitCode === null) {

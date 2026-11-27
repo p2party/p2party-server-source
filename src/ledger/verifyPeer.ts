@@ -1,3 +1,4 @@
+import { hasTransferHexLength } from "../../clients/evm/src/suites.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -55,7 +56,7 @@ function localPeer(endpoint: string) {
         const { value, done } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > 40_000)
+        if (size > 68 * 1024)
           throw new Error("Peer RPC response exceeds the receipt limit");
         chunks.push(value);
       }
@@ -139,7 +140,7 @@ export async function verifyPeer(
     if (
       peer.height !== number ||
       typeof peer.wire !== "string" ||
-      ![2 + 5505 * 2, 2 + 16516 * 2].includes(peer.wire.length)
+      !hasTransferHexLength(peer.wire.length)
     )
       throw new Error("Peer supplied an invalid receipt or a gap in history");
     const expected = {

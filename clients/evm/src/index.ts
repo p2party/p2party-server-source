@@ -1,3 +1,9 @@
+import type { Suite } from "./suites.js";
+export const nativeCurrency = {
+  name: "P2Party",
+  symbol: "P2PARTY",
+  decimals: 0,
+} as const;
 import {
   bytes,
   hex,
@@ -30,7 +36,7 @@ export type NativeRpcSchema = [
   { Method: "demos_getUnit"; Parameters: [id: Hex]; ReturnType: Unit | null },
   {
     Method: "demos_listUnspent";
-    Parameters: [suite: 1 | 2, commitment: Hex, limit: number, afterId?: Hex];
+    Parameters: [suite: Suite, commitment: Hex, limit: number, afterId?: Hex];
     ReturnType: Unit[];
   },
   { Method: "demos_sendRawTransfer"; Parameters: [wire: Hex]; ReturnType: Hex },

@@ -1,3 +1,4 @@
+import { hasTransferHexLength, signatureSuites, type Suite } from "./suites.js";
 import { sha512 } from "@noble/hashes/sha2.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import {
@@ -8,7 +9,7 @@ import {
 } from "@noble/hashes/utils.js";
 
 export type Hex = `0x${string}`;
-export type Suite = 1 | 2;
+export type { Suite } from "./suites.js";
 export type Owner = { suite: Suite; commitment: Hex };
 export type Unit = Owner & {
   id: Hex;
@@ -48,9 +49,9 @@ export function quantity(value: unknown): bigint {
   return BigInt(value);
 }
 export function lengths(suite: Suite) {
-  if (suite === 1) return { key: 1952, signature: 3309 };
-  if (suite === 2) return { key: 48, signature: 16224 };
-  throw new Error("Unknown post-quantum suite");
+  const entry = signatureSuites.find((entry) => entry.id === suite);
+  if (!entry) throw new Error("Unknown post-quantum suite");
+  return entry;
 }
 function tagged(tag: string, data: Uint8Array) {
   return sha512(concatBytes(Uint8Array.of(tag.length), utf8ToBytes(tag), data));
@@ -133,10 +134,7 @@ export async function signTransfer(
   return hex(concatBytes(body, signed));
 }
 export function transferIds(wire: Hex, chainId: Hex) {
-  if (
-    typeof wire !== "string" ||
-    (wire.length !== 2 + 5505 * 2 && wire.length !== 2 + 16516 * 2)
-  )
+  if (typeof wire !== "string" || !hasTransferHexLength(wire.length))
     throw new Error("Expected a complete native signed transfer");
   const data = bytes(wire, (wire.length - 2) / 2);
   const { key, signature } = lengths(data[114] as Suite);

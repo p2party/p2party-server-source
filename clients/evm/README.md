@@ -129,3 +129,16 @@ Run `npm test`. To exercise both real client libraries against the full local va
 The integration test uses an actual PostgreSQL-backed validator, a C verifier and two independent JavaScript libraries. Ethers submits an ML-DSA-65 transfer. Viem spends that output using SLH-DSA-SHA2-192s. Both read the same current and historical balances and receipts. A fresh connection can recover the full move from its ID. The test also checks corrupted signatures, unsigned or classical transactions, reused commitments, wrong networks, absent handles and exact-byte retries.
 
 The current validator provides a committed local transfer log and one-unit transfers. The roadmap includes wallet-managed nonce and key backup, a browser post-quantum signer integration, and independently verifiable inclusion and finality. The public testnet carries no monetary value.
+
+### Currency and signing suites
+
+The **P2PARTY** ticker denotes whole native units (zero decimal places). The wallet exports `nativeCurrency` for chain configuration. The [coin icon](https://p2party.com/logo-cat.svg) is also the web client favicon. Testnet units have no monetary value.
+
+| Suite ID | Signing key        | Signed transfer size | Network availability             |
+| -------- | ------------------ | -------------------: | -------------------------------- |
+| 1        | ML-DSA-65          |          5,505 bytes | Public Testnet 1                 |
+| 2        | SLH-DSA-SHA2-192s  |         16,516 bytes | Public Testnet 1                 |
+| 3        | ML-DSA-87          |          7,463 bytes | Explicitly enabled local genesis |
+| 4        | SLH-DSA-SHAKE-256s |         30,100 bytes | Explicitly enabled local genesis |
+
+Select the algorithm when generating a key, then pass that key to `nodeSigner`. A transfer that changes suites uses a fresh recipient commitment. The current owner must still sign using the suite that owns the input.

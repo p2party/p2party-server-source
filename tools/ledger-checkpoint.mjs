@@ -29,9 +29,11 @@ import {
   verifyWitness,
 } from "./checkpoint-crypto.mjs";
 
+import { signatureSuites } from "../clients/evm/src/suites.ts";
+
 const root = fileURLToPath(new URL("../", import.meta.url));
 const usage = [
-  "init NEW_OPERATOR_DIRECTORY ml-dsa-65|slh-dsa-sha2-192s",
+  `init NEW_OPERATOR_DIRECTORY ${signatureSuites.map((s) => s.algorithm).join("|")}`,
   "policy CHAIN_ID GENESIS_HASH PUBLIC_PEM PUBLIC_PEM [...]",
   "attest OPERATOR_DIRECTORY POLICY LOCAL_RPC HEIGHT",
   "combine POLICY WITNESS WITNESS [...]",
@@ -92,7 +94,7 @@ function syncDirectory(path) {
   }
 }
 function init(dir, suite) {
-  if (!["ml-dsa-65", "slh-dsa-sha2-192s"].includes(suite))
+  if (!signatureSuites.some((entry) => entry.algorithm === suite))
     throw new Error("Unsupported checkpoint signing suite");
   mkdirSync(dir, { mode: 0o700 }); // Exclusive: never adopt a directory or replace a key or journal.
   const { privateKey, publicKey } = generateKeyPairSync(suite);
@@ -288,7 +290,7 @@ function run([command, ...args]) {
   if (command === "attest" && args.length === 4) return attest(...args);
   if (command === "combine" && args.length >= 3 && args.length <= 17) {
     const policy = readPolicy(args[0]);
-    const witnesses = args.slice(1).map((p) => json(p, 48000));
+    const witnesses = args.slice(1).map((p) => json(p, 64 * 1024));
     return combineWitnesses(policy, witnesses, witnesses[0].checkpoint);
   }
   if (
@@ -296,7 +298,7 @@ function run([command, ...args]) {
     args.length === 3
   ) {
     const policy = readPolicy(args[0]),
-      cert = json(args[1], 600 * 1024);
+      cert = json(args[1], 1024 * 1024);
     // Authenticate the request before spending work on a claimed height.
     verifyCertificate(policy, cert, cert.checkpoint);
     const local =

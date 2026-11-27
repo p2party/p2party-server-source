@@ -8,10 +8,7 @@ import {
   verify,
 } from "node:crypto";
 
-const suites = {
-  "ml-dsa-65": { id: 1, signatureBytes: 3309 },
-  "slh-dsa-sha2-192s": { id: 2, signatureBytes: 16224 },
-};
+import { signatureSuites } from "../clients/evm/src/suites.ts";
 const checkpointFields = [
   "chainId",
   "genesisHash",
@@ -53,12 +50,11 @@ function hash(domain, ...parts) {
 }
 
 function keyInfo(key) {
-  if (
-    !(key instanceof KeyObject) ||
-    !Object.hasOwn(suites, key.asymmetricKeyType)
-  )
-    throw new Error("Expected an ML-DSA-65 or SLH-DSA-SHA2-192s operator key");
-  return suites[key.asymmetricKeyType];
+  const entry =
+    key instanceof KeyObject &&
+    signatureSuites.find((suite) => suite.algorithm === key.asymmetricKeyType);
+  if (!entry) throw new Error("Unsupported post-quantum operator key");
+  return entry;
 }
 
 export function operatorId(key) {
@@ -215,7 +211,7 @@ function checkSignature(policy, checkpoint, record) {
     throw new Error("Wrong checkpoint signature suite");
   const signature = bytes(
     record.signature,
-    keyInfo(operator.publicKey).signatureBytes,
+    keyInfo(operator.publicKey).signature,
   );
   if (
     !verify(

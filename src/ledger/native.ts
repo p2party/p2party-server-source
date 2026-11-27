@@ -1,3 +1,4 @@
+import { isSuite } from "../../clients/evm/src/suites.ts";
 import { execFile } from "node:child_process";
 import { bytes, RpcError, type LedgerConfig } from "./config";
 
@@ -42,7 +43,7 @@ export function validateTransfer(
         encoding: "buffer",
       },
       (err, out) => {
-        if (err || out.length !== 193 || (out[128] !== 1 && out[128] !== 2)) {
+        if (err || out.length !== 193 || !isSuite(out[128])) {
           reject(
             err?.code === 1
               ? new RpcError(-32010, "Transfer rejected")

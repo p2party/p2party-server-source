@@ -1,3 +1,4 @@
+import { isSuite, signatureSuites } from "../../clients/evm/src/suites.ts";
 import { createHash } from "node:crypto";
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -56,9 +57,9 @@ function suiteMask(suites: unknown): number {
   if (
     !Array.isArray(suites) ||
     !suites.length ||
-    suites.length > 2 ||
+    suites.length > signatureSuites.length ||
     new Set(suites).size !== suites.length ||
-    suites.some((s) => s !== 1 && s !== 2)
+    !suites.every(isSuite)
   )
     throw new Error("Invalid ledger suite policy");
   return suites.reduce((mask, suite) => mask | (1 << (suite - 1)), 0);
@@ -152,7 +153,7 @@ export function ledgerConfig(env: NodeJS.ProcessEnv): LedgerConfig | undefined {
       !u ||
       typeof u !== "object" ||
       !keys(u, ["id", "weight", "suite", "commitment"]) ||
-      (u.suite !== 1 && u.suite !== 2) ||
+      !isSuite(u.suite) ||
       !(spendMask & (1 << (u.suite - 1)))
     )
       throw new Error("Invalid genesis owner suite");

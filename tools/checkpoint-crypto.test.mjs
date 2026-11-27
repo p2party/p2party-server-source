@@ -90,6 +90,71 @@ test("two different pinned signature suites attest the same local prefix", () =>
   );
 });
 
+test("a mixed four-suite policy binds each new witness to its key, suite and receipt root", () => {
+  const lattice = generateKeyPairSync("ml-dsa-87");
+  const hash = generateKeyPairSync("slh-dsa-shake-256s");
+  const keys = [m, s, lattice, hash];
+  const expanded = parsePolicy({
+    ...policyInput,
+    operators: keys.map((k) => pem(k.publicKey)),
+  });
+  const witnesses = keys.map((k) =>
+    signCheckpoint(expanded, checkpoint, k.privateKey),
+  );
+  assert.deepEqual(
+    witnesses.map((w) => w.suite),
+    [1, 2, 3, 4],
+  );
+  const full = combineWitnesses(expanded, witnesses.toReversed(), checkpoint);
+  assert.deepEqual(
+    verifyCertificate(expanded, JSON.parse(JSON.stringify(full)), checkpoint),
+    checkpoint,
+  );
+  for (const [i, size] of [
+    [2, 4627],
+    [3, 29792],
+  ]) {
+    const witness = witnesses[i];
+    assert.equal(witness.keyId, operatorId(keys[i].publicKey));
+    assert.equal((witness.signature.length - 2) / 2, size);
+    assert.equal(verifyWitness(expanded, witness, checkpoint), witness.keyId);
+    assert.throws(() =>
+      verifyWitness(
+        expanded,
+        { ...witness, suite: i === 2 ? 4 : 3 },
+        checkpoint,
+      ),
+    );
+    assert.throws(() =>
+      verifyWitness(
+        expanded,
+        { ...witness, signature: replaceFirstByte(witness.signature) },
+        checkpoint,
+      ),
+    );
+    assert.throws(() =>
+      verifyWitness(expanded, witness, {
+        ...checkpoint,
+        logRoot: replaceFirstByte(checkpoint.logRoot),
+      }),
+    );
+    assert.throws(() => signCheckpoint(policy, checkpoint, keys[i].privateKey));
+    assert.throws(() =>
+      combineWitnesses(
+        expanded,
+        witnesses.filter((w) => w !== witness),
+        checkpoint,
+      ),
+    );
+  }
+  assert.throws(() => verifyCertificate(policy, full, checkpoint));
+  assert.throws(() => verifyCertificate(expanded, certificate, checkpoint));
+  assert.deepEqual(
+    verifyCertificate(policy, certificate, checkpoint),
+    checkpoint,
+  );
+});
+
 test("operator suites and key encodings cannot be substituted or duplicated", () => {
   const bad = [
     [],
