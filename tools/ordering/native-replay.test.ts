@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,7 @@ import { ledgerConfig } from "../../src/ledger/config.ts";
 import { attestExecution, collectExecution } from "./execution.mjs";
 import { localCommittee } from "./test-support.mjs";
 import { createOrderedLedger } from "./native-replay.ts";
-import { verifyWalletUnit } from "./wallet-proof.ts";
+import { verifyClaim, verifyWalletUnit } from "./wallet-proof.ts";
 
 test("three local validators replay native conflicts and certify independently verifiable wallet proofs", async (t) => {
   const env = process.env.P2PARTY_NATIVE_BIN;
@@ -255,6 +255,84 @@ test("three local validators replay native conflicts and certify independently v
       earlier.prove(first.outputId),
     ),
   );
+  // A claimed hash accompanying altered allocations does not bind their
+  // weights; recompute the canonical genesis before replay or wallet use.
+  const edited = {
+    ...config,
+    units: config.units.map((u) =>
+      u.id === ceiling.id ? { ...u, weight: "0x1" } : u,
+    ),
+  };
+  assert.throws(() => createOrderedLedger(edited, committee, bin), /genesis/i);
+  assert.throws(
+    () =>
+      verifyWalletUnit(edited, committee, pin, cert, ceiling, genesisWitness),
+    /genesis/i,
+  );
+  const editedPolicy = { ...config, receiveMask: 1 };
+  assert.throws(
+    () => createOrderedLedger(editedPolicy, committee, bin),
+    /genesis/i,
+  );
+  // Caller mutation after construction cannot change an active replay.
+  const mutable = structuredClone(config);
+  const independent = createOrderedLedger(mutable, committee, bin);
+  mutable.units.length = 0;
+  assert.deepEqual(await independent.replay(two), snapshot.roots);
+  for (const bad of [
+    null,
+    {},
+    { origin: "other" },
+    { ...proof, address: output.commitment },
+    { ...proof, origin: "genesis" },
+  ])
+    assert.throws(() =>
+      verifyWalletUnit(config, committee, pin, cert, output, bad as never),
+    );
+  for (const bad of [
+    { ...output, weight: "0x1" },
+    { ...output, id: output.id.slice(2) },
+    { ...output, suite: "1" },
+    { ...output, commitment: null },
+    { ...output, address: output.commitment },
+  ])
+    assert.throws(() =>
+      verifyWalletUnit(config, committee, pin, cert, bad as never, proof),
+    );
+  assert.throws(() =>
+    verifyClaim(pin.stateRoot, "move", last.id, 1 as never, proof.move),
+  );
+  // A helper that exits successfully with a data-dependent inconsistent
+  // reply is also a local fault. The validators must withhold their vote.
+  const helperDir = join(dir, "helpers");
+  mkdirSync(helperDir);
+  function reply(name: string, data: Buffer) {
+    const exe = join(helperDir, name);
+    writeFileSync(
+      exe,
+      '#!/bin/sh\n/bin/cat >/dev/null\nexec /bin/cat "$0.response"\n',
+      { mode: 0o700 },
+    );
+    writeFileSync(exe + ".response", data);
+    return exe;
+  }
+  const badReply = Buffer.alloc(193);
+  badReply[128] = 1;
+  const mismatched = createOrderedLedger(
+    { ...config, verifier: reply("verifier", badReply) },
+    committee,
+    bin,
+  );
+  await assert.rejects(mismatched.replay([f.first]), /response disagrees/i);
+  for (const raw of [
+    Buffer.from(pin.stateRoot + "\n\n"),
+    Buffer.from(pin.stateRoot.replace("0", "°") + "\n", "latin1"),
+  ]) {
+    reply("demos-ledger-state", raw);
+    await assert.rejects(
+      createOrderedLedger(config, committee, helperDir).replay([]),
+    );
+  }
   // The next anchor includes a third receipt, forming an uneven history tree.
   // The wallet advancing its pin must reject the older genuine certificate.
   round(5);

@@ -53,6 +53,39 @@ export type LedgerConfig = {
   corsOrigins: string[];
 };
 
+// Canonical genesis fingerprint shared by node startup, replay and the wallet.
+export function genesisFingerprint(
+  config: Pick<
+    LedgerConfig,
+    "chainId" | "rpcChainId" | "spendMask" | "receiveMask" | "units"
+  >,
+) {
+  const { chainId, rpcChainId, spendMask, receiveMask } = config;
+  const units = config.units.map(({ id, weight, suite, commitment }) => ({
+    id,
+    weight,
+    suite,
+    commitment,
+  }));
+  return createHash("sha256")
+    .update(
+      JSON.stringify({ chainId, rpcChainId, spendMask, receiveMask, units }),
+    )
+    .digest("hex");
+}
+
+export function checkPinnedGenesis(
+  config: LedgerConfig,
+  network: { chainId: string; genesisHash: string },
+) {
+  if (
+    config.chainId !== network.chainId ||
+    "0x" + config.genesisHash !== network.genesisHash ||
+    config.genesisHash !== genesisFingerprint(config)
+  )
+    throw new Error("Local genesis differs from pinned checkpoint network");
+}
+
 function suiteMask(suites: unknown): number {
   if (
     !Array.isArray(suites) ||
@@ -184,9 +217,7 @@ export function ledgerConfig(env: NodeJS.ProcessEnv): LedgerConfig | undefined {
     receiveMask,
     units,
   };
-  const genesisHash = createHash("sha256")
-    .update(JSON.stringify(config))
-    .digest("hex");
+  const genesisHash = genesisFingerprint(config);
   if (
     execFileSync(verifier, ["--version"], {
       timeout: 2000,

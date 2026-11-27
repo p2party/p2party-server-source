@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import {
   bytes,
+  checkPinnedGenesis,
   hex,
   hexQuantity,
   quantity,
   type LedgerConfig,
 } from "../../src/ledger/config.ts";
+import { isSuite } from "../../clients/evm/src/suites.ts";
 import { transferIds, type Hex } from "../../clients/evm/src/wire.ts";
 import { fields, type makeCommittee } from "./committee.mjs";
 import { verifyExecutionCertificate } from "./execution.mjs";
@@ -34,6 +36,8 @@ export function verifyClaim(
   witness: string,
 ) {
   if (
+    typeof present !== "boolean" ||
+    !Object.hasOwn(kindId, kind) ||
     typeof witness !== "string" ||
     witness.length < 270 ||
     witness.length > 65806
@@ -125,7 +129,12 @@ type Checkpoint = ReplayRoots & {
   committeeId: string;
   anchorId: string;
 };
-type ExpectedUnit = { id: string; suite: number; commitment: string };
+type ExpectedUnit = {
+  id: string;
+  suite: number;
+  commitment: string;
+  weight?: string;
+};
 
 /** The caller pins the committee, complete current checkpoint and local genesis.
  * Proof data may originate from an untrusted peer. */
@@ -138,11 +147,21 @@ export function verifyWalletUnit(
   proof: WalletProof,
 ) {
   const cp = verifyExecutionCertificate(committee, expected, certificate);
-  if (
-    cp.chainId !== config.chainId ||
-    cp.genesisHash !== "0x" + config.genesisHash
-  )
-    throw new Error("Wallet genesis differs from checkpoint");
+  checkPinnedGenesis(config, cp);
+  const withWeight = requested != null && Object.hasOwn(requested, "weight");
+  fields(
+    requested,
+    withWeight
+      ? ["id", "suite", "commitment", "weight"]
+      : ["id", "suite", "commitment"],
+  );
+  bytes(requested.id, 64);
+  bytes(requested.commitment, 64);
+  if (!isSuite(requested.suite))
+    throw new Error("Invalid requested owner suite");
+  if (withWeight) quantity(requested.weight, 1n << 63n);
+  if (!proof || typeof proof !== "object")
+    throw new Error("Invalid wallet proof");
   let id: string,
     suite: number,
     commitment: string,
@@ -186,9 +205,10 @@ export function verifyWalletUnit(
   if (
     id !== requested.id ||
     suite !== requested.suite ||
-    commitment !== requested.commitment
+    commitment !== requested.commitment ||
+    (withWeight && weight !== requested.weight)
   )
-    throw new Error("Proof differs from requested unit or full owner");
+    throw new Error("Proof differs from requested unit, weight or full owner");
   verifyClaim(cp.stateRoot, "owner", commitment, true, proof.owner);
   verifyClaim(cp.stateRoot, "spent", id, false, proof.spent);
   return { id, suite, commitment, weight, createdHeight, spentHeight: null };

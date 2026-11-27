@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 import {
   bytes,
+  checkPinnedGenesis,
   hex,
   hexQuantity,
   RpcError,
@@ -10,6 +11,7 @@ import {
 import { validateTransfer, type StoredUnit } from "../../src/ledger/native.ts";
 import { ReceiptFrontier } from "../../src/ledger/receiptFrontier.ts";
 import { hasTransferHexLength } from "../../clients/evm/src/suites.ts";
+import { transferIds, type Hex } from "../../clients/evm/src/wire.ts";
 import type { WalletProof } from "./wallet-proof.ts";
 
 export type ReplayRoots = {
@@ -19,22 +21,33 @@ export type ReplayRoots = {
 };
 type Network = { chainId: string; genesisHash: string };
 
-export function checkGenesis(config: LedgerConfig, network: Network) {
-  if (
-    config.chainId !== network.chainId ||
-    "0x" + config.genesisHash !== network.genesisHash
-  )
-    throw new Error("Local genesis differs from the pinned committee");
+function readHashRecords(raw: Buffer) {
+  // The native log and root CLIs promise exactly 0x + 128 lowercase hex + LF
+  // per record. Decode byte-for-byte without masking non-ASCII high bits.
+  if (raw.length % 131 !== 0) throw new Error("Malformed native hash record");
+  const records: string[] = [];
+  for (let at = 0; at < raw.length; at += 131) {
+    if (raw[at + 130] !== 10)
+      throw new Error("Malformed native hash terminator");
+    const id = raw.toString("latin1", at, at + 130);
+    bytes(id, 64);
+    records.push(id);
+  }
+  return records;
 }
 
 /** Replay starts at the locally validated genesis on every call. A verifier error
  * aborts the whole call, so no partial checkpoint or witness can escape. */
 export function createOrderedLedger(
-  config: LedgerConfig,
+  sourceConfig: LedgerConfig,
   committee: Network,
   nativeBin: string,
 ) {
-  checkGenesis(config, committee);
+  const config = {
+    ...sourceConfig,
+    units: sourceConfig.units.map((unit) => ({ ...unit })),
+  };
+  checkPinnedGenesis(config, committee);
   if (!isAbsolute(nativeBin))
     throw new Error("Supply an absolute native binary directory");
   function tool(name: "state" | "log", args: string[], input: string) {
@@ -90,6 +103,14 @@ export function createOrderedLedger(
       const owner = hex(result.commitment),
         id = hex(result.id),
         output = hex(result.outputId);
+      const expected = transferIds(candidate as Hex, config.chainId as Hex);
+      if (
+        id !== expected.id ||
+        output !== expected.outputId ||
+        result.suite !== wire[115] ||
+        !result.commitment.equals(wire.subarray(116, 180))
+      )
+        throw new Error("Native verifier response disagrees with signed wire");
       if (owners.has(owner) || moves.has(id) || units.has(output)) continue;
       // The native offline set generator permits at most 65,536 distinct claims.
       if (claims.length + 3 > 65536)
@@ -114,10 +135,9 @@ export function createOrderedLedger(
       frontier.append(result.id);
     }
     const exported = claims.join("");
-    const stateRoot = tool("state", ["root", "-"], exported)
-      .toString("ascii")
-      .trimEnd();
-    bytes(stateRoot, 64);
+    const hashes = readHashRecords(tool("state", ["root", "-"], exported));
+    if (hashes.length !== 1) throw new Error("Expected one native state root");
+    const stateRoot = hashes[0]!;
     const roots: ReplayRoots = {
       height: hexQuantity(receipts.length),
       logRoot: hex(frontier.root()),
@@ -135,18 +155,18 @@ export function createOrderedLedger(
       if (unit.created === "0") return { origin: "genesis", ...witnesses };
       const pos = Number(unit.created) - 1;
       const receipt = receipts[pos]!;
-      const path = tool(
-        "log",
-        ["inclusion", hexQuantity(pos)],
-        receipts.map((r) => r.id + "\n").join(""),
-      )
-        .toString("ascii")
-        .trimEnd();
+      const path = readHashRecords(
+        tool(
+          "log",
+          ["inclusion", hexQuantity(pos)],
+          receipts.map((r) => r.id + "\n").join(""),
+        ),
+      );
       return {
         origin: "transfer",
         index: hexQuantity(pos),
         wire: receipt.wire,
-        inclusion: path ? path.split("\n") : [],
+        inclusion: path,
         move: proof("move", receipt.id),
         ...witnesses,
       };
