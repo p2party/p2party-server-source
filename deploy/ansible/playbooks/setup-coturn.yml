@@ -63,6 +63,50 @@
         state: present
         update_cache: yes
 
+    # A command-line flag in the unit or in /etc/default/coturn overrides
+    # turnserver.conf: -l/--log-file or --syslog would restore a log of
+    # usernames and client addresses, and -n or a different -c would skip the
+    # template altogether. Both files belong to the coturn package, so they are
+    # checked rather than rewritten.
+    - name: Read the effective coturn unit
+      command:
+        argv:
+          [
+            systemctl,
+            show,
+            coturn.service,
+            --property=ExecStart,
+            --property=Environment,
+          ]
+      no_log: true
+      register: coturn_unit
+      changed_when: false
+
+    - name: Read /etc/default/coturn
+      slurp:
+        src: /etc/default/coturn
+      register: coturn_defaults
+      no_log: true
+
+    - name: Refuse coturn command-line flags that override turnserver.conf
+      assert:
+        that:
+          - coturn_override | length == 0
+        fail_msg: >-
+          coturn has an option that overrides the managed configuration ({{ coturn_override | trim }}).
+          Remove it from the service environment or start command before deploying.
+      vars:
+        coturn_override_pattern: >-
+          (?:^|[\s"'=])(?P<flag>--log-file|-l|--syslog|--verbose|--Verbose|--log-binding|-v|-V|-n)(?=[\s"'=;]|$)|(?:^|[\s"'=])(?P<config>-c)(?:\s+|=)(?!/etc/turnserver\.conf(?=[\s"';]|$))
+        coturn_override: >-
+          {{ (coturn_command_text | regex_search(coturn_override_pattern)) | default('', true) }}
+        # Joined with spaces: Ansible keeps '\n' in a Jinja literal as two
+        # characters, and the patterns need only whitespace between tokens.
+        coturn_command_text: >-
+          {{ (coturn_unit.stdout_lines
+              + ((coturn_defaults.content | b64decode).splitlines()
+                 | reject('match', '^\s*(#|$)') | list)) | join(' ') }}
+
     - name: Enable coturn service
       lineinfile:
         path: /etc/default/coturn
@@ -72,16 +116,16 @@
     # ========================================================================
     # TLS Certificate via Let's Encrypt
     # ========================================================================
-    - name: Stop coturn for certbot standalone
-      systemd:
-        name: coturn
-        state: stopped
-      ignore_errors: true
-
     - name: Check if certificate exists
       stat:
         path: "/etc/letsencrypt/live/{{ vault_coturn_realm }}/fullchain.pem"
       register: cert_exists
+
+    - name: Stop coturn for certbot standalone
+      systemd:
+        name: coturn
+        state: stopped
+      when: not cert_exists.stat.exists
 
     - name: Obtain Let's Encrypt certificate
       command: >
@@ -129,40 +173,6 @@
         group: turnserver
         mode: "0600"
         remote_src: yes
-
-    # A command-line flag in the unit or in /etc/default/coturn overrides
-    # turnserver.conf: -l/--log-file or --syslog would restore a log of
-    # usernames and client addresses, and -n or a different -c would skip the
-    # template altogether. Both files belong to the coturn package, so they are
-    # checked rather than rewritten.
-    - name: Read the effective coturn unit
-      command:
-        argv: [systemctl, cat, coturn]
-      register: coturn_unit
-      changed_when: false
-
-    - name: Read /etc/default/coturn
-      slurp:
-        src: /etc/default/coturn
-      register: coturn_defaults
-
-    - name: Refuse coturn command-line flags that override turnserver.conf
-      assert:
-        that:
-          - coturn_command_text is not search('(^|[\s"\x27=])(-l|--log-file|--syslog|-n)(?=[\s"\x27=]|$)', multiline=True)
-          - coturn_command_text is not search('(^|[\s"\x27])-c(\s+|=)(?!/etc/turnserver\.conf(?=[\s"\x27]|$))', multiline=True)
-        fail_msg: >-
-          The coturn unit (systemctl cat coturn) or /etc/default/coturn passes
-          -l/--log-file, --syslog, -n or a -c other than /etc/turnserver.conf.
-          Those override turnserver.conf, which must log nowhere; remove the
-          flag on the host and run this playbook again.
-      vars:
-        # Joined with spaces: Ansible keeps '\n' in a Jinja literal as two
-        # characters, and the patterns need only whitespace between tokens.
-        coturn_command_text: >-
-          {{ (coturn_unit.stdout_lines | select('match', '^\s*ExecStart') | list
-              + ((coturn_defaults.content | b64decode).splitlines()
-                 | reject('match', '^\s*(#|$)') | list)) | join(' ') }}
 
     # coturn has no configuration check mode, so the rendered file is checked
     # here before it replaces the running one: a candidate that fails these

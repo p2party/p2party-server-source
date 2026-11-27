@@ -823,8 +823,10 @@ describe("production deployment contract", () => {
     );
     expect(task(play, "Read the effective coturn unit").command?.argv).toEqual([
       "systemctl",
-      "cat",
-      "coturn",
+      "show",
+      "coturn.service",
+      "--property=ExecStart",
+      "--property=Environment",
     ]);
     expect(task(play, "Read /etc/default/coturn").slurp).toEqual({
       src: "/etc/default/coturn",
@@ -833,29 +835,30 @@ describe("production deployment contract", () => {
       play,
       "Refuse coturn command-line flags that override turnserver.conf",
     );
-    // The checked text is the unit's ExecStart lines and the defaults file
-    // without comments.
     expect(refuse.vars?.coturn_command_text).toContain(
-      "select('match', '^\\s*ExecStart')",
+      "coturn_unit.stdout_lines",
     );
     expect(refuse.vars?.coturn_command_text).toContain(
       "reject('match', '^\\s*(#|$)')",
     );
-    // Ansible keeps '\n' in a Jinja literal as two characters, which would
-    // glue a trailing flag to the next line; the lines are joined by spaces.
-    expect(refuse.vars?.coturn_command_text).toContain("| join(' ')");
-    // Run the playbook's own patterns (Python and JavaScript agree on these
-    // constructs) against unit and defaults lines.
-    const patterns = (refuse.assert as { that: string[] }).that.map((check) => {
-      const pattern = /search\('(.*)', multiline=True\)$/.exec(check)?.[1];
-      if (!pattern) throw new Error(`no pattern in ${check}`);
-      return new RegExp(pattern.replace(/\\x27/g, "'"), "m");
-    });
-    const refused = (text: string) => patterns.some((re) => re.test(text));
+    expect(String((refuse.assert as { fail_msg: string }).fail_msg)).toContain(
+      "coturn_override",
+    );
+    expect(
+      position(
+        play,
+        "Refuse coturn command-line flags that override turnserver.conf",
+      ),
+    ).toBeLessThan(position(play, "Stop coturn for certbot standalone"));
+    const pattern = String(refuse.vars?.coturn_override_pattern).replaceAll(
+      "(?P<",
+      "(?<",
+    );
+    const refused = (text: string) => new RegExp(pattern, "m").test(text);
     for (const accepted of [
       "ExecStart=/usr/bin/turnserver -c /etc/turnserver.conf --pidfile=",
       "TURNSERVER_ENABLED=1",
-      'DAEMON_ARGS="-c /etc/turnserver.conf -o -v"',
+      'DAEMON_ARGS="-c /etc/turnserver.conf -o"',
       "ExecStart=/usr/bin/turnserver -c=/etc/turnserver.conf --no-stdout-log",
     ])
       expect(refused(accepted), accepted).toBe(false);
@@ -872,7 +875,7 @@ describe("production deployment contract", () => {
       expect(refused(overriding), overriding).toBe(true);
     expect(
       String(refuse.assert && (refuse.assert as { fail_msg: string }).fail_msg),
-    ).toContain("systemctl cat coturn");
+    ).toContain("Remove it from the service environment");
   });
 
   test("Caddy's log files belong to caddy before and after caddy validate", () => {
@@ -1042,7 +1045,7 @@ const trackedAnsible = (prefix: string): string[] => {
   return files;
 };
 const localPreflight = () => readAnsible("playbooks/local-preflight.yml");
-const pinnedBunTasks = () => readAnsible("tasks/require-pinned-bun.yml");
+const pinnedBunTasks = () => readAnsible("tasks/install-pinned-bun.yml");
 const allVars = Bun.YAML.parse(readAnsible("group_vars/all/vars.yml")) as {
   ansible_core_tested: string;
   bun: {
@@ -1175,7 +1178,7 @@ const rootExecutions = (files: { file: string; plays: Raw[] }[]): string[] => {
                   "--property=PrivateNetwork=yes",
                   "--property=KillMode=control-group",
                   "--setenv=PORT={{ item }}",
-                  "--setenv=PATH={{ app.home }}/.bun/bin:/usr/local/bin:/usr/bin:/bin",
+                  "--setenv=PATH={{ bun.install_dir }}/bin:/usr/local/bin:/usr/bin:/bin",
                 ].includes(option) ||
                 /^--property=(RuntimeMaxSec|TimeoutStopSec)=[1-9][0-9]*s$/.test(
                   option,
@@ -1302,61 +1305,21 @@ describe("toolchain pins", () => {
   });
 
   test("the host's Bun is checked before the service is stopped", () => {
-    // Its own play, after the local pre-flight and the build-record play and
-    // before postgres-tls.yml: before this run changes anything on a host.
-    const entries = deployEntries();
-    const at = (name: string) => entries.findIndex((e) => e.name === name);
-    const hostPlay = at("Require the pinned Bun on the signaling hosts");
-    expect(hostPlay).toBe(2);
-    expect(hostPlay).toBeGreaterThan(
-      at("Build the binary and check its build record on this machine"),
+    const contents = pinnedBunTasks();
+    expect(contents).toContain(
+      'checksum: "sha256:{{ bun.release_sha256[bun.version][bun_release_arch] }}"',
     );
-    expect(hostPlay).toBeLessThan(at("Provision verified PostgreSQL TLS"));
-    expect(hostPlay).toBeLessThan(at("Deploy p2party signaling server"));
-    expect(
-      entries[at("Provision verified PostgreSQL TLS")]!.import_playbook,
-    ).toBe("postgres-tls.yml");
-    const play = entries[hostPlay]!;
-    expect(play.hosts).toBe("signaling_production");
-    expect(play.gather_facts).toBe(false);
-    expect(play.any_errors_fatal).toBe(true);
-    expect(play.tasks).toEqual([
-      {
-        name: "Require the pinned Bun on the signaling host",
-        import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml",
-      },
-    ]);
-    // The imported tasks only read: the host's own Bun as the app account,
-    // and the architecture for the message; then the comparison.
-    const tasks = Bun.YAML.parse(pinnedBunTasks()) as PlaybookTask[];
-    expect(
-      tasks.map((t) =>
-        Object.keys(t).find((k) => k === "command" || k === "assert"),
-      ),
-    ).toEqual(["command", "command", "assert"]);
-    expect(tasks[0]!.command).toEqual({
-      argv: ["{{ bun.install_dir }}/bin/bun", "--version"],
-    });
-    for (const t of tasks.slice(0, 2)) {
-      expect(t.become_user, t.name).toBe("{{ app.user }}");
-      expect(t.failed_when, t.name).toBe(false);
-      expect((t as { changed_when?: unknown }).changed_when, t.name).toBe(
-        false,
-      );
-    }
-    expect((tasks[2]!.assert as { that: string[] }).that).toContain(
-      "(pinned_bun_found.stdout | trim) == bun.version",
+    expect(contents).toContain("owner: root");
+    expect(contents).toContain("installed_bun.stdout | trim");
+    for (const play of [deploy, readAnsible("playbooks/initial-setup.yml")])
+      expect(play).toContain("tasks/install-pinned-bun.yml");
+    expect(deploy.indexOf("tasks/install-pinned-bun.yml")).toBeLessThan(
+      deploy.indexOf("Install exactly the audited migration dependencies"),
     );
-    // Nothing of the deploy play's prepare block checks it any more.
-    const deployPlay = playWithTask(
-      deploy,
-      "Apply migrations against Postgres",
+    expect(deploy).toContain("become_user: p2party-pkg");
+    expect(deploy).toContain(
+      'migration_tooling: "/var/lib/p2party-migration-tooling"',
     );
-    expect(
-      flatten(deployPlay.tasks).some(
-        (t) => t.name === "Require the pinned Bun on the signaling host",
-      ),
-    ).toBe(false);
   });
 
   test("a binary is deployed only with a build record naming the pinned Bun, and staged byte for byte", () => {
@@ -1644,7 +1607,7 @@ describe("toolchain pins", () => {
     }
     expect(localPreflight()).toContain("bun.version in bun.release_sha256");
     expect(pinnedBunTasks()).toContain(
-      "bun.release_sha256[bun.version][pinned_bun_arch]",
+      "bun.release_sha256[bun.version][bun_release_arch]",
     );
   });
 

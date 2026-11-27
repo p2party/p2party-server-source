@@ -1,0 +1,58 @@
+---
+- name: Read the signaling host's architecture
+  command: uname -m
+  register: bun_host_machine
+  changed_when: false
+
+- name: Select the release archive for this host
+  set_fact:
+    bun_release_arch: "{{ {'x86_64': 'x64', 'aarch64': 'aarch64', 'arm64': 'aarch64'}[bun_host_machine.stdout | trim] }}"
+
+- name: Install unzip to read the verified archive
+  apt:
+    name: unzip
+    state: present
+
+- name: Create the root-owned Bun release directory
+  file:
+    path: "{{ bun.install_dir }}/bin"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Fetch the signed-release archive by its pinned checksum
+  get_url:
+    url: "{{ bun_release_base_url | default('https://github.com/oven-sh/bun/releases/download') }}/bun-v{{ bun.version }}/bun-linux-{{ bun_release_arch }}.zip"
+    dest: "{{ bun.install_dir }}/bun-linux-{{ bun_release_arch }}.zip"
+    checksum: "sha256:{{ bun.release_sha256[bun.version][bun_release_arch] }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Extract the checked Bun release
+  unarchive:
+    src: "{{ bun.install_dir }}/bun-linux-{{ bun_release_arch }}.zip"
+    dest: "{{ bun.install_dir }}"
+    remote_src: true
+    owner: root
+    group: root
+    include:
+      - "bun-linux-{{ bun_release_arch }}/bun"
+
+- name: Install the native Bun binary from the verified release
+  copy:
+    remote_src: true
+    src: "{{ bun.install_dir }}/bun-linux-{{ bun_release_arch }}/bun"
+    dest: "{{ bun.install_dir }}/bin/bun"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check the installed runtime as its unprivileged caller
+  command:
+    argv: ["{{ bun.install_dir }}/bin/bun", --version]
+  become_user: "{{ app.user }}"
+  register: installed_bun
+  changed_when: false
+  failed_when: installed_bun.rc != 0 or (installed_bun.stdout | trim) != bun.version

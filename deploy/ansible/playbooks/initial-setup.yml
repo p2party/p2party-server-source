@@ -42,33 +42,8 @@
     - "{{ playbook_dir }}/../group_vars/all/vars.yml"
 
   tasks:
-    - name: Check if Bun is installed
-      stat:
-        path: "{{ app.home }}/.bun/bin/bun"
-      register: bun_installed
-
-    - name: Install Bun
-      when: not bun_installed.stat.exists
-      block:
-        - name: Install unzip (required for Bun)
-          apt:
-            name: unzip
-            state: present
-            update_cache: yes
-
-        - name: Install Bun via official installer
-          shell: curl -fsSL https://bun.sh/install | bash
-          become_user: "{{ app.user }}"
-
-    - name: Verify Bun installation
-      command: "{{ app.home }}/.bun/bin/bun --version"
-      become_user: "{{ app.user }}"
-      register: bun_version
-      changed_when: false
-
-    - name: Display Bun version
-      debug:
-        msg: "Bun {{ bun_version.stdout }} installed"
+    - name: Install the pinned release of Bun
+      import_tasks: "{{ playbook_dir }}/../tasks/install-pinned-bun.yml"
 
 # ============================================================================
 # Install Caddy

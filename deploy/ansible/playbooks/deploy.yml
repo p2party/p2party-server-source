@@ -145,22 +145,6 @@
               Nothing on any host has been changed. Run deploy/deploy.sh without
               --skip-build on a control machine whose bun is {{ bun.version }}.
 
-# The signaling host's own Bun, ~p2party/.bun/bin/bun, installs and runs the
-# migration tooling. It must be the pin before this run changes anything on
-# any host: this play only reads, and postgres-tls.yml runs after it.
-- name: Require the pinned Bun on the signaling hosts
-  hosts: signaling_production
-  gather_facts: false
-  become: true
-  any_errors_fatal: true
-  vars_files:
-    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
-    - "{{ playbook_dir }}/../group_vars/production/vars.yml"
-
-  tasks:
-    - name: Require the pinned Bun on the signaling host
-      import_tasks: "{{ playbook_dir }}/../tasks/require-pinned-bun.yml"
-
 - name: Provision verified PostgreSQL TLS
   import_playbook: postgres-tls.yml
 
@@ -179,7 +163,7 @@
     # repo_path, build_command and binary_name: group_vars/all/vars.yml.
     # Tooling is isolated from the compiled service and installed from the same
     # manifest/lockfile that passed the release audit.
-    migration_tooling: "{{ app.home }}/server/migration-tooling"
+    migration_tooling: "/var/lib/p2party-migration-tooling"
     # The new binary, environment and units wait here until the migration has
     # succeeded. Only root may modify these files or rename their parent.
     release_staging: /var/lib/p2party-release-staging
@@ -216,7 +200,7 @@
          never started. Correct any connection or permission error before proceeding.
          For each unfinished migration added in this release, from {{ app.home }}/server
          on the signaling host as {{ app.user }}, with DATABASE_URL as the play sets it:
-         {{ app.home }}/.bun/bin/bun {{ migration_tooling }}/node_modules/prisma/build/index.js migrate resolve --rolled-back <migration name>
+         {{ bun.install_dir }}/bin/bun {{ migration_tooling }}/node_modules/prisma/build/index.js migrate resolve --rolled-back <migration name>
          Use the exact name from the query. For a failed migration from 0.1.4,
          check and reconcile any partial effects before retrying.
       4. Run this playbook again. It applies the migration and only then
@@ -281,32 +265,56 @@
 
         # Tooling is installed from the same manifest and lockfile as the
         # release.
+        - name: Install the pinned release of Bun
+          import_tasks: "{{ playbook_dir }}/../tasks/install-pinned-bun.yml"
+
+        - name: Create the unprivileged migration dependency installer
+          user:
+            name: p2party-pkg
+            system: true
+            create_home: true
+            home: /var/cache/p2party-pkg
+            shell: /usr/sbin/nologin
+
         - name: Create an isolated directory for audited migration tooling
           file:
             path: "{{ migration_tooling }}"
             state: directory
-            owner: "{{ app.user }}"
-            group: "{{ app.group }}"
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Give only the package installer write access to node_modules
+          file:
+            path: "{{ migration_tooling }}/node_modules"
+            state: directory
+            owner: p2party-pkg
+            group: root
             mode: "0755"
 
         - name: Copy the audited package manifest and frozen dependency lock
           copy:
             src: "{{ repo_path }}/{{ item }}"
             dest: "{{ migration_tooling }}/{{ item }}"
-            owner: "{{ app.user }}"
-            group: "{{ app.group }}"
+            owner: root
+            group: root
             mode: "0644"
           loop: [package.json, bun.lock]
 
         - name: Install exactly the audited migration dependencies
-          become_user: "{{ app.user }}"
+          become_user: p2party-pkg
           command:
             argv:
-              - "{{ app.home }}/.bun/bin/bun"
+              - "{{ bun.install_dir }}/bin/bun"
+              - --no-env-file
               - install
               - --frozen-lockfile
             chdir: "{{ migration_tooling }}"
           environment:
+            HOME: /var/cache/p2party-pkg
+            BUN_INSTALL_CACHE_DIR: /var/cache/p2party-pkg/install
+            PATH: "{{ bun.install_dir }}/bin:/usr/local/bin:/usr/bin:/bin"
+            CHECKPOINT_DISABLE: "1"
             NODE_ENV: development
 
         - name: Ensure the prisma directory exists
@@ -593,9 +601,9 @@
               - --property=RuntimeMaxSec=300s
               - --property=TimeoutStopSec=10s
               - --property=KillMode=control-group
-              - "--setenv=PATH={{ app.home }}/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+              - "--setenv=PATH={{ bun.install_dir }}/bin:/usr/local/bin:/usr/bin:/bin"
               - --
-              - "{{ app.home }}/.bun/bin/bun"
+              - "{{ bun.install_dir }}/bin/bun"
               - --no-env-file
               - "{{ migration_tooling }}/node_modules/prisma/build/index.js"
               - migrate

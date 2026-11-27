@@ -40,7 +40,7 @@ TLS, then on the signaling host:
 With several signaling hosts, a failure on one ends the play on all of them
 (`any_errors_fatal`), so no migration runs while a worker anywhere still serves.
 Clients are cut off from step 2 until the new workers start. The migration CLI
-lives in a separate `migration-tooling` directory; it is installed from the
+lives under the root-owned `/var/lib/p2party-migration-tooling` directory; it is installed from the
 release's audited `package.json` and frozen `bun.lock` rather than fetched as an
 independent CLI dependency tree. Its working directory remains the server
 directory containing `prisma.config.ts` and `prisma/`.
@@ -88,13 +88,12 @@ this order, and compares the staged binary afterwards:
    with another Bun is refused, and so is a missing or damaged record. The
    commit and dirty flag are there to prove later that a `--skip-build` binary
    is the build of the tree being deployed; nothing compares them yet.
-3. **The signaling host's own Bun**, `~p2party/.bun/bin/bun`, which installs
-   and runs the migration tooling from `bun.lock`. `deploy.yml`'s third play
-   only reads: it runs that Bun's `--version` as `p2party` and requires the
-   pin, before `postgres-tls.yml` and the deploy play change anything.
-   `playbooks/initial-setup.yml` installs Bun only when it is absent and never
-   upgrades it, so an existing host may fail here; the message prints the
-   install command below.
+3. **The signaling host runtime** comes from the pinned Linux release archive
+   for the host architecture. Preparation checks its SHA-256 against the table
+   below and runs the installed binary as the worker to verify its version.
+   The package installer has a separate unprivileged account and cache. It
+   downloads the frozen dependencies from the npm registry and Prisma's engine
+   from `binaries.prisma.sh`. It has no database environment or credentials.
 
 Then, in the deploy play's prepare block, after the binary is staged and before
 any worker is stopped, the staged file's SHA-256 (read with `stat`, symlinks not
@@ -119,45 +118,21 @@ account that publishes the Bun releases, and GitHub lists that key,
 | `1.4.5` | `bun-linux-x64.zip`     | `94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb` |
 | `1.4.5` | `bun-linux-aarch64.zip` | `18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84` |
 
-On the signaling host (x86_64; use the `aarch64` zip and hash on an ARM host):
-
-```bash
-sudo -u p2party -H bash -euo pipefail -c '
-  cd "$(mktemp -d)"
-  curl -fsSLO https://github.com/oven-sh/bun/releases/download/bun-v1.4.5/bun-linux-x64.zip
-  echo "94559b3b528995a49452f9f2404cec74f2efd7d06e0a000a8cd214b02c3666eb  bun-linux-x64.zip" | sha256sum -c -
-  unzip -q bun-linux-x64.zip
-  install -D -m 0755 bun-linux-x64/bun ~/.bun/bin/bun
-  ~/.bun/bin/bun --version'
-```
-
-To check the hashes yourself, download `SHASUMS256.txt.asc` from the same
-release, import the key into an empty keyring
-(`GNUPGHOME="$(mktemp -d)" gpg --import robobun.gpg`) and run
-`gpg --verify SHASUMS256.txt.asc` with the same `GNUPGHOME`: it must report a
-good signature from that fingerprint, and the signed text holds the two lines
-above. The same values are in `bun.release_sha256` in
-`group_vars/all/vars.yml`, keyed by the Bun version, which the host check's
-message uses. When the pin changes, add the new release's two hashes there and
-in this table: the pre-flight refuses a pin with no entry, and
-`tests/deploy.contract.test.ts` fails unless both list the pinned version with
-the same hashes.
+Initial setup and deploy install the verified executable at
+`/opt/p2party-bun/1.4.5/bin/bun`. When changing Bun, update the two archive
+hashes in `group_vars/all/vars.yml` and this table. An offline site can set
+`bun_release_base_url` to an archive mirror with the same directory layout.
+The mirror must serve the exact signed-release bytes.
 
 `bun.lock` is Bun's text lockfile with `lockfileVersion` 2. In a local test Bun
 1.4.0 installed from it and Bun 1.3.14 refused it (`UnknownLockfileVersion`).
 
 ## Host software
 
-None of the software installed on the hosts, by the playbooks or by the
-Terraform cloud-init, has a version pin in this repository, and every install
-uses `state: present`, runs only when the program is absent, or runs only at
-first boot, so a host keeps what it was first given. Bun is the exception at
-deploy time: the deploy checks it ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
+Host distribution packages keep receiving vendor security updates.
 
-- **Bun** (signaling host): `playbooks/initial-setup.yml` runs the official
-  installer, without a version, only when `~p2party/.bun/bin/bun` is missing.
-  A deploy requires the host's Bun to equal `package.json`'s pin and stops
-  before changing anything when it does not ([Which Bun, and where it is checked](#which-bun-and-where-it-is-checked)).
+- **Bun** is installed by the pinned, checksum-verified archive task shared
+  by signaling setup and deployment.
 - **Caddy** (signaling host): the `caddy` package from Caddy's Cloudsmith
   `stable` repository. Caddy 2.11.9, the latest release on 2026-11-26
   (checksum-verified), accepts the rendered `templates/Caddyfile.j2`
@@ -262,7 +237,7 @@ statement boundary). The two migrations released in 0.1.4 are unchanged.
    `DATABASE_URL` exported as the play builds it:
 
    ```bash
-   ~/.bun/bin/bun migration-tooling/node_modules/prisma/build/index.js \
+   /opt/p2party-bun/1.4.5/bin/bun /var/lib/p2party-migration-tooling/node_modules/prisma/build/index.js \
      migrate resolve --rolled-back <migration name>
    ```
 
