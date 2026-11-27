@@ -56,6 +56,10 @@ const waitContains = (page, id, text) =>
   );
 async function signRequest(page, request, inputId) {
   const recipient = JSON.parse(request).recipient;
+  if (
+    !(await page.locator("#payment-panel").evaluate((details) => details.open))
+  )
+    await page.locator("#payment-heading").click();
   await page.locator("#payer-request").fill(request);
   assert.equal(await page.locator("#payer-source").inputValue(), inputId);
   await page.locator("#payer-expiry").fill("32");
